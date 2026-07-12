@@ -6,8 +6,11 @@ delegates to it, holding the conversation across apps.
 
 This is Phase 3 of the workspace's
 [`agent-standard/AGENTS-MASTER-PLAN.md`](../agent-standard/AGENTS-MASTER-PLAN.md).
-**Current state: scaffold only (Slice 1).** There is no agent yet — see
-`CLAUDE.md` for what's live today versus what's coming.
+**Current state: standard agent stack (Slice 2).** The agent engine — tool
+registry, llama.cpp provider, bounded loop, and the layered Glitch personality
+— is in place; the delegate tools, MCP server, and chat API that turn it into
+a working router come in later slices. See `CLAUDE.md` for what's live today
+versus what's coming.
 
 ## Architecture sketch
 
@@ -37,6 +40,7 @@ implementation.
 Frontend:  React + Vite + TypeScript
 Backend:   FastAPI
 Config:    pydantic-settings
+Agent:     tool registry + llama.cpp provider + bounded loop (gemma-4-12b)
 ```
 
 ## Ports

@@ -13,12 +13,16 @@ hold the conversation. It is Phase 3 of
 PCC alignment, and the chess migration — are done; PCC is the reference
 implementation every app, including this one, follows).
 
-**This repo is currently Slice 1 of Phase 3: scaffold only.** Backend and
-frontend exist, CI/CD is wired, and the gateway manifest is in place, but
-there is no agent logic yet — no tool registry, no provider, no loop, no
-delegate calls to other apps. `/health` and a themed placeholder page are all
-that's live. Subsequent slices add subagent discovery from `app.yaml agent:`
-blocks, the standard agent stack, and the chat UI, per the master plan.
+**This repo is currently Slice 2 of Phase 3: the standard agent stack.** The
+engine is in place — tool registry, llama.cpp provider, bounded loop, and the
+layered Glitch personality (adapted from the PCC reference implementation,
+`../project-command-center/backend/app/`) — plus exhaustive tests. Not yet
+built (Slices 3–4): the per-app delegate tools (the registry ships **empty**),
+the MCP stdio server, and the REST conversations API that fronts the loop.
+`/health` and a themed placeholder page are still all that's exposed over
+HTTP. Subsequent slices add subagent discovery from `app.yaml agent:` blocks,
+wire the delegate tools into the registry, and add the chat UI, per the master
+plan.
 
 See `../agent-standard/STANDARD.md` for the contract every agent (once this
 one has one) must satisfy, and `../agent-standard/delegate-api.md` for the
@@ -75,9 +79,59 @@ reasonable — it's the fleet's reference implementation:
 - Docker compose: backend (uvicorn, no published host port) + frontend
   (nginx, SPA + `/api` proxy, published on `127.0.0.1:8300`).
 
+## Agent stack
+
+The standard four layers (`../agent-standard/STANDARD.md`), adapted from PCC so
+the modules diff cleanly against the reference implementation — read a change
+as "same as PCC, minus the deltas below":
+
+```
+backend/app/
+├── ai/
+│   ├── provider.py            # ChatProvider Protocol + shared wire-neutral
+│   │                          #   types (ToolSpec/ToolCall/ChatResult, typed
+│   │                          #   provider errors). In PCC these live inside
+│   │                          #   loop.py + llamacpp.py; split out here so
+│   │                          #   nothing above the seam imports a backend.
+│   ├── providers/llamacpp.py  # LlamaCppProvider: OpenAI wire format over
+│   │                          #   plain httpx, Pydantic-validated at the
+│   │                          #   boundary. reasoning_content dropped; thinking
+│   │                          #   OFF by default (routing turns stay fast).
+│   ├── loop.py                # AgentLoop (bounded), build_system_prompt, the
+│   │                          #   conductor base prompt, loop_from_settings.
+│   └── personality-global.md  # vendored Glitch (see re-vendor rule below)
+└── tools/
+    ├── registry.py            # @tool decorator, call_tool(..., actor=…). Ships
+    │                          #   EMPTY — delegate tools arrive in Slice 3.
+    └── runtime.py             # the actor contextvar only (PCC's tool_session /
+                               #   DB plumbing is adapted out — conductor has no
+                               #   local DB; writes are attributed downstream
+                               #   via the X-Agent-Actor header)
+```
+
+Intentional deltas from PCC: provider protocol/types split into `provider.py`;
+no `chat_structured` (conductor has no structured-output need); no `runtime`
+DB session; no `resolve_actor` (conductor is the delegation root — it never
+receives an inbound `X-Agent-Actor`); `max_iterations` defaults to 6, not 10.
+
+**Re-vendor rule.** `ai/personality-global.md` is a **verbatim** copy of
+`../agent-standard/personality-global.md` with exactly one added first line
+(`<!-- vendored … re-copy to fix drift -->`). It is the canonical Glitch text
+and must never be edited in place — fix any drift by re-copying the canonical
+file and re-adding that header, then confirm with
+`bash ../agent-standard/check-sync.sh`. `loop.py` strips the header at
+prompt-build time. Prompt composition is `conductor base → global Glitch →
+date` (the app-flavor layer is deliberately empty).
+
+**Why `max_iterations = 6`** (`CONDUCTOR_MAX_ITERATIONS`, default in
+`config.py`). Conductor's loop is deliberately shallower than the app loops'
+~10: each conductor iteration may wrap a full subagent loop — a delegate call
+fans out into that app's own bounded tool-calling loop — so latency stacks.
+Keeping conductor's loop shallow bounds the worst-case depth-1 fan-out.
+
 ## Later
 
-Once conductor grows an agent (Phase 3 slices beyond scaffold), it must also
+Beyond the agent stack (Phase 3 Slices 3–4 and Phase 4), conductor must also
 follow `../agent-standard/NEW-APP-CHECKLIST.md` and the depth-1 delegation
 rule in `../agent-standard/STANDARD.md` — conductor is the delegation root,
 so it is the only client of other apps' delegate APIs, and its own delegate
