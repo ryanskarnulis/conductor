@@ -7,10 +7,15 @@ dependencies = [
     "uvicorn[standard]>=0.48.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.1",
-    # Not used directly yet (no outbound HTTP calls in this slice) — the
-    # per-app delegate client in a later slice speaks to app agents over
-    # httpx, same as PCC's LlamaCppProvider. Declared now so the dependency
-    # set doesn't shift shape between slices.
+    "structlog>=25.5.0",
+    # func_metadata derives every tool's argument model + JSON Schema from its
+    # signature (app/tools/registry.py), and ToolError is re-exported as the
+    # domain-error type — the same FastMCP machinery PCC uses. The MCP stdio
+    # server itself arrives in a later slice; only the utilities are used here.
+    "mcp>=1.20.0",
+    # llama.cpp provider speaks the OpenAI wire format over plain httpx
+    # (app/ai/providers/llamacpp.py); the per-app delegate client in a later
+    # slice reuses it.
     "httpx>=0.28.1",
 ]
 

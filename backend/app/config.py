@@ -38,6 +38,21 @@ class Settings(BaseSettings):
         r"|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}):5174"
     )
 
+    # --- LLM provider (shared gemma-4-12b behind llama-swap) -----------------
+    # These are the connection settings; the sampling/thinking values that are
+    # model knowledge live in the provider with a pointer to
+    # ../agent-standard/model-profile.md (the canonical source).
+    llamacpp_base_url: str = "http://127.0.0.1:8200/v1"
+    llamacpp_model: str = "gemma-4-12b"
+    # One generous read timeout: a cold model load through llama-swap is ~100s
+    # before the first byte; warm calls never approach it.
+    llamacpp_timeout_seconds: float = 300.0
+
+    # Conductor's loop is deliberately shallower than the app loops' ~10: each
+    # iteration may wrap a full subagent loop (a delegate call fans out into
+    # that app's own bounded loop), so latency stacks. See CLAUDE.md.
+    conductor_max_iterations: int = 6
+
 
 @lru_cache
 def get_settings() -> Settings:
