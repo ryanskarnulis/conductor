@@ -17,8 +17,10 @@ dist/
 .env.*
 !.env.example
 
-# Data
+# Data (SQLite file + WAL/SHM sidecars live in data/; keep the dir tracked)
 *.db
+data/*
+!data/.gitkeep
 
 # OS / editor
 .DS_Store

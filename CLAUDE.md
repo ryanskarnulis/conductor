@@ -13,18 +13,20 @@ hold the conversation. It is Phase 3 of
 PCC alignment, and the chess migration — are done; PCC is the reference
 implementation every app, including this one, follows).
 
-**This repo is currently Slice 3 of Phase 3: fleet delegation.** On top of the
-Slice 2 engine (tool registry, llama.cpp provider, bounded loop, layered Glitch
-personality — adapted from the PCC reference implementation,
-`../project-command-center/backend/app/`), Slice 3 adds the `fleet/` package:
-manifest discovery, the typed delegate REST client, the per-app `ask_<app>`
-tools with guardrails, and the MCP stdio server (`app/mcp/server.py`,
-`.mcp.json`). Conductor now discovers subagents from `app.yaml agent:` blocks
-and can route to them over the delegate contract. Not yet built (Slice 4): the
-REST conversations API that fronts conductor's own loop, a DB-backed thread
-store, and the chat UI. `/health` and a themed placeholder page are still all
-that's exposed over HTTP; the delegate tools are reachable today only through
-the MCP server.
+**This repo is at Slice 4 (backend) of Phase 3: the conversations API.** On
+top of the Slice 2 engine (tool registry, llama.cpp provider, bounded loop,
+layered Glitch personality — adapted from the PCC reference implementation,
+`../project-command-center/backend/app/`) and Slice 3's `fleet/` package
+(manifest discovery, the typed delegate REST client, the per-app `ask_<app>`
+tools with guardrails, the MCP stdio server), Slice 4 adds persistence and the
+HTTP front: SQLite via SQLAlchemy 2.0 + Alembic (`app/db/`), the conversations
+service and REST API fronting conductor's own loop (`app/services/`,
+`app/api/routes_agent.py`), the DB-backed subagent-thread store
+(`app/fleet/thread_store.py`), per-IP rate limiting, request-ID logging
+middleware, and the turn-activity poll endpoint (`app/api/turn_activity.py`)
+that reports "asking chess…" progress while a synchronous run blocks (no SSE
+in v1). Not yet built: the chat web UI (Slice 4 frontend — the themed
+placeholder page still renders) and the routing eval harness.
 
 See `../agent-standard/STANDARD.md` for the contract every agent (once this
 one has one) must satisfy, and `../agent-standard/delegate-api.md` for the
@@ -33,7 +35,7 @@ REST shape conductor will speak to PCC, chess, and future app agents.
 ## Commands
 
 ```bash
-./main.sh                 # bootstrap env/deps, start backend + frontend
+./main.sh                 # bootstrap env/deps, migrate, start backend + frontend
 ./test.sh                 # backend pytest/ruff/mypy + frontend Vitest/lint/build
 ```
 
@@ -73,6 +75,10 @@ reasonable — it's the fleet's reference implementation:
 
 - Python 3.11+, FastAPI, pydantic-settings `Settings` (env-overridable),
   ruff (line-length 100), strict mypy, pytest.
+- SQLAlchemy 2.0 typed syntax (`Mapped[...]`/`mapped_column`); **Alembic for
+  every schema change** (`alembic revision --autogenerate` from `backend/`,
+  review the file before applying). Soft deletes for user-facing rows via the
+  service-layer helper.
 - React + Vite + TypeScript (strict), plain global CSS with Night-Silk design
   tokens (`frontend/src/styles/tokens.css`, sourced from
   `../gateway/theme/silk.css` — the canonical copy; re-copy `silk.css` to fix
@@ -89,6 +95,26 @@ as "same as PCC, minus the deltas below":
 
 ```
 backend/app/
+├── api/
+│   ├── routes_agent.py        # conversations CRUD, the message → loop round
+│   │                          #   trip, and the turn-activity poll endpoint
+│   ├── turn_activity.py       # in-memory registry of in-flight turns — the
+│   │                          #   UI's progress poll target (single worker)
+│   ├── rate_limit.py          # per-IP sliding-window limiter (PCC copy)
+│   └── request_ip.py          # spoof-resistant client key (trimmed from PCC)
+├── db/
+│   ├── models.py              # Conversation, ConversationMessage (loop outcome
+│   │                          #   denormalized), DelegateThread (thread map)
+│   └── session.py             # engine + SQLite pragmas + get_db (PCC copy)
+├── services/
+│   ├── common.py              # active()/soft_delete() (trimmed from PCC)
+│   └── conversations.py       # the only conversations write path (PCC minus
+│   │                          #   activity_events — audit is the delegate_call
+│   │                          #   structlog event)
+├── schemas/
+│   ├── common.py              # NonBlankStr, UTCDateTime
+│   └── conversations.py       # wire models, incl. TurnActivityRead
+├── alembic/                   # migrations (alembic.ini sits in backend/)
 ├── ai/
 │   ├── provider.py            # ChatProvider Protocol + shared wire-neutral
 │   │                          #   types (ToolSpec/ToolCall/ChatResult, typed
@@ -110,28 +136,33 @@ backend/app/
 │   │                          #   wire models mirroring PCC/chess
 │   ├── context.py             # DelegationContext: thread map + per-turn call
 │   │                          #   budget + audit hook; ThreadStore seam
+│   ├── thread_store.py        # DbThreadStore: the ThreadStore seam over the
+│   │                          #   delegate_threads table (per-op sessions)
 │   └── tools.py               # build_delegate_tools (ask_<app> + list_agents),
 │                              #   render_fleet_section (the prompt layer)
 ├── mcp/server.py              # FastMCP stdio server: the registry (delegate
 │                              #   tools + list_agents) over MCP; .mcp.json
-├── logging_config.py          # configure_logging(stream) — the MCP server
-│                              #   points it at stderr (stdout is the transport)
+├── logging_config.py          # configure_logging(stream) + RequestIDMiddleware
+│                              #   (the MCP server points logging at stderr —
+│                              #   stdout is the transport)
 └── tools/
     ├── registry.py            # @tool decorator, call_tool(..., actor=…). Ships
     │                          #   empty; build_delegate_tools populates it at
     │                          #   startup — the one surface loop + MCP consume.
     └── runtime.py             # the actor contextvar only (PCC's tool_session /
-                               #   DB plumbing is adapted out — conductor has no
-                               #   local DB; writes are attributed downstream
-                               #   via the X-Agent-Actor header)
+                               #   DB plumbing is adapted out — tool bodies never
+                               #   touch conductor's DB; writes are attributed
+                               #   downstream via the X-Agent-Actor header)
 ```
 
 Intentional deltas from PCC: provider protocol/types split into `provider.py`;
 no `chat_structured` (conductor has no structured-output need); no `runtime`
-DB session; no `resolve_actor` (conductor is the delegation root — it never
-receives an inbound `X-Agent-Actor`); `max_iterations` defaults to 6, not 10;
-`logging_config.py` is trimmed to just `configure_logging` (no request
-middleware until the HTTP API lands in Slice 4).
+DB session (tool bodies make HTTP calls, not local writes); no `resolve_actor`
+(conductor is the delegation root — it never receives an inbound
+`X-Agent-Actor`, so the conversations API takes no actor header);
+`max_iterations` defaults to 6, not 10; no `activity_events` table (the
+delegation audit is the `delegate_call` structlog event); the loop grew an
+`on_activity` seam PCC doesn't have (progress beats for the activity poll).
 
 ## Fleet delegation (`fleet/`)
 
@@ -167,10 +198,14 @@ description / examples) that `build_system_prompt` slots in as
 `conductor base → Glitch → fleet → date`.
 
 **Guardrails + seams (`context.py`).** A `DelegationContext` is bound around
-each run (a contextvar for Slice 4's HTTP loop; a process-global fallback for
-the MCP server). It holds: (a) the **thread map** via a `ThreadStore` keyed by
-`(master_conversation_id, app_name)` — `InMemoryThreadStore` today, the seam a
-DB-backed store slots into in Slice 4; (b) a **per-turn per-app call budget**
+each run (a contextvar for the HTTP loop — `routes_agent.post_message` binds
+one per request; a process-global fallback for the MCP server). It holds: (a)
+the **thread map** via a `ThreadStore` keyed by
+`(master_conversation_id, app_name)` — the HTTP loop uses the DB-backed
+`DbThreadStore` (`fleet/thread_store.py`, `delegate_threads` table) so
+subagent threads survive restarts, while the MCP server keeps a
+process-lifetime `InMemoryThreadStore` (its driving host manages its own
+session); (b) a **per-turn per-app call budget**
 (`conductor_delegate_calls_per_turn_per_app`, default 3; `<= 0` disables it, as
 the MCP server does since its driver is the trusted MCP host) — exceeding it
 raises `ToolError` so the model stops hammering one app; (c) an **audit hook** —
@@ -197,6 +232,33 @@ date` (the app-flavor layer is deliberately empty).
 ~10: each conductor iteration may wrap a full subagent loop — a delegate call
 fans out into that app's own bounded tool-calling loop — so latency stacks.
 Keeping conductor's loop shallow bounds the worst-case depth-1 fan-out.
+
+## Conversations API (`api/`, `services/`, `db/`)
+
+The HTTP front for conductor's own loop, PCC's conversations shape with the
+delegation seams wired in. All under `/api/agent`:
+
+- `GET|POST /conversations`, `GET|DELETE /conversations/{id}` — CRUD; soft
+  delete only; an untitled conversation is titled from its first user message.
+- `POST /conversations/{id}/messages` — the one model-calling endpoint,
+  rate-limited per client IP (`AGENT_MESSAGES_PER_MIN`). Synchronous and
+  non-streaming (v1): it commits the user turn *first* (a provider failure →
+  502 must not swallow it), binds the `DelegationContext` (DB thread store,
+  call budget, `agent:loop` driver) around exactly the run, then persists the
+  assistant turn with its tool trajectory (`tool_calls` JSON) and stop reason.
+  History replays **text turns only** — stale delegate transcripts never
+  re-enter the model's window.
+- `GET /conversations/{id}/activity` — the progress poll target while a POST
+  blocks: the loop's `on_activity` beats land in the in-memory
+  `turn_activity` registry (`kind: model|tool`, tool name, iteration, elapsed
+  seconds), which the UI renders as "asking chess…". This is v1's no-SSE
+  progress channel; it assumes the single-worker uvicorn the Dockerfile runs.
+
+Persistence is SQLite (`data/conductor.db` in dev, `/data` volume in docker)
+via SQLAlchemy 2.0; `./main.sh` and the docker CMD run `alembic upgrade head`
+before serving. The `delegate_threads` table backs the fleet thread map — the
+"Guardrails + seams" section above covers how the stores split between the
+HTTP loop and the MCP server.
 
 ## Later
 

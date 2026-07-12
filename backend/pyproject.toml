@@ -19,6 +19,10 @@ dependencies = [
     "httpx>=0.28.1",
     # Parses the fleet's app.yaml manifests for discovery (app/fleet/manifests.py).
     "pyyaml>=6.0",
+    # Conversation persistence and the DB-backed subagent-thread store
+    # (app/db/, app/fleet/thread_store.py) — the same stack as PCC.
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]

@@ -68,6 +68,7 @@ PY
 
 backend_tools_missing() {
   [ ! -x "$BACKEND_PYTHON" ] && return 0
+  [ ! -x "$BACKEND_VENV/bin/alembic" ] && return 0
   [ ! -x "$BACKEND_VENV/bin/pytest" ] && return 0
   [ ! -x "$BACKEND_VENV/bin/ruff" ] && return 0
   [ ! -x "$BACKEND_VENV/bin/mypy" ] && return 0
@@ -164,6 +165,11 @@ preflight_ports() {
   fi
 }
 
+run_migrations() {
+  log "Applying database migrations."
+  (cd "$BACKEND_DIR" && "$BACKEND_VENV/bin/alembic" upgrade head)
+}
+
 start_backend() {
   log "Starting backend on port 8301."
   (cd "$BACKEND_DIR" && "$BACKEND_PYTHON" -m app.main) &
@@ -184,6 +190,7 @@ main() {
   ensure_backend_deps
   ensure_frontend_deps
   preflight_ports
+  run_migrations
   start_backend
   start_frontend
 

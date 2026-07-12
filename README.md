@@ -6,22 +6,26 @@ delegates to it, holding the conversation across apps.
 
 This is Phase 3 of the workspace's
 [`agent-standard/AGENTS-MASTER-PLAN.md`](../agent-standard/AGENTS-MASTER-PLAN.md).
-**Current state: fleet delegation (Slice 3).** On top of the agent engine (tool
-registry, llama.cpp provider, bounded loop, layered Glitch personality),
-conductor now discovers per-app agents from their `app.yaml` `agent:` blocks,
-builds one `ask_<app>` delegate tool each (plus `list_agents`), and exposes them
-over an MCP stdio server (`.mcp.json`). The delegate client, thread map, call
-budget, and audit live in `backend/app/fleet/`. Still to come (Slice 4): the
-REST chat API that fronts conductor's own loop, a persistent thread store, and
-the chat UI. See `CLAUDE.md` for what's live today versus what's coming.
+**Current state: conversations API (Slice 4 backend).** On top of the agent
+engine (tool registry, llama.cpp provider, bounded loop, layered Glitch
+personality) and fleet delegation (`ask_<app>` tools discovered from `app.yaml`
+`agent:` blocks, also exposed over an MCP stdio server via `.mcp.json`),
+conductor now persists master conversations in SQLite (SQLAlchemy + Alembic)
+and fronts its loop with a REST chat API: conversation CRUD,
+`POST /api/agent/conversations/{id}/messages` for the synchronous
+message → loop round trip, and `GET …/activity` — the poll target that reports
+"asking chess…"-style progress while a turn blocks (no SSE in v1). The
+subagent-thread map is DB-backed, so follow-ups keep their app-side context
+across restarts. Still to come: the chat web UI (Slice 4 frontend) and the
+routing eval harness. See `CLAUDE.md` for what's live today versus what's
+coming.
 
 ## Architecture sketch
 
 ```
 Browser ──► conductor frontend (nginx :8300) ──► conductor backend (:8301)
-                                                        │
-                                          (future slices) delegates to:
-                                                        │
+                                                        │  /api/agent/* + SQLite
+                                                        │  delegates to:
                           ┌─────────────────────────────┼─────────────────────┐
                           ▼                              ▼                     ▼
                   PCC   /api/agent/*            chess  /api/agent/*    future app agents
@@ -41,7 +45,7 @@ implementation.
 
 ```
 Frontend:  React + Vite + TypeScript
-Backend:   FastAPI
+Backend:   FastAPI + SQLAlchemy 2.0 + Alembic (SQLite in data/)
 Config:    pydantic-settings
 Agent:     tool registry + llama.cpp provider + bounded loop (gemma-4-12b)
 ```
