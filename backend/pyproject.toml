@@ -23,6 +23,9 @@ dependencies = [
     # (app/db/, app/fleet/thread_store.py) — the same stack as PCC.
     "sqlalchemy>=2.0",
     "alembic>=1.13",
+    # Voice endpoints take multipart uploads (fastapi UploadFile) —
+    # app/api/routes_voice.py.
+    "python-multipart>=0.0.32",
 ]
 
 [project.optional-dependencies]

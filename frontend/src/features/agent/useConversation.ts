@@ -9,7 +9,9 @@ interface UseConversation {
   error: string | null
   /** The optimistic user bubble + progress indicator while a run is in flight. */
   pendingText: string | null
-  send: (content: string) => Promise<boolean>
+  /** Resolves to the assistant's reply text on success (possibly ''), or
+   * null when the run failed — voice uses the text to speak the reply. */
+  send: (content: string) => Promise<string | null>
 }
 
 /** Human-readable failure line for a `postMessage` run. */
@@ -81,15 +83,15 @@ export function useConversation(
   }, [conversationId])
 
   const send = useCallback(
-    async (content: string): Promise<boolean> => {
-      if (conversationId === null) return false
+    async (content: string): Promise<string | null> => {
+      if (conversationId === null) return null
       setErrorState(null)
       setPending({ id: conversationId, value: content })
-      let ok = true
+      let reply: string | null = null
       try {
-        await postMessage(conversationId, content)
+        const exchange = await postMessage(conversationId, content)
+        reply = exchange.assistant_message.content ?? ''
       } catch (e: unknown) {
-        ok = false
         setErrorState({ id: conversationId, value: sendErrorMessage(e) })
       }
       // Success or not, the server is the source of truth for the thread
@@ -102,7 +104,7 @@ export function useConversation(
       }
       setPending((prev) => (prev !== null && prev.id === conversationId ? null : prev))
       onExchange?.()
-      return ok
+      return reply
     },
     [conversationId, onExchange],
   )

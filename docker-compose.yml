@@ -25,6 +25,13 @@ services:
       # (the port is preserved).
       FLEET_MANIFEST_DIR: /fleet
       FLEET_UPSTREAM_HOST: host.docker.internal
+      # Shared workspace speech service (../speech/, ports 8400/8410), same
+      # host-gateway mechanism. Env var names per ../agent-standard/voice.md;
+      # unset SPEECH_BASE_URL to run voiceless (/api/voice answers 503).
+      SPEECH_BASE_URL: ${SPEECH_BASE_URL:-http://host.docker.internal:8400/v1}
+      TTS_BASE_URL: ${TTS_BASE_URL:-http://host.docker.internal:8410/v1}
+      TTS_MODEL: ${TTS_MODEL:-kokoro}
+      TTS_VOICE: ${TTS_VOICE:-am_fenrir(2)+am_michael(1)}
     extra_hosts:
       # Reaches the shared ../llama-swap runtime and the fleet apps on the
       # host — same mechanism PCC and chess use.

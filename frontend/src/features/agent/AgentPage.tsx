@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { MessageSquarePlus, SendHorizontal, Trash2 } from 'lucide-react'
+import { MessageSquarePlus, SendHorizontal, Trash2, Volume2, VolumeX } from 'lucide-react'
 import { formatRelative } from '../../utils/dates'
+import { MicButton } from '../../voice/MicButton'
+import { playText } from '../../voice/tts'
 import { ConductorMark } from './ConductorMark'
 import { MessageBubble } from './MessageBubble'
 import { PendingExchange } from './PendingExchange'
@@ -33,6 +35,32 @@ export function AgentPage() {
   const sending = pendingText !== null
   // The live progress beat ("asking chess…") polled while the send blocks.
   const activity = useTurnActivity(activeId, sending)
+
+  // Voice-output toggle (fleet UX rule: voice in → voice out, typed in →
+  // silent — this mutes even the voiced path). Client-owned: conductor has
+  // no server-side user settings, and the flag only governs local playback.
+  const [voiceOutput, setVoiceOutput] = useState(
+    () => localStorage.getItem('agent-voice-output') !== 'off',
+  )
+  const toggleVoiceOutput = () => {
+    setVoiceOutput((on) => {
+      localStorage.setItem('agent-voice-output', on ? 'off' : 'on')
+      return !on
+    })
+  }
+
+  // Voice-initiated turns speak the reply (typed turns never do). Playback
+  // is started, not awaited — MicButton's hands-free loop waits on
+  // audioIdle() so the mic still reopens only after the reply finishes.
+  // localStorage (not the state) is read at speak time: hands-free VAD
+  // callbacks close over this function from an earlier render, and the
+  // stored flag is the always-current source of truth.
+  const onTranscript = async (text: string) => {
+    const reply = await send(text)
+    if (reply && localStorage.getItem('agent-voice-output') !== 'off') {
+      void playText(reply)
+    }
+  }
 
   // Keep the newest turn in view as messages/pending state arrive.
   // (Guarded call: jsdom has no scrollIntoView.)
@@ -182,6 +210,21 @@ export function AgentPage() {
                 rows={2}
                 disabled={sending}
               />
+              <MicButton onTranscript={onTranscript} disabled={sending} />
+              <button
+                type="button"
+                className="agent-voice-toggle"
+                onClick={toggleVoiceOutput}
+                aria-pressed={voiceOutput}
+                aria-label={voiceOutput ? 'Mute spoken replies' : 'Unmute spoken replies'}
+                title={voiceOutput ? 'Spoken replies on' : 'Spoken replies off'}
+              >
+                {voiceOutput ? (
+                  <Volume2 size={17} aria-hidden="true" />
+                ) : (
+                  <VolumeX size={17} aria-hidden="true" />
+                )}
+              </button>
               <button
                 type="submit"
                 className="btn--primary agent-send"
