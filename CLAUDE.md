@@ -14,7 +14,13 @@ PCC alignment, and the chess migration — are done; PCC is the reference
 implementation every app, including this one, follows).
 
 **Phase 3 is complete (PRs #1–#6, routing evals GO 12/12); only the hub-app
-"Later" item remains open — see `TODO.md`.**
+"Later" item remains open — see `TODO.md`. Voice shipped 2026-07-12 (#8–#10,
+`../agent-standard/VOICE-PLAN.md` Phase 4): `/api/voice` STT/TTS proxies to
+the shared `../speech/` service, vendored chess-canonical frontend modules
+(push-to-talk + hands-free in the chat panel), and the spoken "Asking
+chess…" slow-turn acknowledgment on voice-initiated turns
+(`frontend/src/features/agent/voiceAck.ts`) — voice fronts the same
+`/api/agent` pipeline, so the eval baseline was untouched (12/12 re-run).**
 On top of the Slice 2 engine (tool registry, llama.cpp provider, bounded loop,
 layered Glitch personality — adapted from the PCC reference implementation,
 `../project-command-center/backend/app/`) and Slice 3's `fleet/` package
@@ -107,6 +113,8 @@ backend/app/
 │   │                          #   trip, and the turn-activity poll endpoint
 │   ├── turn_activity.py       # in-memory registry of in-flight turns — the
 │   │                          #   UI's progress poll target (single worker)
+│   ├── routes_voice.py        # STT/TTS proxies to the shared ../speech/
+│   │                          #   service (PCC copy; fleet voice standard)
 │   ├── rate_limit.py          # per-IP sliding-window limiter (PCC copy)
 │   └── request_ip.py          # spoof-resistant client key (trimmed from PCC)
 ├── db/
@@ -135,6 +143,9 @@ backend/app/
 │   ├── loop.py                # AgentLoop (bounded), build_system_prompt (now
 │   │                          #   takes the fleet layer), conductor base
 │   │                          #   prompt, loop_from_settings.
+│   ├── speech.py              # SpeechClient (PCC copy modulo the STT prompt,
+│   │                          #   biased to fleet routing vocabulary) — see
+│   │                          #   ../agent-standard/voice.md and README
 │   └── personality-global.md  # vendored Glitch (see re-vendor rule below)
 ├── fleet/                     # Slice 3 — conductor's job (see below)
 │   ├── manifests.py           # discover_fleet: scan {fleet_manifest_dir}/*/
