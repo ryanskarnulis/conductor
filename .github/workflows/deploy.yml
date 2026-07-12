@@ -1,0 +1,33 @@
+# CD: after CI goes green on main, the self-hosted runner on the homelab
+# workstation fast-forwards the clean deploy clone (~/deploy/conductor) and
+# rebuilds the compose stack. The dev checkout in ~/Documents/workspace is
+# never touched. If app.yaml changed, the gateway is regenerated too so the
+# vhost/launcher stay in sync.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+concurrency: deploy
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, homelab]
+    steps:
+      - name: Pull deploy clone and rebuild stack
+        run: |
+          cd "$HOME/deploy/conductor"
+          # Refuse to deploy over local edits — the clone must stay pristine.
+          git diff --quiet && git diff --cached --quiet || { echo "deploy clone is dirty"; exit 1; }
+          before=$(git rev-parse HEAD)
+          git pull --ff-only origin main
+          docker compose up -d --build
+          if ! git diff --quiet "$before" HEAD -- app.yaml; then
+            cd "$HOME/deploy/gateway"
+            python3 gen.py
+            docker compose up -d --build
+          fi

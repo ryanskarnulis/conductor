@@ -1,0 +1,32 @@
+[project]
+name = "conductor-backend"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.136.3",
+    "uvicorn[standard]>=0.48.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.1",
+    # Not used directly yet (no outbound HTTP calls in this slice) — the
+    # per-app delegate client in a later slice speaks to app agents over
+    # httpx, same as PCC's LlamaCppProvider. Declared now so the dependency
+    # set doesn't shift shape between slices.
+    "httpx>=0.28.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.3",
+    "mypy>=2.1.0",
+    "ruff>=0.15.14",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true

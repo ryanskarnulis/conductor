@@ -1,0 +1,19 @@
+# Workspace app manifest — consumed by gateway/gen.py (and later the hub app).
+# Schema reference: ../gateway/README.md
+name: conductor
+title: Conductor
+description: The fleet's master agent chat.
+icon: "🎛️"
+upstream: 127.0.0.1:8300
+# Frontend liveness only — the backend's /health is not proxied by nginx.
+health: /
+lan: true
+runtime:
+  type: compose
+  start: docker compose up -d
+  stop: docker compose down
+tags: [ai]
+# Deliberately NO `agent:` block. Conductor IS the delegation root — the
+# depth-1 rule (../agent-standard/STANDARD.md) forbids any agent (including
+# conductor itself) from being called as a delegate of another agent, so it
+# must never advertise an `agent:` block for something else to discover.

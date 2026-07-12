@@ -1,0 +1,42 @@
+/* Design tokens: :root custom properties (colors, shadows, fonts).
+   Split from index.css. The barrel (../index.css) controls load order.
+
+   Night-silk theme (The Web design language), dark only. The palette
+   primitives (--bg, --surface, --ink, --muted, --glow, status colors, --sans,
+   --mono, ...) come from silk.css — a verbatim copy of gateway/theme/silk.css,
+   loaded just before this file; re-copy that file to fix drift, never edit it
+   here. This file maps conductor's semantic tokens onto those primitives;
+   feature partials keep consuming the semantic names. Copied from PCC's
+   frontend/src/styles/tokens.css (the fleet's reference implementation);
+   trimmed to what conductor's placeholder page uses so far. */
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces: lift steps above --surface (silk) for hover/selected fills */
+  --surface-soft: #141a28;
+  --surface-strong: #1a2233;
+
+  /* text: body wears the silk strand color; headings get full ink */
+  --text: var(--silk);
+  --text-h: var(--ink);
+  --text-muted: var(--muted);
+
+  --border: var(--silk-border);
+  --border-strong: rgba(199, 211, 228, 0.38);
+
+  --shadow: 0 18px 42px rgba(0, 0, 0, 0.5);
+  --shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.42);
+
+  --accent: var(--glow);
+  --focus-ring: rgba(155, 231, 255, 0.35);
+
+  font-family: var(--sans);
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  letter-spacing: 0;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
