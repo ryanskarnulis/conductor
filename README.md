@@ -65,7 +65,11 @@ text, biased toward conductor's fleet-routing vocabulary and app names) and
 rate-limited per client IP (`VOICE_REQUESTS_PER_MIN`, default 30). The chat
 panel's vendored MicButton (chess-canonical modules in `frontend/src/voice/`)
 gives push-to-talk and hands-free conversation mode; voice-initiated turns
-get the reply spoken, typed turns stay silent. Configure with
+get the reply spoken, typed turns stay silent. Because a delegated turn can
+block 12–22 s, voice-initiated turns also speak an acknowledgment ("Asking
+chess…") from the first activity-poll beat naming each `ask_<app>` delegate
+(`frontend/src/features/agent/voiceAck.ts`), so the wait never reads as dead
+air. Configure with
 `SPEECH_BASE_URL` / `TTS_BASE_URL` / `STT_MODEL` / `TTS_MODEL` / `TTS_VOICE`
 (defaults in `app/config.py`); leave `SPEECH_BASE_URL` unset to run
 voiceless — the voice endpoints answer 503 and nothing else changes.

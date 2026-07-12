@@ -10,6 +10,7 @@ import { PendingExchange } from './PendingExchange'
 import { useConversation } from './useConversation'
 import { useConversations } from './useConversations'
 import { useTurnActivity } from './useTurnActivity'
+import { delegateAckText } from './voiceAck'
 
 export function AgentPage() {
   const params = useParams<{ conversationId?: string }>()
@@ -55,12 +56,33 @@ export function AgentPage() {
   // localStorage (not the state) is read at speak time: hands-free VAD
   // callbacks close over this function from an earlier render, and the
   // stored flag is the always-current source of truth.
+  const voiceTurnRef = useRef(false)
+  const ackedAppsRef = useRef(new Set<string>())
   const onTranscript = async (text: string) => {
-    const reply = await send(text)
-    if (reply && localStorage.getItem('agent-voice-output') !== 'off') {
-      void playText(reply)
+    voiceTurnRef.current = true
+    ackedAppsRef.current = new Set()
+    try {
+      const reply = await send(text)
+      if (reply && localStorage.getItem('agent-voice-output') !== 'off') {
+        void playText(reply)
+      }
+    } finally {
+      voiceTurnRef.current = false
     }
   }
+
+  // Slow-turn acknowledgment: a delegated conductor turn can block 12–22 s,
+  // so on voice-initiated turns the first activity beat naming each
+  // ask_<app> delegate is spoken ("Asking chess…") — typed turns keep the
+  // silent progress line only. The reply's playText interrupts a still-
+  // playing ack (shared audio element), so they never overlap or queue up.
+  useEffect(() => {
+    if (!voiceTurnRef.current) return
+    const ack = delegateAckText(activity, ackedAppsRef.current)
+    if (ack && localStorage.getItem('agent-voice-output') !== 'off') {
+      void playText(ack)
+    }
+  }, [activity])
 
   // Keep the newest turn in view as messages/pending state arrive.
   // (Guarded call: jsdom has no scrollIntoView.)
