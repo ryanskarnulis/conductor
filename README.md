@@ -18,8 +18,10 @@ progress (no SSE in v1). The web UI is a PCC-style chat panel: conversation
 sidebar, markdown replies with the delegate-call trajectory above each one,
 and a live "Asking chess… · 12s" progress line polled from the activity
 endpoint while a turn runs. The subagent-thread map is DB-backed, so
-follow-ups keep their app-side context across restarts. Still to come: the
-routing eval harness. See `CLAUDE.md` for details.
+follow-ups keep their app-side context across restarts. The routing eval
+harness (`docs/agent-evals.md`) closed Phase 3's go/no-go gate: gemma-4-12b
+routes all goldens, refuses out-of-fleet asks, and holds destructive-op
+confirmation. See `CLAUDE.md` for details.
 
 ## Architecture sketch
 

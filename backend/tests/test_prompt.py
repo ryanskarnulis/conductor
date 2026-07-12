@@ -50,9 +50,11 @@ def test_base_prompt_covers_conductor_behavioral_contract() -> None:
     assert "faithfully" in prompt
     # Clarify-on-ambiguity.
     assert "clarifying question" in prompt
-    # Conductor owns destructive-op confirmation.
-    assert "destructive" in prompt
-    assert "confirm" in prompt
+    # Conductor owns destructive-op confirmation (rule tightened after the
+    # routing evals caught "reset the chess game" delegating unconfirmed —
+    # see tests/test_agent_evals.py's confirm-* goldens).
+    assert "Destructive requests get confirmed FIRST" in prompt
+    assert "do NOT call a tool this turn" in prompt
     # Out-of-fleet requests get an honest refusal.
     assert "no app in the fleet" in prompt
     # Local-first.

@@ -27,8 +27,12 @@ middleware, the turn-activity poll endpoint (`app/api/turn_activity.py`), and
 the web UI — a PCC-style chat panel (`frontend/src/features/agent/`) with a
 conversation sidebar, markdown replies with the delegate-call trajectory, and
 a live "Asking chess… · 12s" progress line polled from the activity endpoint
-while a synchronous run blocks (no SSE in v1). Not yet built: the routing
-eval harness (the go/no-go gate for gemma-4-12b routing).
+while a synchronous run blocks (no SSE in v1). The routing eval harness
+(`backend/tests/test_agent_evals.py`, baseline in `docs/agent-evals.md`)
+closed Phase 3's go/no-go gate: gemma-4-12b routes 12/12 goldens. **The
+baseline gates every prompt / manifest-examples / model / loop change** — run
+the evals before merging one (`CONDUCTOR_AGENT_EVALS=1 pytest
+tests/test_agent_evals.py -v -s` from `backend/`; needs llama-swap up).
 
 See `../agent-standard/STANDARD.md` for the contract every agent (once this
 one has one) must satisfy, and `../agent-standard/delegate-api.md` for the
