@@ -9,7 +9,13 @@ does. Leads carry a size (`[S]`/`[M]`/`[L]`) or a status tag (`[decision]`,
 
 ## Next sprint (2026-07-12)
 
-- [ ] **[S] Fix the deployed provider config.** `docker-compose.yml` sets no
+- [x] **[S] Fix the deployed provider config.** **Done 2026-07-12 (#10):
+      `docker-compose.yml` now sets
+      `LLAMACPP_BASE_URL: ${LLAMACPP_BASE_URL:-http://host.docker.internal:8200/v1}`
+      (plus the speech-service URLs, same host-gateway mechanism), the deploy
+      clone carries it, and a live chat turn through the deployed stack
+      (`POST /api/agent/conversations/{id}/messages` via `127.0.0.1:8300`)
+      round-tripped against llama-swap.** Original item: sets no
       `LLAMACPP_BASE_URL`, so the deployed backend falls back to the dev
       default `http://127.0.0.1:8200/v1` (`backend/app/config.py`) — loopback
       *inside the container*, where llama-swap isn't — while the compose file
