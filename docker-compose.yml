@@ -25,6 +25,10 @@ services:
       # (the port is preserved).
       FLEET_MANIFEST_DIR: /fleet
       FLEET_UPSTREAM_HOST: host.docker.internal
+      # The shared ../llama-swap runtime on the host — the config.py default
+      # (127.0.0.1) is unreachable from inside the container. Same
+      # host-gateway mechanism as PCC and chess.
+      LLAMACPP_BASE_URL: ${LLAMACPP_BASE_URL:-http://host.docker.internal:8200/v1}
       # Shared workspace speech service (../speech/, ports 8400/8410), same
       # host-gateway mechanism. Env var names per ../agent-standard/voice.md;
       # unset SPEECH_BASE_URL to run voiceless (/api/voice answers 503).
