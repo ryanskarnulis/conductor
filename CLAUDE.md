@@ -13,7 +13,8 @@ hold the conversation. It is Phase 3 of
 PCC alignment, and the chess migration — are done; PCC is the reference
 implementation every app, including this one, follows).
 
-**This repo has completed Slice 4 of Phase 3: conversations API + chat UI.**
+**Phase 3 is complete (PRs #1–#6, routing evals GO 12/12); only the hub-app
+"Later" item remains open — see `TODO.md`.**
 On top of the Slice 2 engine (tool registry, llama.cpp provider, bounded loop,
 layered Glitch personality — adapted from the PCC reference implementation,
 `../project-command-center/backend/app/`) and Slice 3's `fleet/` package
@@ -192,9 +193,10 @@ and uses a 300s read / 5s connect timeout for cold model loads):
   conversation, and on a `404` (pruned thread) recreates it and retries
   **exactly once** (a second 404 fails the call);
 - maps every typed delegate fault (`DelegateThreadGone` / `DelegateRateLimited`
-  with `Retry-After` / `DelegateUnavailable` / `DelegateProtocolError`) to an
-  informative `ToolError` the model reads and adapts to — 429 is surfaced, never
-  auto-retried;
+  with `Retry-After` / `DelegateUnavailable` / `DelegateRequestRejected`, a 4xx
+  other than 404/429 — the request itself is invalid, never retried as-is /
+  `DelegateProtocolError`) to an informative `ToolError` the model reads and
+  adapts to — 429 is surfaced, never auto-retried;
 - relays the assistant reply plus a compact `[app did: …]` activity note —
   never raw transcripts into conductor's history.
 
@@ -239,6 +241,13 @@ date` (the app-flavor layer is deliberately empty).
 fans out into that app's own bounded tool-calling loop — so latency stacks.
 Keeping conductor's loop shallow bounds the worst-case depth-1 fan-out.
 
+**Delegation-root rule.** Conductor is the delegation root and nothing else:
+per the depth-1 rule (`../agent-standard/STANDARD.md`) it is the only client
+of other apps' delegate APIs, and its own delegate surface (if it ever gets
+one) must never be exposed to another agent — which is why `app.yaml`
+deliberately ships no `agent:` block. Like every fleet app it also stays on
+`../agent-standard/NEW-APP-CHECKLIST.md`.
+
 ## Conversations API (`api/`, `services/`, `db/`)
 
 The HTTP front for conductor's own loop, PCC's conversations shape with the
@@ -266,10 +275,9 @@ before serving. The `delegate_threads` table backs the fleet thread map — the
 "Guardrails + seams" section above covers how the stores split between the
 HTTP loop and the MCP server.
 
-## Later
+## Task tracking
 
-Beyond the agent stack (Phase 3 Slices 3–4 and Phase 4), conductor must also
-follow `../agent-standard/NEW-APP-CHECKLIST.md` and the depth-1 delegation
-rule in `../agent-standard/STANDARD.md` — conductor is the delegation root,
-so it is the only client of other apps' delegate APIs, and its own delegate
-surface (if it ever gets one) must never be exposed to another agent.
+`TODO.md` is the living backlog — the next sprint plus the deferred and
+blocked items. One task = one branch = one PR (see Git workflow above); when
+an item ships, record the outcome on its line (bold note with the date and PR
+number) rather than deleting it silently.

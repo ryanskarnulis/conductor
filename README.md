@@ -6,7 +6,8 @@ delegates to it, holding the conversation across apps.
 
 This is Phase 3 of the workspace's
 [`agent-standard/AGENTS-MASTER-PLAN.md`](../agent-standard/AGENTS-MASTER-PLAN.md).
-**Current state: chat UI live (Slice 4 complete).** On top of the agent
+**Current state: Phase 3 complete (PRs #1–#6, routing evals GO 12/12); only
+the hub-app "Later" item remains open.** On top of the agent
 engine (tool registry, llama.cpp provider, bounded loop, layered Glitch
 personality) and fleet delegation (`ask_<app>` tools discovered from `app.yaml`
 `agent:` blocks, also exposed over an MCP stdio server via `.mcp.json`),

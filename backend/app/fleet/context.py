@@ -7,8 +7,10 @@ tools read it to answer three questions:
 - **Which subagent thread should this app's call reuse?** The context holds a
   :class:`ThreadStore` keyed by ``(master_conversation_id, app_name)`` so a
   follow-up to the same app in the same master conversation carries context
-  app-side. The store is an interface: an in-memory one for now, a DB-backed
-  one in Slice 4 (this is the persistence seam) — nothing else changes.
+  app-side. The store is an interface (the persistence seam): the HTTP loop
+  binds the DB-backed :class:`app.fleet.thread_store.DbThreadStore`, the MCP
+  server a process-lifetime :class:`InMemoryThreadStore` — nothing else
+  changes between them.
 - **Have we called this app too many times this turn?** A per-run, per-app
   counter enforces ``conductor_delegate_calls_per_turn_per_app``; exceeding it
   raises :class:`ToolError`, a domain error the model sees so it stops
@@ -42,8 +44,9 @@ MCP_DRIVER = "agent:mcp"
 class ThreadStore(Protocol):
     """Maps ``(master_conversation_id, app_name)`` to a subagent thread id.
 
-    The seam Slice 4 swaps for a DB-backed store — the tools only ever touch
-    this interface, so persistence slots in without touching them.
+    The persistence seam — the tools only ever touch this interface, so which
+    store backs a run (the DB for the HTTP loop, memory for the MCP server) is
+    entirely the binder's choice.
     """
 
     def get(self, master_conversation_id: str, app_name: str) -> int | None: ...
@@ -54,11 +57,12 @@ class ThreadStore(Protocol):
 
 
 class InMemoryThreadStore:
-    """Process-lifetime :class:`ThreadStore` (Slice 3 default).
+    """Process-lifetime :class:`ThreadStore` — the MCP server's session store.
 
     A pruned thread 404s and the tool recreates it, so a store that doesn't
-    survive restart is contract-compliant; Slice 4 replaces it with a
-    DB-backed one behind the same interface.
+    survive restart is contract-compliant; the HTTP loop uses the DB-backed
+    ``DbThreadStore`` (``app/fleet/thread_store.py``) behind the same
+    interface instead.
     """
 
     def __init__(self) -> None:

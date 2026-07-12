@@ -1,10 +1,11 @@
 """Conductor's agent loop: plan → call delegate tools → observe → respond.
 
 Drives the local model (through the llama.cpp provider) against the shared tool
-registry (``app/tools/registry.py``). In this slice the registry is empty —
-conductor's real tools are one delegate per fleet app, added in a later slice —
-so the loop machinery is exercised by tests that register their own scratch
-tools; the shape is exactly what the delegate tools will plug into.
+registry (``app/tools/registry.py``). The registry ships empty and is populated
+at startup by ``app.fleet.tools.build_delegate_tools`` — one ``ask_<app>``
+delegate tool per discovered fleet agent, plus ``list_agents`` (the HTTP app's
+lifespan and the MCP server's ``main()`` both do this); loop tests exercise the
+machinery with their own scratch tools against the same registry.
 
 Termination is structural: at most ``max_iterations`` provider turns (kept
 shallow — see :data:`app.config.Settings.conductor_max_iterations`), plus a
@@ -49,8 +50,9 @@ LOOP_ACTOR = "agent:loop"
 #   1. app base prompt — conductor's behavioral contract (below);
 #   2. global Glitch — the vendored house personality (verbatim canonical text,
 #      see personality-global.md); conductor adds no app flavor on top;
-#   3. dynamic layers — today's date, injected per run. (Per-app routing hints
-#      join this layer in a later slice, built from each app's app.yaml block.)
+#   3. dynamic layers — the fleet section (per-app routing hints rendered from
+#      the discovered manifests by app.fleet.tools.render_fleet_section) and
+#      today's date, injected per run.
 # The vendored Glitch body is never edited here: fix drift by re-copying from
 # agent-standard/ (../agent-standard/check-sync.sh).
 
