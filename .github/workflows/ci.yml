@@ -38,6 +38,30 @@ jobs:
       - name: Run tests
         run: pytest
 
+  # Non-blocking vendored-file drift check (agent-standard master plan §11):
+  # clones the canonical repos next to this checkout and runs check-sync.sh;
+  # drift surfaces as a warning annotation, never a failure. Runs on the
+  # homelab runner because the canonical repos are private — the default
+  # GITHUB_TOKEN is single-repo, but the runner's gh credential helper can
+  # clone them.
+  sync-check:
+    runs-on: [self-hosted, homelab]
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - name: check-sync (warn only)
+        run: |
+          layout="$RUNNER_TEMP/check-sync"
+          rm -rf "$layout" && mkdir -p "$layout"
+          git clone --depth 1 https://github.com/ryanskarnulis/agent-standard "$layout/agent-standard"
+          git clone --depth 1 https://github.com/ryanskarnulis/chess "$layout/chess"
+          cp -r "$GITHUB_WORKSPACE" "$layout/app"
+          if ! "$layout/agent-standard/check-sync.sh"; then
+            echo "::warning title=Vendored-file drift::check-sync.sh found drift against the canonical files — re-copy per the re-vendor rule (see job log)."
+          fi
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
