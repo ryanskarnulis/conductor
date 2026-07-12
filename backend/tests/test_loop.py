@@ -141,6 +141,21 @@ def test_schema_errors_exhaust_the_correction_budget(notes: list[str]) -> None:
     assert notes == []
 
 
+def test_unknown_tools_exhaust_the_correction_budget(notes: list[str]) -> None:
+    provider = ScriptedProvider(
+        [
+            _calls(("ghost_tool", {})),  # schema error 1
+            _calls(("ghost_tool", {})),  # schema error 2 -> over budget
+        ]
+    )
+    result = AgentLoop(provider, max_corrections=1).run("call a ghost")
+
+    assert result.stop_reason == "correction_limit"
+    assert result.reply is None
+    assert len(provider.requests) == 2
+    assert notes == []
+
+
 def test_unparseable_tool_call_corrected_via_user_message(notes: list[str]) -> None:
     provider = ScriptedProvider(
         [
