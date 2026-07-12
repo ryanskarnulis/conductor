@@ -15,10 +15,22 @@ services:
     environment:
       # Container-specific values that override anything in .env.
       API_HOST: 0.0.0.0            # in-container bind; no host port is published
+      # Fleet discovery: the sibling apps' app.yaml files are mounted at /fleet
+      # (see volumes below); the container reaches host-bound app ports via
+      # host.docker.internal, so rewrite every manifest's upstream host to it
+      # (the port is preserved).
+      FLEET_MANIFEST_DIR: /fleet
+      FLEET_UPSTREAM_HOST: host.docker.internal
     extra_hosts:
-      # Reaches the shared ../llama-swap runtime and other fleet apps on the
-      # host (later slices) — same mechanism PCC and chess use.
+      # Reaches the shared ../llama-swap runtime and the fleet apps on the
+      # host — same mechanism PCC and chess use.
       - "host.docker.internal:host-gateway"
+    volumes:
+      # The directory holding the sibling clones' app.yaml manifests. In dev
+      # `..` is the workspace root; in deploy the compose runs from
+      # ~/deploy/conductor, so `..` is ~/deploy (the clean clones live there).
+      # Read-only: conductor only reads manifests, never writes them.
+      - "..:/fleet:ro"
     # No `ports:` — the backend is reachable only over the compose network
     # (nginx), never from the host or LAN directly.
     healthcheck:

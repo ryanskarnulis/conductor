@@ -6,11 +6,14 @@ delegates to it, holding the conversation across apps.
 
 This is Phase 3 of the workspace's
 [`agent-standard/AGENTS-MASTER-PLAN.md`](../agent-standard/AGENTS-MASTER-PLAN.md).
-**Current state: standard agent stack (Slice 2).** The agent engine — tool
-registry, llama.cpp provider, bounded loop, and the layered Glitch personality
-— is in place; the delegate tools, MCP server, and chat API that turn it into
-a working router come in later slices. See `CLAUDE.md` for what's live today
-versus what's coming.
+**Current state: fleet delegation (Slice 3).** On top of the agent engine (tool
+registry, llama.cpp provider, bounded loop, layered Glitch personality),
+conductor now discovers per-app agents from their `app.yaml` `agent:` blocks,
+builds one `ask_<app>` delegate tool each (plus `list_agents`), and exposes them
+over an MCP stdio server (`.mcp.json`). The delegate client, thread map, call
+budget, and audit live in `backend/app/fleet/`. Still to come (Slice 4): the
+REST chat API that fronts conductor's own loop, a persistent thread store, and
+the chat UI. See `CLAUDE.md` for what's live today versus what's coming.
 
 ## Architecture sketch
 

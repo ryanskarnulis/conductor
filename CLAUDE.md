@@ -13,16 +13,18 @@ hold the conversation. It is Phase 3 of
 PCC alignment, and the chess migration — are done; PCC is the reference
 implementation every app, including this one, follows).
 
-**This repo is currently Slice 2 of Phase 3: the standard agent stack.** The
-engine is in place — tool registry, llama.cpp provider, bounded loop, and the
-layered Glitch personality (adapted from the PCC reference implementation,
-`../project-command-center/backend/app/`) — plus exhaustive tests. Not yet
-built (Slices 3–4): the per-app delegate tools (the registry ships **empty**),
-the MCP stdio server, and the REST conversations API that fronts the loop.
-`/health` and a themed placeholder page are still all that's exposed over
-HTTP. Subsequent slices add subagent discovery from `app.yaml agent:` blocks,
-wire the delegate tools into the registry, and add the chat UI, per the master
-plan.
+**This repo is currently Slice 3 of Phase 3: fleet delegation.** On top of the
+Slice 2 engine (tool registry, llama.cpp provider, bounded loop, layered Glitch
+personality — adapted from the PCC reference implementation,
+`../project-command-center/backend/app/`), Slice 3 adds the `fleet/` package:
+manifest discovery, the typed delegate REST client, the per-app `ask_<app>`
+tools with guardrails, and the MCP stdio server (`app/mcp/server.py`,
+`.mcp.json`). Conductor now discovers subagents from `app.yaml agent:` blocks
+and can route to them over the delegate contract. Not yet built (Slice 4): the
+REST conversations API that fronts conductor's own loop, a DB-backed thread
+store, and the chat UI. `/health` and a themed placeholder page are still all
+that's exposed over HTTP; the delegate tools are reachable today only through
+the MCP server.
 
 See `../agent-standard/STANDARD.md` for the contract every agent (once this
 one has one) must satisfy, and `../agent-standard/delegate-api.md` for the
@@ -97,12 +99,27 @@ backend/app/
 │   │                          #   plain httpx, Pydantic-validated at the
 │   │                          #   boundary. reasoning_content dropped; thinking
 │   │                          #   OFF by default (routing turns stay fast).
-│   ├── loop.py                # AgentLoop (bounded), build_system_prompt, the
-│   │                          #   conductor base prompt, loop_from_settings.
+│   ├── loop.py                # AgentLoop (bounded), build_system_prompt (now
+│   │                          #   takes the fleet layer), conductor base
+│   │                          #   prompt, loop_from_settings.
 │   └── personality-global.md  # vendored Glitch (see re-vendor rule below)
+├── fleet/                     # Slice 3 — conductor's job (see below)
+│   ├── manifests.py           # discover_fleet: scan {fleet_manifest_dir}/*/
+│   │                          #   app.yaml → Fleet of FleetApp/AgentSpec
+│   ├── delegate.py            # DelegateClient (httpx) + typed errors + the
+│   │                          #   wire models mirroring PCC/chess
+│   ├── context.py             # DelegationContext: thread map + per-turn call
+│   │                          #   budget + audit hook; ThreadStore seam
+│   └── tools.py               # build_delegate_tools (ask_<app> + list_agents),
+│                              #   render_fleet_section (the prompt layer)
+├── mcp/server.py              # FastMCP stdio server: the registry (delegate
+│                              #   tools + list_agents) over MCP; .mcp.json
+├── logging_config.py          # configure_logging(stream) — the MCP server
+│                              #   points it at stderr (stdout is the transport)
 └── tools/
     ├── registry.py            # @tool decorator, call_tool(..., actor=…). Ships
-    │                          #   EMPTY — delegate tools arrive in Slice 3.
+    │                          #   empty; build_delegate_tools populates it at
+    │                          #   startup — the one surface loop + MCP consume.
     └── runtime.py             # the actor contextvar only (PCC's tool_session /
                                #   DB plumbing is adapted out — conductor has no
                                #   local DB; writes are attributed downstream
@@ -112,7 +129,59 @@ backend/app/
 Intentional deltas from PCC: provider protocol/types split into `provider.py`;
 no `chat_structured` (conductor has no structured-output need); no `runtime`
 DB session; no `resolve_actor` (conductor is the delegation root — it never
-receives an inbound `X-Agent-Actor`); `max_iterations` defaults to 6, not 10.
+receives an inbound `X-Agent-Actor`); `max_iterations` defaults to 6, not 10;
+`logging_config.py` is trimmed to just `configure_logging` (no request
+middleware until the HTTP API lands in Slice 4).
+
+## Fleet delegation (`fleet/`)
+
+Conductor's actual job. Discovery is declarative: `discover_fleet` scans
+`{settings.fleet_manifest_dir}/*/app.yaml` (dev default: the workspace root,
+computed from the package location; docker sets `FLEET_MANIFEST_DIR=/fleet`, a
+read-only mount of `..`, with `FLEET_UPSTREAM_HOST=host.docker.internal` to
+rewrite each manifest's upstream host — port preserved). Every well-formed app
+becomes a `FleetApp`; the ones with an `agent:` block get an `AgentSpec`.
+Conductor's own manifest is skipped (depth-1: it is never its own delegate);
+malformed/incomplete manifests are skipped with a `structlog` warning, never a
+crash; a malformed `agent:` block degrades an app to a non-agent member.
+
+`build_delegate_tools(fleet, client_factory)` registers one `ask_<app>` tool
+per agent-bearing app (`ask_tasks`, `ask_chess`, …) — docstring from the
+manifest's `agent.description` — plus a local `list_agents`. An `ask_<app>`
+call, over `DelegateClient` (which always sends `X-Agent-Actor: agent:conductor`
+and uses a 300s read / 5s connect timeout for cold model loads):
+
+- resolves or creates the app's subagent thread for the current master
+  conversation, and on a `404` (pruned thread) recreates it and retries
+  **exactly once** (a second 404 fails the call);
+- maps every typed delegate fault (`DelegateThreadGone` / `DelegateRateLimited`
+  with `Retry-After` / `DelegateUnavailable` / `DelegateProtocolError`) to an
+  informative `ToolError` the model reads and adapts to — 429 is surfaced, never
+  auto-retried;
+- relays the assistant reply plus a compact `[app did: …]` activity note —
+  never raw transcripts into conductor's history.
+
+Routing hints live in the **system prompt**, not tool docstrings:
+`render_fleet_section(fleet)` builds a dynamic layer (each agent's name /
+description / examples) that `build_system_prompt` slots in as
+`conductor base → Glitch → fleet → date`.
+
+**Guardrails + seams (`context.py`).** A `DelegationContext` is bound around
+each run (a contextvar for Slice 4's HTTP loop; a process-global fallback for
+the MCP server). It holds: (a) the **thread map** via a `ThreadStore` keyed by
+`(master_conversation_id, app_name)` — `InMemoryThreadStore` today, the seam a
+DB-backed store slots into in Slice 4; (b) a **per-turn per-app call budget**
+(`conductor_delegate_calls_per_turn_per_app`, default 3; `<= 0` disables it, as
+the MCP server does since its driver is the trusted MCP host) — exceeding it
+raises `ToolError` so the model stops hammering one app; (c) an **audit hook** —
+every delegate call emits one `delegate_call` structlog event (app, subagent
+thread id, latency_ms, and stop_reason or error class), tagged with the driver
+(`agent:loop` for the loop, `agent:mcp` for the MCP server).
+
+The **MCP server** (`app/mcp/server.py`, wired by `.mcp.json`) exposes the same
+registry over stdio; it discovers the fleet and registers the tools in `main()`
+*after* pointing logging at stderr — the import stays silent because stdout is
+the JSON-RPC transport.
 
 **Re-vendor rule.** `ai/personality-global.md` is a **verbatim** copy of
 `../agent-standard/personality-global.md` with exactly one added first line

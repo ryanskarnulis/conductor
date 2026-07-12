@@ -1,6 +1,15 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The workspace root — the parent of the conductor repo — computed from this
+# file's location so the dev default holds no matter where the repo is checked
+# out. config.py lives at <repo>/backend/app/config.py, so parents[3] is the
+# directory that contains the conductor repo and its sibling app clones (each
+# with an app.yaml conductor discovers). Docker overrides this via
+# FLEET_MANIFEST_DIR=/fleet (a read-only mount of that same directory).
+_WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
@@ -52,6 +61,24 @@ class Settings(BaseSettings):
     # iteration may wrap a full subagent loop (a delegate call fans out into
     # that app's own bounded loop), so latency stacks. See CLAUDE.md.
     conductor_max_iterations: int = 6
+
+    # --- fleet discovery + delegation ---------------------------------------
+    # Where to find the fleet manifests: one `<app>/app.yaml` per sibling app.
+    # Dev default is the workspace root (parent of this repo); docker sets
+    # FLEET_MANIFEST_DIR=/fleet (a read-only mount of that directory).
+    fleet_manifest_dir: Path = _WORKSPACE_ROOT
+
+    # Rewrites the HOST half of every manifest's `upstream` (host:port) — the
+    # port is always kept. Empty means "use the manifest host verbatim" (dev,
+    # where apps are reachable on 127.0.0.1). Docker sets
+    # FLEET_UPSTREAM_HOST=host.docker.internal so the container reaches apps
+    # bound on the host.
+    fleet_upstream_host: str = ""
+
+    # Per-turn ceiling on how many times conductor may call any one app's
+    # delegate tool within a single master loop run. Exceeding it is a domain
+    # error the model sees, so it stops hammering one app and moves on.
+    conductor_delegate_calls_per_turn_per_app: int = 3
 
 
 @lru_cache

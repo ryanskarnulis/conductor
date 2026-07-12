@@ -14,9 +14,11 @@ dependencies = [
     # server itself arrives in a later slice; only the utilities are used here.
     "mcp>=1.20.0",
     # llama.cpp provider speaks the OpenAI wire format over plain httpx
-    # (app/ai/providers/llamacpp.py); the per-app delegate client in a later
-    # slice reuses it.
+    # (app/ai/providers/llamacpp.py); the per-app delegate client
+    # (app/fleet/delegate.py) reuses it.
     "httpx>=0.28.1",
+    # Parses the fleet's app.yaml manifests for discovery (app/fleet/manifests.py).
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +26,7 @@ dev = [
     "pytest>=9.0.3",
     "mypy>=2.1.0",
     "ruff>=0.15.14",
+    "types-PyYAML>=6.0",
 ]
 
 [tool.ruff]
