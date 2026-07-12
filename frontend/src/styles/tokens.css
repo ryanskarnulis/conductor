@@ -8,7 +8,7 @@
    here. This file maps conductor's semantic tokens onto those primitives;
    feature partials keep consuming the semantic names. Copied from PCC's
    frontend/src/styles/tokens.css (the fleet's reference implementation);
-   trimmed to what conductor's placeholder page uses so far. */
+   trimmed to what the chat panel consumes. */
 
 :root {
   color-scheme: dark;
@@ -30,6 +30,20 @@
 
   --accent: var(--glow);
   --focus-ring: rgba(155, 231, 255, 0.35);
+
+  /* status hues mapped from silk's night palette (same names as PCC's) */
+  --blue: var(--info);
+  --blue-soft: var(--info-soft);
+  --blue-tint: rgba(143, 190, 242, 0.08);
+  --blue-border: rgba(143, 190, 242, 0.35);
+  --green: var(--ok);
+  --orange: var(--warn);
+  --orange-soft: var(--warn-soft);
+  --red: var(--danger);
+  --red-soft: var(--danger-soft);
+
+  /* frosted composer strip (night veil) */
+  --frost-soft: rgba(15, 19, 29, 0.84);
 
   font-family: var(--sans);
   color: var(--text);

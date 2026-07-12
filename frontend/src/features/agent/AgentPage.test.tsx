@@ -1,0 +1,179 @@
+import { fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { getConversation, getTurnActivity, listConversations, postMessage } from '../../api/agent'
+import type { AgentMessage, ConversationDetail } from '../../types/agent'
+import { AgentPage } from './AgentPage'
+
+vi.mock('../../api/agent', () => ({
+  createConversation: vi.fn(),
+  deleteConversation: vi.fn(),
+  getConversation: vi.fn(),
+  getTurnActivity: vi.fn(),
+  listConversations: vi.fn(),
+  postMessage: vi.fn(),
+}))
+
+const mockList = vi.mocked(listConversations)
+const mockGet = vi.mocked(getConversation)
+const mockPost = vi.mocked(postMessage)
+const mockActivity = vi.mocked(getTurnActivity)
+
+function message(overrides: Partial<AgentMessage>): AgentMessage {
+  return {
+    id: 1,
+    conversation_id: 1,
+    role: 'user',
+    content: 'hello',
+    tool_calls: null,
+    stop_reason: null,
+    created_at: '2026-07-12T10:00:00Z',
+    ...overrides,
+  }
+}
+
+const assistantWithDelegateCalls = message({
+  id: 2,
+  role: 'assistant',
+  content: 'Nothing is due today.',
+  stop_reason: 'completed',
+  tool_calls: [
+    {
+      tool: 'ask_tasks',
+      arguments: { message: "what's due today?" },
+      result: 'Nothing due.\n\n[tasks did: list_tasks]',
+      error: null,
+    },
+    {
+      tool: 'ask_chess',
+      arguments: { message: 'status?' },
+      result: null,
+      error: 'chess is rate-limiting requests right now.',
+    },
+  ],
+})
+
+const detail: ConversationDetail = {
+  id: 1,
+  title: 'what tasks are due today?',
+  created_at: '2026-07-12T10:00:00Z',
+  updated_at: '2026-07-12T10:00:00Z',
+  messages: [message({ content: 'what tasks are due today?' }), assistantWithDelegateCalls],
+}
+
+function renderAt(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/" element={<AgentPage />} />
+        <Route path="/c/:conversationId" element={<AgentPage />} />
+      </Routes>
+    </MemoryRouter>,
+  )
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  mockList.mockResolvedValue([
+    {
+      id: 1,
+      title: 'what tasks are due today?',
+      created_at: detail.created_at,
+      updated_at: detail.updated_at,
+    },
+  ])
+  mockGet.mockResolvedValue(detail)
+  mockActivity.mockResolvedValue({
+    active: false,
+    kind: null,
+    tool: null,
+    iteration: null,
+    elapsed_seconds: null,
+  })
+})
+
+describe('AgentPage', () => {
+  it('renders the thread with the delegate-call trajectory', async () => {
+    renderAt('/c/1')
+
+    expect(await screen.findByText('Nothing is due today.')).toBeInTheDocument()
+    expect(screen.getByText('Asked tasks')).toBeInTheDocument()
+    expect(screen.getByText(/Asked chess/)).toBeInTheDocument()
+    expect(screen.getByText('chess is rate-limiting requests right now.')).toBeInTheDocument()
+  })
+
+  it('sends a message, shows the live activity beat, then the refetched thread', async () => {
+    let resolveRun: (value: never) => void = () => {}
+    mockPost.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRun = resolve as (value: never) => void
+        }),
+    )
+    // While the run is in flight, the poll reports a live delegate call.
+    mockActivity.mockResolvedValue({
+      active: true,
+      kind: 'tool',
+      tool: 'ask_chess',
+      iteration: 2,
+      elapsed_seconds: 14.5,
+    })
+    renderAt('/c/1')
+    await screen.findByText('Nothing is due today.')
+
+    fireEvent.change(screen.getByLabelText('Message conductor'), {
+      target: { value: 'and how is the game going?' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    // Optimistic user bubble + the polled "asking chess" beat with elapsed time.
+    expect(await screen.findByText('and how is the game going?')).toBeInTheDocument()
+    expect(await screen.findByRole('status')).toHaveTextContent('Asking chess… · 15s')
+
+    const followup: ConversationDetail = {
+      ...detail,
+      messages: [
+        ...detail.messages,
+        message({ id: 3, content: 'and how is the game going?' }),
+        message({
+          id: 4,
+          role: 'assistant',
+          content: 'Chess says you are up a pawn.',
+          stop_reason: 'completed',
+        }),
+      ],
+    }
+    mockGet.mockResolvedValue(followup)
+    resolveRun(undefined as never)
+
+    expect(await screen.findByText('Chess says you are up a pawn.')).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('explains a run that stopped without a reply', async () => {
+    mockGet.mockResolvedValue({
+      ...detail,
+      messages: [
+        message({ content: 'Do something impossible' }),
+        message({ id: 5, role: 'assistant', content: null, stop_reason: 'max_iterations' }),
+      ],
+    })
+    renderAt('/c/1')
+
+    expect(await screen.findByText(/hit its step limit before finishing/)).toBeInTheDocument()
+  })
+
+  it('surfaces a rate-limit rejection and reloads the thread', async () => {
+    const { ApiError } = await import('../../api/client')
+    mockPost.mockRejectedValue(new ApiError(429, { detail: 'rate limit exceeded' }))
+    renderAt('/c/1')
+    await screen.findByText('Nothing is due today.')
+
+    fireEvent.change(screen.getByLabelText('Message conductor'), {
+      target: { value: 'again' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Rate limited/)
+  })
+})

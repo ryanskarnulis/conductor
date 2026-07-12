@@ -1,15 +1,26 @@
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { listConversations } from './api/agent'
+
+vi.mock('./api/agent', () => ({
+  createConversation: vi.fn(),
+  deleteConversation: vi.fn(),
+  getConversation: vi.fn(),
+  getTurnActivity: vi.fn(),
+  listConversations: vi.fn(),
+  postMessage: vi.fn(),
+}))
+
+beforeEach(() => {
+  vi.mocked(listConversations).mockResolvedValue([])
+})
 
 describe('App', () => {
-  it('renders the Conductor title', () => {
+  it('renders the chat shell with the empty-thread welcome at /', async () => {
     render(<App />)
-    expect(screen.getByRole('heading', { name: 'Conductor' })).toBeInTheDocument()
-  })
-
-  it('renders the placeholder tagline', () => {
-    render(<App />)
-    expect(screen.getByText(/master agent/i)).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Conductor' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Start a conversation/ })).toBeInTheDocument()
+    expect(await screen.findByText('No conversations yet.')).toBeInTheDocument()
   })
 })
