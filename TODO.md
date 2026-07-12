@@ -26,7 +26,11 @@ does. Leads carry a size (`[S]`/`[M]`/`[L]`) or a status tag (`[decision]`,
       turn from the deployed UI (`~/deploy/conductor`). This is
       `../agent-standard/NEW-APP-CHECKLIST.md` step 5, missed for the one
       service that isn't discovered from a manifest.
-- [ ] **[S] Align the request-timeout chain.** `frontend/nginx.conf` caps
+- [x] **[S] Align the request-timeout chain.** **Done 2026-07-12 (#13): nginx
+      now proxies `/api` at 330s, above every 300s budget (browser client,
+      delegate read timeout, llamacpp timeout), and the comment states the
+      real ordering — the backend or client times out first, never the
+      proxy.** Original item: `frontend/nginx.conf` caps
       `/api` at 200s (`proxy_read_timeout`/`proxy_send_timeout`) while the
       browser client waits 300s (`AGENT_RUN_TIMEOUT_MS`,
       `frontend/src/api/agent.ts`) and the backend's own budgets are 300s
