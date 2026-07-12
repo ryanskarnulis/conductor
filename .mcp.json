@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "conductor": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "cd backend && exec .venv/bin/python -m app.mcp.server"
+      ]
+    }
+  }
+}

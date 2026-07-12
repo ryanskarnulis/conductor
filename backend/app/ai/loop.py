@@ -113,13 +113,21 @@ def _load_global_personality() -> str:
 _GLOBAL_PERSONALITY = _load_global_personality()
 
 
-def build_system_prompt(today: date) -> str:
-    """Compose the layered system prompt: app base → global Glitch → date.
+def build_system_prompt(today: date, *, fleet_section: str | None = None) -> str:
+    """Compose the layered system prompt: app base → global Glitch → fleet → date.
 
-    Conductor ships no app-flavor layer; the date is the only dynamic layer in
-    this slice (per-app routing hints join it later).
+    The fleet section (each agent app's name, capability, and routing examples,
+    from :func:`app.fleet.tools.render_fleet_section`) is a dynamic layer built
+    per process from the discovered manifests; it sits after Glitch and before
+    the date so routing hints live in the prompt, not in tool docstrings. It is
+    omitted when empty (no agents discovered). Conductor ships no app-flavor
+    layer.
     """
-    return f"{_APP_BASE_PROMPT}\n\n{_GLOBAL_PERSONALITY}\n\nToday's date is {today.isoformat()}."
+    layers = [_APP_BASE_PROMPT, _GLOBAL_PERSONALITY]
+    if fleet_section:
+        layers.append(fleet_section)
+    layers.append(f"Today's date is {today.isoformat()}.")
+    return "\n\n".join(layers)
 
 
 _StopReason = Literal["completed", "max_iterations", "correction_limit"]
@@ -158,12 +166,16 @@ class AgentLoop:
         *,
         max_iterations: int = 6,
         max_corrections: int = 3,
+        fleet_section: str | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be >= 1")
         self._provider = provider
         self._max_iterations = max_iterations
         self._max_corrections = max_corrections
+        # The prompt's fleet layer (built once from the discovered manifests).
+        # None keeps the prompt to base → Glitch → date (Slice 2 behavior).
+        self._fleet_section = fleet_section
 
     def run(
         self,
@@ -193,7 +205,10 @@ class AgentLoop:
     ) -> AgentRunResult:
         specs = registry.tool_specs()
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": build_system_prompt(date.today())},
+            {
+                "role": "system",
+                "content": build_system_prompt(date.today(), fleet_section=self._fleet_section),
+            },
             *(history or []),
             {"role": "user", "content": user_message},
         ]
