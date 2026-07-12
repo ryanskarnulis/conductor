@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
@@ -133,6 +134,25 @@ def build_system_prompt(today: date, *, fleet_section: str | None = None) -> str
 _StopReason = Literal["completed", "max_iterations", "correction_limit"]
 
 
+@dataclass(frozen=True)
+class LoopActivity:
+    """One progress beat of a run: what the loop is about to do.
+
+    ``kind`` "model" — wait on a provider turn; "tool" — dispatch the named
+    tool. Emitted to ``run()``'s ``on_activity`` callback so a caller can
+    surface live "asking chess…" progress while the run blocks (conductor
+    turns are slow by construction — a delegate call wraps a subagent's full
+    loop). A callback failure is logged and never breaks the run.
+    """
+
+    kind: Literal["model", "tool"]
+    iteration: int
+    tool: str | None = None
+
+
+OnActivity = Callable[[LoopActivity], None]
+
+
 class ToolCallRecord(BaseModel):
     """One dispatched tool call: what ran and what came back.
 
@@ -183,25 +203,29 @@ class AgentLoop:
         *,
         history: Sequence[dict[str, Any]] | None = None,
         actor: str = LOOP_ACTOR,
+        on_activity: OnActivity | None = None,
     ) -> AgentRunResult:
         """Run the loop for one user message. Always returns; never spins.
 
         Binds a request ID for the whole run unless the caller already bound one
         — every tool call and provider log line of the run then carries the same
         ID. ``actor`` is the identity threaded to every tool call (the default
-        in-app loop identity, :data:`LOOP_ACTOR`).
+        in-app loop identity, :data:`LOOP_ACTOR`). ``on_activity`` receives one
+        :class:`LoopActivity` per provider turn and per tool dispatch — the
+        progress seam the HTTP layer surfaces while a run blocks.
         """
         bindings: dict[str, str] = {}
         if "request_id" not in structlog.contextvars.get_contextvars():
             bindings["request_id"] = uuid.uuid4().hex[:8]
         with structlog.contextvars.bound_contextvars(**bindings):
-            return self._run(user_message, history, actor)
+            return self._run(user_message, history, actor, on_activity)
 
     def _run(
         self,
         user_message: str,
         history: Sequence[dict[str, Any]] | None,
         actor: str,
+        on_activity: OnActivity | None,
     ) -> AgentRunResult:
         specs = registry.tool_specs()
         messages: list[dict[str, Any]] = [
@@ -218,6 +242,7 @@ class AgentLoop:
         logger.info("agent_run_started", tools=len(specs), history_messages=len(history or []))
         for iteration in range(1, self._max_iterations + 1):
             iterations = iteration
+            self._emit(on_activity, LoopActivity(kind="model", iteration=iteration))
             try:
                 result = self._provider.chat(messages, tools=specs)
             except ToolCallArgumentsError as exc:
@@ -250,6 +275,9 @@ class AgentLoop:
             messages.append(result.to_message())
             schema_error_this_turn = False
             for call in result.tool_calls:
+                self._emit(
+                    on_activity, LoopActivity(kind="tool", iteration=iteration, tool=call.name)
+                )
                 record, feedback, schema_error = self._dispatch(call, actor)
                 records.append(record)
                 messages.append(tool_result_message(call.id, feedback))
@@ -295,6 +323,16 @@ class AgentLoop:
         return record, f"Error: {record.error}", schema_error
 
     @staticmethod
+    def _emit(on_activity: OnActivity | None, activity: LoopActivity) -> None:
+        """Report one progress beat; a broken callback must never sink the run."""
+        if on_activity is None:
+            return
+        try:
+            on_activity(activity)
+        except Exception:
+            logger.warning("agent_activity_callback_failed", kind=activity.kind, tool=activity.tool)
+
+    @staticmethod
     def _finish(
         stop_reason: _StopReason,
         reply: str | None,
@@ -317,14 +355,19 @@ class AgentLoop:
         )
 
 
-def loop_from_settings(provider: ChatProvider) -> AgentLoop:
+def loop_from_settings(provider: ChatProvider, *, fleet_section: str | None = None) -> AgentLoop:
     """An :class:`AgentLoop` bounded by the configured ``conductor_max_iterations``.
 
     The provider factory's counterpart: the one place the loop's shallow
     iteration cap is wired from settings, so the ``CONDUCTOR_MAX_ITERATIONS``
-    field is never an orphan.
+    field is never an orphan. ``fleet_section`` is threaded through to the
+    prompt's fleet layer (the HTTP app passes the one its lifespan rendered).
     """
-    return AgentLoop(provider, max_iterations=get_settings().conductor_max_iterations)
+    return AgentLoop(
+        provider,
+        max_iterations=get_settings().conductor_max_iterations,
+        fleet_section=fleet_section,
+    )
 
 
 def _validation_summary(exc: ValidationError) -> str:

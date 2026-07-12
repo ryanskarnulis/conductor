@@ -71,6 +71,7 @@ PY
 
 backend_tools_missing() {
   [ ! -x "$BACKEND_PYTHON" ] && return 0
+  [ ! -x "$BACKEND_VENV/bin/alembic" ] && return 0
   [ ! -x "$BACKEND_VENV/bin/pytest" ] && return 0
   [ ! -x "$BACKEND_VENV/bin/ruff" ] && return 0
   [ ! -x "$BACKEND_VENV/bin/mypy" ] && return 0

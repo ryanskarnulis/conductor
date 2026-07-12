@@ -14,7 +14,11 @@ services:
     env_file: .env
     environment:
       # Container-specific values that override anything in .env.
+      DATABASE_URL: sqlite:////data/conductor.db
       API_HOST: 0.0.0.0            # in-container bind; no host port is published
+      # Trusted proxy is nginx (compose subnet); keep in sync with the fixed
+      # subnet under `networks:` below.
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-172.29.0.0/16}
       # Fleet discovery: the sibling apps' app.yaml files are mounted at /fleet
       # (see volumes below); the container reaches host-bound app ports via
       # host.docker.internal, so rewrite every manifest's upstream host to it
@@ -26,6 +30,7 @@ services:
       # host — same mechanism PCC and chess use.
       - "host.docker.internal:host-gateway"
     volumes:
+      - ./data:/data              # SQLite file + WAL sidecars persist here
       # The directory holding the sibling clones' app.yaml manifests. In dev
       # `..` is the workspace root; in deploy the compose runs from
       # ~/deploy/conductor, so `..` is ~/deploy (the clean clones live there).
@@ -67,3 +72,9 @@ services:
 networks:
   appnet:
     driver: bridge
+    ipam:
+      config:
+        # Fixed subnet so TRUSTED_PROXY_IPS has a deterministic value to trust
+        # (the frontend/nginx container gets an address in this range). PCC
+        # owns 172.28.0.0/16; conductor takes the next block.
+        - subnet: 172.29.0.0/16

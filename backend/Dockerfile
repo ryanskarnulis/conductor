@@ -20,6 +20,8 @@ RUN pip install -e .
 
 EXPOSE 8000
 
-# Single worker (no --reload). Bind 0.0.0.0 so the frontend's nginx container
-# can reach us over the compose network — this service publishes no host port.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Migrate, then serve. Single worker (no --reload) — the in-process rate
+# limiter and turn-activity registry assume one worker. Bind 0.0.0.0 so the
+# frontend's nginx container can reach us over the compose network — this
+# service publishes no host port.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

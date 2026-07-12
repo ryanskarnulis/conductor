@@ -22,9 +22,23 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
 
+    # SQLite file for conversations + the delegate-thread map, relative to
+    # backend/ (where dev commands run). Docker overrides with an absolute
+    # /data path backed by a volume.
+    database_url: str = "sqlite:///../data/conductor.db"
+
     # Host the API binds to. Constitution default is loopback-only; set to
     # "0.0.0.0" in .env to expose the API on the LAN.
     api_host: str = "127.0.0.1"
+
+    # Comma-separated IPs/CIDRs of trusted reverse proxies (the nginx
+    # container's compose subnet, in docker). Only requests from these peers
+    # get their client key from X-Forwarded-For; see app/api/request_ip.py.
+    trusted_proxy_ips: str = ""
+
+    # Per-IP requests/min on the one model-calling endpoint
+    # (POST /agent/conversations/{id}/messages).
+    agent_messages_per_min: int = 10
 
     # Port the dev API binds to (`python -m app.main`). 8301 sits in
     # conductor's 8300-8399 workspace block (8300 is the docker-published
