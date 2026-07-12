@@ -29,5 +29,8 @@ jobs:
           if ! git diff --quiet "$before" HEAD -- app.yaml; then
             cd "$HOME/deploy/gateway"
             python3 gen.py
-            docker compose up -d --build
+            # `up -d --build` won't recreate the gateway container when only
+            # the bind-mounted generated files changed; Caddy re-reads them
+            # on (re)start, so restart is the real reload (gateway CLAUDE.md).
+            docker compose restart
           fi
