@@ -1,18 +1,47 @@
-/* Placeholder shell styles for the conductor page. Grows into the real chat
-   layout (mirroring PCC's agent.css) in a later slice. */
+/* App-shell utilities the chat panel builds on: buttons, error and loading
+   lines. Feature styles live in agent.css; the barrel (../index.css) controls
+   load order. */
 
-.conductor-shell {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  min-height: 100svh;
-  padding: 24px;
-  text-align: center;
+button {
+  font-family: inherit;
+  font-size: 0.88rem;
+  color: var(--text);
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  cursor: pointer;
 }
 
-.conductor-tagline {
+button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.btn--primary {
+  background: var(--blue-soft);
+  border-color: var(--blue-border);
+  color: var(--text-h);
+}
+
+.btn--primary:hover:not(:disabled) {
+  border-color: var(--blue);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.error {
+  margin: 0;
+  padding: 8px 11px;
+  border-radius: 10px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 0.85rem;
+}
+
+.page-loading {
   color: var(--text-muted);
-  max-width: 32em;
+  font-size: 0.9rem;
+  padding: 8px 2px;
 }

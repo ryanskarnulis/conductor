@@ -6,19 +6,20 @@ delegates to it, holding the conversation across apps.
 
 This is Phase 3 of the workspace's
 [`agent-standard/AGENTS-MASTER-PLAN.md`](../agent-standard/AGENTS-MASTER-PLAN.md).
-**Current state: conversations API (Slice 4 backend).** On top of the agent
+**Current state: chat UI live (Slice 4 complete).** On top of the agent
 engine (tool registry, llama.cpp provider, bounded loop, layered Glitch
 personality) and fleet delegation (`ask_<app>` tools discovered from `app.yaml`
 `agent:` blocks, also exposed over an MCP stdio server via `.mcp.json`),
-conductor now persists master conversations in SQLite (SQLAlchemy + Alembic)
-and fronts its loop with a REST chat API: conversation CRUD,
+conductor persists master conversations in SQLite (SQLAlchemy + Alembic) and
+fronts its loop with a REST chat API — conversation CRUD,
 `POST /api/agent/conversations/{id}/messages` for the synchronous
-message → loop round trip, and `GET …/activity` — the poll target that reports
-"asking chess…"-style progress while a turn blocks (no SSE in v1). The
-subagent-thread map is DB-backed, so follow-ups keep their app-side context
-across restarts. Still to come: the chat web UI (Slice 4 frontend) and the
-routing eval harness. See `CLAUDE.md` for what's live today versus what's
-coming.
+message → loop round trip, and `GET …/activity`, the poll target for live
+progress (no SSE in v1). The web UI is a PCC-style chat panel: conversation
+sidebar, markdown replies with the delegate-call trajectory above each one,
+and a live "Asking chess… · 12s" progress line polled from the activity
+endpoint while a turn runs. The subagent-thread map is DB-backed, so
+follow-ups keep their app-side context across restarts. Still to come: the
+routing eval harness. See `CLAUDE.md` for details.
 
 ## Architecture sketch
 

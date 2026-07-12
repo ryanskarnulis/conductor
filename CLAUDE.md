@@ -13,20 +13,22 @@ hold the conversation. It is Phase 3 of
 PCC alignment, and the chess migration — are done; PCC is the reference
 implementation every app, including this one, follows).
 
-**This repo is at Slice 4 (backend) of Phase 3: the conversations API.** On
-top of the Slice 2 engine (tool registry, llama.cpp provider, bounded loop,
+**This repo has completed Slice 4 of Phase 3: conversations API + chat UI.**
+On top of the Slice 2 engine (tool registry, llama.cpp provider, bounded loop,
 layered Glitch personality — adapted from the PCC reference implementation,
 `../project-command-center/backend/app/`) and Slice 3's `fleet/` package
 (manifest discovery, the typed delegate REST client, the per-app `ask_<app>`
-tools with guardrails, the MCP stdio server), Slice 4 adds persistence and the
-HTTP front: SQLite via SQLAlchemy 2.0 + Alembic (`app/db/`), the conversations
-service and REST API fronting conductor's own loop (`app/services/`,
-`app/api/routes_agent.py`), the DB-backed subagent-thread store
-(`app/fleet/thread_store.py`), per-IP rate limiting, request-ID logging
-middleware, and the turn-activity poll endpoint (`app/api/turn_activity.py`)
-that reports "asking chess…" progress while a synchronous run blocks (no SSE
-in v1). Not yet built: the chat web UI (Slice 4 frontend — the themed
-placeholder page still renders) and the routing eval harness.
+tools with guardrails, the MCP stdio server), Slice 4 added persistence and
+the full chat front: SQLite via SQLAlchemy 2.0 + Alembic (`app/db/`), the
+conversations service and REST API fronting conductor's own loop
+(`app/services/`, `app/api/routes_agent.py`), the DB-backed subagent-thread
+store (`app/fleet/thread_store.py`), per-IP rate limiting, request-ID logging
+middleware, the turn-activity poll endpoint (`app/api/turn_activity.py`), and
+the web UI — a PCC-style chat panel (`frontend/src/features/agent/`) with a
+conversation sidebar, markdown replies with the delegate-call trajectory, and
+a live "Asking chess… · 12s" progress line polled from the activity endpoint
+while a synchronous run blocks (no SSE in v1). Not yet built: the routing
+eval harness (the go/no-go gate for gemma-4-12b routing).
 
 See `../agent-standard/STANDARD.md` for the contract every agent (once this
 one has one) must satisfy, and `../agent-standard/delegate-api.md` for the
