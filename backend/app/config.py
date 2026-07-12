@@ -76,6 +76,25 @@ class Settings(BaseSettings):
     # that app's own bounded loop), so latency stacks. See CLAUDE.md.
     conductor_max_iterations: int = 6
 
+    # --- voice (shared workspace speech service) -----------------------------
+    # ../speech/: Speaches STT on 8400, Kokoro-FastAPI TTS on 8410. Env var
+    # names are the fleet voice contract's (../agent-standard/voice.md). Unset
+    # speech_base_url = voice off: /api/voice endpoints answer 503, everything
+    # else untouched.
+    speech_base_url: str | None = None
+    # TTS on its own server (the house-voice Kokoro container); unset means
+    # speech_base_url serves both STT and TTS.
+    tts_base_url: str | None = None
+    stt_model: str = "Systran/faster-whisper-small"
+    tts_model: str = "speaches-ai/Kokoro-82M-v1.0-ONNX"
+    tts_voice: str = "af_heart"
+
+    # Per-IP cap on the /voice endpoints, rate-limited like the agent surface.
+    # STT/TTS round-trips are cheap CPU work but proxy to a shared service;
+    # 30/min covers a lively hands-free conversation with headroom (the ack
+    # beats during slow delegated turns ride this budget too).
+    voice_requests_per_min: int = 30
+
     # --- fleet discovery + delegation ---------------------------------------
     # Where to find the fleet manifests: one `<app>/app.yaml` per sibling app.
     # Dev default is the workspace root (parent of this repo); docker sets

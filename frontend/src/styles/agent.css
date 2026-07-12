@@ -489,6 +489,50 @@ main.agent-page {
   border-radius: 11px;
 }
 
+/* Voice controls (vendored MicButton + the local voice-output toggle). */
+.mic-button,
+.agent-voice-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 12px;
+  border-radius: 11px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text-h);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mic-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Session-active states: listening/capturing/working (hands-free) and
+   recording (push-to-talk fallback). */
+.mic-listening,
+.mic-capturing,
+.mic-working,
+.mic-recording,
+.mic-starting {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.agent-voice-toggle[aria-pressed='false'] {
+  opacity: 0.55;
+}
+
+.mic-error {
+  margin: 0;
+  align-self: center;
+  color: var(--red);
+  font-size: 0.8rem;
+  max-width: 180px;
+}
+
 /* Stack the panel on narrow screens; the sidebar becomes a short strip. */
 @media (max-width: 900px) {
   main.agent-page {

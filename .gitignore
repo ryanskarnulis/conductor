@@ -12,6 +12,10 @@ node_modules/
 dist/
 .vite/
 
+# Hands-free VAD runtime assets, copied from node_modules
+# (see frontend/scripts/copy-vad-assets.mjs)
+frontend/public/vad/
+
 # Env / secrets
 .env
 .env.*

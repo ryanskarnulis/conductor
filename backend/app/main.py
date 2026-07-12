@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRouter
 
-from app.api import routes_agent
+from app.api import routes_agent, routes_voice
 from app.config import get_settings
 from app.fleet.manifests import fleet_from_settings
 from app.fleet.tools import build_delegate_tools, default_client_factory, render_fleet_section
@@ -19,6 +19,7 @@ logger = structlog.get_logger(__name__)
 
 api_router = APIRouter()
 api_router.include_router(routes_agent.router)
+api_router.include_router(routes_voice.router)
 
 
 @asynccontextmanager

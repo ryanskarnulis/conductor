@@ -54,6 +54,22 @@ Config:    pydantic-settings
 Agent:     tool registry + llama.cpp provider + bounded loop (gemma-4-12b)
 ```
 
+## Voice (STT/TTS)
+
+Voice rides the same agent pipeline: `app/ai/speech.py` speaks the OpenAI
+audio wire format over `httpx` to the shared workspace `../speech/` service
+per the fleet contract (`../agent-standard/voice.md`), and
+`app/api/routes_voice.py` proxies it — `POST /api/voice/transcribe` (audio →
+text, biased toward conductor's fleet-routing vocabulary and app names) and
+`POST /api/voice/speak` (text → mp3, the fleet house voice). Both are
+rate-limited per client IP (`VOICE_REQUESTS_PER_MIN`, default 30). The chat
+panel's vendored MicButton (chess-canonical modules in `frontend/src/voice/`)
+gives push-to-talk and hands-free conversation mode; voice-initiated turns
+get the reply spoken, typed turns stay silent. Configure with
+`SPEECH_BASE_URL` / `TTS_BASE_URL` / `STT_MODEL` / `TTS_MODEL` / `TTS_VOICE`
+(defaults in `app/config.py`); leave `SPEECH_BASE_URL` unset to run
+voiceless — the voice endpoints answer 503 and nothing else changes.
+
 ## Ports
 
 Conductor owns the `8300`–`8399` block in the workspace gateway's port
