@@ -17,6 +17,7 @@ from app.fleet.delegate import (
     DelegateClient,
     DelegateProtocolError,
     DelegateRateLimited,
+    DelegateRequestRejected,
     DelegateThreadGone,
     DelegateUnavailable,
 )
@@ -163,6 +164,17 @@ def test_5xx_raises_unavailable(status: int) -> None:
         return httpx.Response(status, text="boom")
 
     with pytest.raises(DelegateUnavailable):
+        _client(handler).send_message(12, "hi")
+
+
+@pytest.mark.parametrize("status", [400, 422])
+def test_other_4xx_raises_request_rejected(status: int) -> None:
+    # A 422 (schema rejection) means the request is at fault — retrying the
+    # same input can never succeed, so it must not read as "app down".
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"detail": "rejected"})
+
+    with pytest.raises(DelegateRequestRejected):
         _client(handler).send_message(12, "hi")
 
 

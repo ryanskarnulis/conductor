@@ -17,6 +17,9 @@ can react precisely and no bare ``httpx`` exception ever escapes:
   auto-retried.
 - :class:`DelegateUnavailable` — connect error, timeout, 503, or any 5xx
   (a 502 is the app's own provider failing); the app is reported as down.
+- :class:`DelegateRequestRejected` — any other 4xx (e.g. a 422 for a message
+  the app's schema refuses): the request itself is invalid, so retrying the
+  same input can never succeed.
 - :class:`DelegateProtocolError` — a 2xx whose body doesn't match the contract.
 
 Timeouts follow the fleet latency profile: a short connect timeout (~5s) but a
@@ -66,6 +69,10 @@ class DelegateRateLimited(DelegateError):
 
 class DelegateUnavailable(DelegateError):
     """No usable response: connect error, timeout, 503, or any 5xx."""
+
+
+class DelegateRequestRejected(DelegateError):
+    """The app rejected the request as invalid (a 4xx other than 404/429)."""
 
 
 class DelegateProtocolError(DelegateError):
@@ -205,9 +212,9 @@ class DelegateClient:
         if status >= 500:
             raise DelegateUnavailable(f"{method} {path} → {status}: {response.text[:300]}")
         if status >= 400:
-            # A client error that isn't 404/429 (e.g. malformed request). Not a
-            # contract-defined case; report the app as unusable for this call.
-            raise DelegateUnavailable(f"{method} {path} → {status}: {response.text[:300]}")
+            # A client error that isn't 404/429 (e.g. a 422 schema rejection).
+            # The request is at fault, not the app — retrying it can't succeed.
+            raise DelegateRequestRejected(f"{method} {path} → {status}: {response.text[:300]}")
         return response
 
     @staticmethod

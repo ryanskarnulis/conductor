@@ -39,6 +39,7 @@ from app.fleet.delegate import (
     DelegateError,
     DelegateProtocolError,
     DelegateRateLimited,
+    DelegateRequestRejected,
     DelegateThreadGone,
     DelegateUnavailable,
     MessageExchange,
@@ -49,6 +50,11 @@ from app.tools import registry
 from app.tools.registry import ToolError
 
 logger = structlog.get_logger(__name__)
+
+# Both PCC and chess constrain a delegate message to 1–8000 chars after
+# whitespace-stripping (their shared `AgentMessageText`). Guarding here keeps a
+# doomed request from ever leaving conductor.
+MAX_DELEGATE_MESSAGE_LENGTH = 8_000
 
 
 class DelegateClientLike(Protocol):
@@ -120,6 +126,16 @@ def _make_ask_tool(app: FleetApp, client_factory: ClientFactory) -> Callable[[st
 
 def _delegate(app: FleetApp, client_factory: ClientFactory, message: str) -> str:
     """Send ``message`` to ``app``'s agent, applying every contract behavior."""
+    message = message.strip()
+    if not message:
+        raise ToolError(
+            f"The message to {app.name} was empty. Compose an actual request before asking."
+        )
+    if len(message) > MAX_DELEGATE_MESSAGE_LENGTH:
+        raise ToolError(
+            f"The message to {app.name} is {len(message)} characters; the limit is "
+            f"{MAX_DELEGATE_MESSAGE_LENGTH}. Shorten it and ask again."
+        )
     context = current_delegation_context()
     # Charge the budget before any network work; over-budget never leaves here.
     context.charge_call(app.name)
@@ -173,6 +189,11 @@ def _to_tool_error(app: FleetApp, exc: DelegateError) -> ToolError:
         return ToolError(
             f"{app.name} is rate-limiting requests right now.{hint} Do not retry "
             f"automatically — tell the user to try again shortly."
+        )
+    if isinstance(exc, DelegateRequestRejected):
+        return ToolError(
+            f"{app.name} rejected the request as invalid. Do not retry the same message — "
+            f"rephrase or shorten it, or report the failure."
         )
     if isinstance(exc, DelegateUnavailable):
         return ToolError(

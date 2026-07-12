@@ -22,6 +22,7 @@ from app.fleet.context import (
 )
 from app.fleet.delegate import (
     DelegateRateLimited,
+    DelegateRequestRejected,
     DelegateThreadGone,
     DelegateUnavailable,
     MessageExchange,
@@ -281,6 +282,42 @@ def test_unavailable_becomes_tool_error(bound_context: DelegationContext) -> Non
 
     with pytest.raises(ToolError, match="unavailable"):
         _ask("ask_chess", "play e4")
+
+
+def test_request_rejected_becomes_do_not_retry_tool_error(
+    bound_context: DelegationContext,
+) -> None:
+    # A 422 means the request is at fault, not the app — the model must not be
+    # told the app is down (a retry with the same message can never succeed).
+    effects = [DelegateRequestRejected("POST → 422: rejected")]
+    build_delegate_tools(_fleet(), _factory(FakeClient([], send_effects=effects)))
+
+    with pytest.raises(ToolError, match="Do not retry"):
+        _ask("ask_chess", "play e4")
+
+
+def test_empty_message_is_rejected_before_any_network_call(
+    bound_context: DelegationContext,
+) -> None:
+    log: list[tuple[object, ...]] = []
+    build_delegate_tools(_fleet(), _factory(FakeClient(log)))
+
+    with pytest.raises(ToolError, match="empty"):
+        _ask("ask_chess", "   ")
+    assert log == []  # the doomed request never left conductor
+    for _ in range(3):  # and the rejected call didn't charge the budget of 3
+        _ask("ask_chess", "again")
+
+
+def test_oversized_message_is_rejected_before_any_network_call(
+    bound_context: DelegationContext,
+) -> None:
+    log: list[tuple[object, ...]] = []
+    build_delegate_tools(_fleet(), _factory(FakeClient(log)))
+
+    with pytest.raises(ToolError, match="Shorten"):
+        _ask("ask_chess", "x" * 8_001)
+    assert log == []
 
 
 # --- per-turn budget -----------------------------------------------------------
