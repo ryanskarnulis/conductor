@@ -1,0 +1,12 @@
+/* Global stylesheet barrel.
+ *
+ * The app uses plain global CSS (no CSS modules / Tailwind / CSS-in-JS), so the
+ * cascade is governed purely by source order — mirrors PCC's index.css. Keep
+ * this order: `tokens`/`base` define the foundation, feature partials build on
+ * top.
+ *
+ * Edit feature styles in the matching src/styles/<feature>.css file, not here. */
+@import './styles/silk.css';
+@import './styles/tokens.css';
+@import './styles/base.css';
+@import './styles/app.css';

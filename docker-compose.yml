@@ -1,0 +1,57 @@
+# Docker-compose deployment for Conductor.
+#
+#   docker compose up --build              # backend + frontend
+#
+# Copy .env.example -> .env and fill it in first (see README).
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: conductor-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Container-specific values that override anything in .env.
+      API_HOST: 0.0.0.0            # in-container bind; no host port is published
+    extra_hosts:
+      # Reaches the shared ../llama-swap runtime and other fleet apps on the
+      # host (later slices) — same mechanism PCC and chess use.
+      - "host.docker.internal:host-gateway"
+    # No `ports:` — the backend is reachable only over the compose network
+    # (nginx), never from the host or LAN directly.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health').status==200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - appnet
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        # Empty → relative /api requests, proxied by nginx to the backend.
+        VITE_API_URL: ""
+    image: conductor-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    # Port 8300 sits in conductor's 8300-8399 block; see ../gateway/README.md.
+    ports:
+      - "127.0.0.1:8300:80"
+    networks:
+      - appnet
+
+networks:
+  appnet:
+    driver: bridge

@@ -1,0 +1,45 @@
+/* Element resets and base typography. Split from index.css. The barrel
+   (../index.css) controls load order. */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100svh;
+  margin: 0;
+  /* Night vignette (The Web design language) — same recipe as the launcher
+     and the other fleet apps. */
+  background:
+    radial-gradient(1100px 750px at 50% 30%, var(--bg-vignette) 0%, var(--bg) 62%)
+    fixed;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1,
+h2,
+strong {
+  color: var(--text-h);
+}
+
+h1 {
+  font-size: 26px;
+  line-height: 1.2;
+  font-weight: 760;
+}
+
+h2 {
+  font-size: 16px;
+  line-height: 1.25;
+  font-weight: 720;
+}
+
+#root {
+  min-height: 100svh;
+}
