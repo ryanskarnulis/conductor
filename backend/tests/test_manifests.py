@@ -40,6 +40,20 @@ title: Odysseus
 upstream: 127.0.0.1:7000
 """
 
+# Chess as it actually ships: openable, not delegable — the user is handed
+# over to the board rather than proxied through conductor.
+_OPEN_CHESS_MANIFEST = """\
+name: chess
+title: Chess
+upstream: 127.0.0.1:8000
+open:
+  description: "Opens the chess board."
+  path: /
+  intent_param: intent
+  examples:
+    - "let's play chess"
+"""
+
 
 def _write(root: Path, app_dir: str, manifest: str) -> None:
     directory = root / app_dir
@@ -64,7 +78,7 @@ def test_discovers_agent_bearing_apps(tmp_path: Path) -> None:
     assert tasks.agent_base_url == "http://127.0.0.1:8100/api/agent"
 
 
-def test_app_without_agent_block_is_a_member_but_not_delegable(tmp_path: Path) -> None:
+def test_app_without_agent_or_open_block_is_a_member_but_inert(tmp_path: Path) -> None:
     _write(tmp_path, "chess", _CHESS_MANIFEST)
     _write(tmp_path, "odysseus", _NO_AGENT_MANIFEST)
 
@@ -72,7 +86,7 @@ def test_app_without_agent_block_is_a_member_but_not_delegable(tmp_path: Path) -
 
     assert {app.name for app in fleet.apps} == {"chess", "odysseus"}
     assert [app.name for app in fleet.agent_apps()] == ["chess"]
-    assert [app.name for app in fleet.non_agent_apps()] == ["odysseus"]
+    assert [app.name for app in fleet.inert_apps()] == ["odysseus"]
     odysseus = fleet.get("odysseus")
     assert odysseus is not None and odysseus.agent is None
 
@@ -111,7 +125,7 @@ def test_conductor_own_manifest_is_skipped(tmp_path: Path) -> None:
     assert fleet.get("conductor") is None
 
 
-def test_malformed_agent_block_degrades_to_non_agent_member(tmp_path: Path) -> None:
+def test_malformed_agent_block_degrades_to_inert_member(tmp_path: Path) -> None:
     # An agent block missing its `api` is unusable → recorded without an agent.
     _write(
         tmp_path,
@@ -125,7 +139,80 @@ def test_malformed_agent_block_degrades_to_non_agent_member(tmp_path: Path) -> N
     wonky = fleet.get("wonky")
     assert wonky is not None
     assert wonky.agent is None  # degraded, not delegable
-    assert wonky.name in {app.name for app in fleet.non_agent_apps()}
+    assert wonky.name in {app.name for app in fleet.inert_apps()}
+
+
+# --- open: blocks (handoff apps) ----------------------------------------------
+
+
+def test_discovers_an_openable_app(tmp_path: Path) -> None:
+    _write(tmp_path, "chess", _OPEN_CHESS_MANIFEST)
+
+    fleet = discover_fleet(tmp_path)
+
+    chess = fleet.get("chess")
+    assert chess is not None
+    assert chess.open is not None
+    assert chess.open.description == "Opens the chess board."
+    assert chess.open.path == "/"
+    assert chess.open.intent_param == "intent"
+    assert chess.open.examples == ("let's play chess",)
+    # Openable but not delegable: it gets an open tool, not an ask tool, and
+    # it is emphatically not inert.
+    assert [app.name for app in fleet.open_apps()] == ["chess"]
+    assert fleet.agent_apps() == ()
+    assert fleet.inert_apps() == ()
+
+
+def test_open_block_defaults_path_and_takes_no_intent_when_unset(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "arcade",
+        'name: arcade\ntitle: Arcade\nupstream: 127.0.0.1:8500\nopen:\n  description: "Opens it."\n',
+    )
+
+    arcade = discover_fleet(tmp_path).get("arcade")
+
+    assert arcade is not None and arcade.open is not None
+    assert arcade.open.path == "/"
+    # No intent_param → hand off to a bare URL, carrying nothing.
+    assert arcade.open.intent_param is None
+
+
+def test_an_app_can_be_both_delegable_and_openable(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "both",
+        "name: both\ntitle: Both\nupstream: 127.0.0.1:9100\n"
+        'agent:\n  description: "Does things."\n  api: /api/agent\n'
+        'open:\n  description: "Opens things."\n',
+    )
+
+    fleet = discover_fleet(tmp_path)
+
+    app = fleet.get("both")
+    assert app is not None
+    assert app.has_agent and app.has_open
+    assert [a.name for a in fleet.agent_apps()] == ["both"]
+    assert [a.name for a in fleet.open_apps()] == ["both"]
+
+
+def test_malformed_open_block_degrades_without_touching_the_agent_block(tmp_path: Path) -> None:
+    # An open block with no description is unusable → recorded without it. The
+    # app keeps its (valid) agent block: one bad block never costs the other.
+    _write(
+        tmp_path,
+        "wonky",
+        "name: wonky\ntitle: Wonky\nupstream: 127.0.0.1:9000\n"
+        'agent:\n  description: "does things"\n  api: /api/agent\n'
+        "open:\n  path: /play\n",
+    )
+
+    wonky = discover_fleet(tmp_path).get("wonky")
+
+    assert wonky is not None
+    assert wonky.open is None  # degraded, not openable
+    assert wonky.has_agent
 
 
 def test_upstream_host_is_rewritten_port_preserved(tmp_path: Path) -> None:

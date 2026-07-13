@@ -149,15 +149,16 @@ backend/app/
 │   └── personality-global.md  # vendored Glitch (see re-vendor rule below)
 ├── fleet/                     # Slice 3 — conductor's job (see below)
 │   ├── manifests.py           # discover_fleet: scan {fleet_manifest_dir}/*/
-│   │                          #   app.yaml → Fleet of FleetApp/AgentSpec
+│   │                          #   app.yaml → Fleet of FleetApp/AgentSpec/
+│   │                          #   OpenSpec (agent: and open: are independent)
 │   ├── delegate.py            # DelegateClient (httpx) + typed errors + the
 │   │                          #   wire models mirroring PCC/chess
 │   ├── context.py             # DelegationContext: thread map + per-turn call
 │   │                          #   budget + audit hook; ThreadStore seam
 │   ├── thread_store.py        # DbThreadStore: the ThreadStore seam over the
 │   │                          #   delegate_threads table (per-op sessions)
-│   └── tools.py               # build_delegate_tools (ask_<app> + list_agents),
-│                              #   render_fleet_section (the prompt layer)
+│   └── tools.py               # build_delegate_tools (ask_<app> + open_<app> +
+│                              #   list_agents), render_fleet_section (prompt)
 ├── mcp/server.py              # FastMCP stdio server: the registry (delegate
 │                              #   tools + list_agents) over MCP; .mcp.json
 ├── logging_config.py          # configure_logging(stream) + RequestIDMiddleware
@@ -189,16 +190,20 @@ Conductor's actual job. Discovery is declarative: `discover_fleet` scans
 computed from the package location; docker sets `FLEET_MANIFEST_DIR=/fleet`, a
 read-only mount of `..`, with `FLEET_UPSTREAM_HOST=host.docker.internal` to
 rewrite each manifest's upstream host — port preserved). Every well-formed app
-becomes a `FleetApp`; the ones with an `agent:` block get an `AgentSpec`.
-Conductor's own manifest is skipped (depth-1: it is never its own delegate);
-malformed/incomplete manifests are skipped with a `structlog` warning, never a
-crash; a malformed `agent:` block degrades an app to a non-agent member.
+becomes a `FleetApp`; the ones with an `agent:` block get an `AgentSpec`, the
+ones with an `open:` block an `OpenSpec` (independent — an app may have either,
+both, or neither). Conductor's own manifest is skipped (depth-1: it is never
+its own delegate); malformed/incomplete manifests are skipped with a `structlog`
+warning, never a crash; a malformed block degrades that one capability (a bad
+`agent:` costs the app its ask tool, not its open tool), and an app with neither
+block is *inert*: a fleet member conductor can only name.
 
 `build_delegate_tools(fleet, client_factory)` registers one `ask_<app>` tool
-per agent-bearing app (`ask_tasks`, `ask_chess`, …) — docstring from the
-manifest's `agent.description` — plus a local `list_agents`. An `ask_<app>`
-call, over `DelegateClient` (which always sends `X-Agent-Actor: agent:conductor`
-and uses a 300s read / 5s connect timeout for cold model loads):
+per agent-bearing app (`ask_tasks`, …) — docstring from the manifest's
+`agent.description` — one `open_<app>` per **openable** app (see below), plus a
+local `list_agents`. An `ask_<app>` call, over `DelegateClient` (which always
+sends `X-Agent-Actor: agent:conductor` and uses a 300s read / 5s connect
+timeout for cold model loads):
 
 - resolves or creates the app's subagent thread for the current master
   conversation, and on a `404` (pruned thread) recreates it and retries
@@ -211,9 +216,27 @@ and uses a 300s read / 5s connect timeout for cold model loads):
 - relays the assistant reply plus a compact `[app did: …]` activity note —
   never raw transcripts into conductor's history.
 
+**Handoff apps (`open:`).** Not every app should be delegated to. Chess is a
+board you play *in* — voice-first, stateful, full-screen — so relaying moves
+through conductor's chat panel is a strictly worse game than the app itself.
+Such an app declares an `open:` block instead of (or alongside) `agent:`
+(`../agent-standard/app-yaml-open-block.md`) and gets an `open_<app>` tool that
+hands the **user** over: it returns a handoff payload (target app, path, and the
+user's request as an `intent`), conductor's frontend reads that off the
+persisted trajectory and navigates the tab to `<app>.<same host the page came
+from>?intent=…`, and the app runs the intent through its own agent on arrival —
+so nothing the user asked for is lost in the trip. The tool is purely local: no
+network, no delegate thread, no call budget (nothing is *asked* of the app).
+Chess ships `open:` only — its `/api/agent` endpoints still exist, it just
+stops advertising them, which is what retired `ask_chess`. Note the
+destructive-op confirmation rule is scoped to `ask_` apps: conductor isn't
+acting on an open app, and chess confirms its own resets, so "resign the game"
+is a plain handoff.
+
 Routing hints live in the **system prompt**, not tool docstrings:
-`render_fleet_section(fleet)` builds a dynamic layer (each agent's name /
-description / examples) that `build_system_prompt` slots in as
+`render_fleet_section(fleet)` builds a dynamic layer (each app's tool /
+description / examples, split into the ones conductor delegates to and the ones
+it hands the user over to) that `build_system_prompt` slots in as
 `conductor base → Glitch → fleet → date`.
 
 **Guardrails + seams (`context.py`).** A `DelegationContext` is bound around

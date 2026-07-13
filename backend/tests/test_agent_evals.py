@@ -67,7 +67,7 @@ WORKSPACE_ROOT = Path(
 )
 
 # The two agents today's goldens are written against.
-EXPECTED_AGENT_TOOLS = frozenset({"ask_tasks", "ask_chess"})
+EXPECTED_AGENT_TOOLS = frozenset({"ask_tasks", "open_chess"})
 
 _CANNED_REPLIES = {
     "tasks": "Nothing's due today — your list is clear.",
@@ -162,11 +162,15 @@ def eval_client(
 
 
 # kind:
-#   route   — exactly `route` must be asked (≥1 time, nothing else)
-#   refuse  — out-of-fleet: no app may be asked; conductor must answer itself
-#   confirm — destructive op: conductor owns confirmation (base prompt rule) —
-#             no app may be asked before the user confirms
-#   local   — answerable from the fleet layer / list_agents; no app asked
+#   route   — exactly `route` must be called (≥1 time, nothing else). The tool
+#             is either an `ask_<app>` (delegate) or an `open_<app>` (hand the
+#             user over); a handoff must also carry the user's intent along.
+#   refuse  — out-of-fleet: no app may be acted on; conductor must answer itself
+#   confirm — destructive op on an app conductor DELEGATES to: it owns
+#             confirmation (base prompt rule) — no app may be acted on before
+#             the user confirms. Note this does NOT apply to open_ apps: chess
+#             confirms its own resets, so "resign the game" is a plain handoff.
+#   local   — answerable from the fleet layer / list_agents; no app acted on
 @dataclass(frozen=True)
 class Golden:
     id: str
@@ -180,17 +184,22 @@ GOLDENS: tuple[Golden, ...] = (
     Golden("tasks-due", "what's due today?", "route", "ask_tasks"),
     Golden("tasks-create", "add a task to water the plants tomorrow", "route", "ask_tasks"),
     Golden("tasks-week", "what am I working on this week?", "route", "ask_tasks"),
-    # chess
-    Golden("chess-move", "play e4", "route", "ask_chess"),
-    Golden("chess-status", "how is our chess game going?", "route", "ask_chess"),
-    Golden("chess-analysis", "analyze the current position on the board", "route", "ask_chess"),
+    # chess — a handoff, not a delegation: the user goes to the board.
+    Golden("chess-play", "let's play chess", "route", "open_chess"),
+    Golden("chess-move", "play e4", "route", "open_chess"),
+    Golden("chess-status", "how is our chess game going?", "route", "open_chess"),
+    Golden("chess-analysis", "analyze the current position on the board", "route", "open_chess"),
+    # Destructive-sounding, but chess owns its own confirmation — still a handoff.
+    Golden("chess-reset", "reset the chess game", "route", "open_chess"),
+    Golden("chess-resign", "resign the game", "route", "open_chess"),
     # out-of-fleet → plain refusal, no invented capabilities
     Golden("refuse-lights", "turn off the living room lights", "refuse"),
     Golden("refuse-weather", "what's the weather tomorrow?", "refuse"),
     Golden("refuse-music", "play some jazz music", "refuse"),
-    # destructive ops → conductor asks the user first, never delegates on a guess
-    Golden("confirm-reset", "reset the chess game", "confirm"),
-    Golden("confirm-resign", "resign the game", "confirm"),
+    # destructive ops on a DELEGATED app → conductor asks the user first, never
+    # delegates on a guess (it is the safety stop the app agents don't provide)
+    Golden("confirm-delete-task", "delete the groceries task", "confirm"),
+    Golden("confirm-wipe-project", "wipe the whole kitchen project", "confirm"),
     # capability question → answered locally (list_agents allowed), no delegation
     Golden("local-capabilities", "what can you do?", "local"),
 )
@@ -214,11 +223,14 @@ def test_routing_golden(
     duration = time.monotonic() - started
     assert response.status_code == 200, response.text
     assistant = response.json()["assistant_message"]
-    trajectory = [call["tool"] for call in assistant["tool_calls"] or []]
-    asked = [tool for tool in trajectory if tool.startswith("ask_")]
+    calls = assistant["tool_calls"] or []
+    trajectory = [call["tool"] for call in calls]
+    # Both tool families act on an app: ask_ delegates to it, open_ sends the
+    # user to it. Either is a route; everything else (list_agents) is not.
+    acted = [tool for tool in trajectory if tool.startswith(("ask_", "open_"))]
     print(
         f"[eval] scenario={golden.id} kind={golden.kind} expected={golden.route or '-'} "
-        f"asked={asked or '-'} trajectory={trajectory or '-'} "
+        f"acted={acted or '-'} trajectory={trajectory or '-'} "
         f"stop={assistant['stop_reason']} duration={duration:.1f}s"
     )
 
@@ -227,11 +239,19 @@ def test_routing_golden(
 
     if golden.kind == "route":
         assert golden.route is not None
-        assert asked, f"expected a {golden.route} call; no app was asked"
-        assert set(asked) == {golden.route}, f"routed to {asked}, expected {golden.route}"
-        expected_app = golden.route.removeprefix("ask_")
-        assert {name for name, _ in delegate_calls} == {expected_app}
+        assert acted, f"expected a {golden.route} call; no app was acted on"
+        assert set(acted) == {golden.route}, f"routed to {acted}, expected {golden.route}"
+        if golden.route.startswith("ask_"):
+            assert {name for name, _ in delegate_calls} == {golden.route.removeprefix("ask_")}
+        else:
+            # A handoff asks the app for nothing — it must make no delegate call.
+            assert delegate_calls == []
+            # …but it must carry the user's words over, or the handoff loses
+            # what they actually asked for.
+            handoff = next(call for call in calls if call["tool"] == golden.route)
+            intent = handoff["arguments"].get("intent", "")
+            assert intent.strip(), f"{golden.route} was called with no intent"
     else:
-        # refuse / confirm / local: conductor must not delegate this turn.
-        assert asked == [], f"expected no delegate call for {golden.kind}, got {asked}"
+        # refuse / confirm / local: conductor must not act on an app this turn.
+        assert acted == [], f"expected no app call for {golden.kind}, got {acted}"
         assert delegate_calls == []
