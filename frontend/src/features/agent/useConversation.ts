@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { getConversation, postMessage } from '../../api/agent'
 import { ApiError } from '../../api/client'
 import type { ConversationDetail } from '../../types/agent'
+import { handoffFrom, type Handoff } from './handoff'
 
 interface UseConversation {
   detail: ConversationDetail | null
@@ -9,6 +10,11 @@ interface UseConversation {
   error: string | null
   /** The optimistic user bubble + progress indicator while a run is in flight. */
   pendingText: string | null
+  /** Set when the turn just answered asked to hand the user over to an app
+   * (`open_<app>`) — the page navigates there. Only ever set by a live `send`,
+   * never by loading history: reopening an old conversation must not fling the
+   * user back into chess. */
+  handoff: Handoff | null
   /** Resolves to the assistant's reply text on success (possibly ''), or
    * null when the run failed — voice uses the text to speak the reply. */
   send: (content: string) => Promise<string | null>
@@ -56,10 +62,12 @@ export function useConversation(
   const [loaded, setLoaded] = useState<Tagged<ConversationDetail> | null>(null)
   const [errorState, setErrorState] = useState<Tagged<string> | null>(null)
   const [pending, setPending] = useState<Tagged<string> | null>(null)
+  const [handoffState, setHandoffState] = useState<Tagged<Handoff> | null>(null)
 
   const detail = forId(loaded, conversationId)
   const error = forId(errorState, conversationId)
   const pendingText = forId(pending, conversationId)
+  const handoff = forId(handoffState, conversationId)
   const loading = conversationId !== null && detail === null && error === null
 
   useEffect(() => {
@@ -91,6 +99,12 @@ export function useConversation(
       try {
         const exchange = await postMessage(conversationId, content)
         reply = exchange.assistant_message.content ?? ''
+        // Read the handoff off the live turn only. It rides on the persisted
+        // trajectory, so history has it too — but replaying history must not
+        // re-navigate, which is why it's captured here and not derived from
+        // `detail`.
+        const target = handoffFrom(exchange.assistant_message.tool_calls)
+        if (target) setHandoffState({ id: conversationId, value: target })
       } catch (e: unknown) {
         setErrorState({ id: conversationId, value: sendErrorMessage(e) })
       }
@@ -109,5 +123,5 @@ export function useConversation(
     [conversationId, onExchange],
   )
 
-  return { detail, loading, error, pendingText, send }
+  return { detail, loading, error, pendingText, handoff, send }
 }

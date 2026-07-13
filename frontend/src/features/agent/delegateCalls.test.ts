@@ -32,6 +32,7 @@ describe('appFromTool', () => {
 describe('describeToolCall', () => {
   it('labels delegate calls, the fleet lookup, and unknown tools', () => {
     expect(describeToolCall(record({ tool: 'ask_tasks' }))).toBe('Asked tasks')
+    expect(describeToolCall(record({ tool: 'open_chess' }))).toBe('Opened chess')
     expect(describeToolCall(record({ tool: 'list_agents' }))).toBe('Checked the fleet')
     expect(describeToolCall(record({ tool: 'mystery' }))).toBe('Ran mystery')
   })
@@ -45,6 +46,7 @@ describe('activityLabel', () => {
 
   it('names the app while a delegate call is in flight', () => {
     expect(activityLabel(beat({ kind: 'tool', tool: 'ask_chess' }))).toBe('Asking chess…')
+    expect(activityLabel(beat({ kind: 'tool', tool: 'open_chess' }))).toBe('Opening chess…')
     expect(activityLabel(beat({ kind: 'tool', tool: 'list_agents' }))).toBe(
       'Checking the fleet…',
     )

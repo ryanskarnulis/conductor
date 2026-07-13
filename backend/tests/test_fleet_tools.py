@@ -8,6 +8,7 @@ event) can be asserted deterministically.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Generator, Sequence
 from datetime import date, datetime
 
@@ -29,8 +30,9 @@ from app.fleet.delegate import (
     MessageRead,
     ToolCallRead,
 )
-from app.fleet.manifests import AgentSpec, Fleet, FleetApp
+from app.fleet.manifests import AgentSpec, Fleet, FleetApp, OpenSpec
 from app.fleet.tools import (
+    MAX_INTENT_LENGTH,
     build_delegate_tools,
     render_fleet_section,
 )
@@ -62,6 +64,19 @@ def _fleet() -> Fleet:
                     description="Manages projects and tasks.",
                     api="/api/agent",
                     examples=("what's due today",),
+                ),
+            ),
+            # Openable, not delegable: conductor hands the user over to it.
+            FleetApp(
+                name="arcade",
+                title="Arcade",
+                upstream="127.0.0.1:8500",
+                agent=None,
+                open=OpenSpec(
+                    description="Opens the arcade in the browser.",
+                    path="/play",
+                    intent_param="intent",
+                    examples=("fire up the arcade",),
                 ),
             ),
             FleetApp(name="odysseus", title="Odysseus", upstream="127.0.0.1:7000", agent=None),
@@ -162,10 +177,10 @@ def _ask(name: str, message: str) -> str:
 
 def test_tools_are_registered_with_manifest_descriptions_and_message_schema() -> None:
     names = build_delegate_tools(_fleet(), _factory(FakeClient([])))
-    assert names == ["ask_chess", "ask_tasks", "list_agents"]
+    assert names == ["ask_chess", "ask_tasks", "open_arcade", "list_agents"]
 
     specs = {spec.name: spec for spec in registry.tool_specs()}
-    assert set(specs) == {"ask_chess", "ask_tasks", "list_agents"}
+    assert set(specs) == {"ask_chess", "ask_tasks", "open_arcade", "list_agents"}
     assert specs["ask_chess"].description == "Plays chess."
     assert specs["ask_tasks"].description == "Manages projects and tasks."
     # Each ask_ tool takes a single required string `message`.
@@ -173,6 +188,72 @@ def test_tools_are_registered_with_manifest_descriptions_and_message_schema() ->
         schema = specs[name].parameters
         assert schema["properties"]["message"]["type"] == "string"
         assert schema["required"] == ["message"]
+    # The open tool leads with the manifest's description and takes an
+    # optional `intent` — a handoff with nothing to carry is still a handoff.
+    assert specs["open_arcade"].description.startswith("Opens the arcade in the browser.")
+    open_schema = specs["open_arcade"].parameters
+    assert open_schema["properties"]["intent"]["type"] == "string"
+    assert open_schema.get("required", []) == []
+
+
+# --- open_<app> handoff --------------------------------------------------------
+
+
+def _open(name: str, **kwargs: str) -> dict[str, object]:
+    result = registry.get_tool(name).fn(**kwargs)
+    assert isinstance(result, str)
+    payload = json.loads(result)
+    assert isinstance(payload, dict)
+    return payload
+
+
+def test_open_tool_returns_the_handoff_payload_with_the_users_intent() -> None:
+    build_delegate_tools(_fleet(), _factory(FakeClient([])))
+
+    payload = _open("open_arcade", intent="fire up the arcade")
+
+    assert payload == {
+        "handoff": "arcade",
+        "title": "Arcade",
+        "path": "/play",
+        "upstream": "127.0.0.1:8500",
+        "intent_param": "intent",
+        "intent": "fire up the arcade",
+    }
+
+
+def test_open_tool_omits_a_blank_intent() -> None:
+    build_delegate_tools(_fleet(), _factory(FakeClient([])))
+
+    payload = _open("open_arcade", intent="   ")
+
+    # Nothing to carry: hand off to a bare URL rather than an empty query param.
+    assert "intent" not in payload
+    assert "intent_param" not in payload
+    assert payload["handoff"] == "arcade"
+
+
+def test_open_tool_truncates_an_overlong_intent() -> None:
+    build_delegate_tools(_fleet(), _factory(FakeClient([])))
+
+    payload = _open("open_arcade", intent="x" * 900)
+
+    assert payload["intent"] == "x" * MAX_INTENT_LENGTH
+
+
+def test_open_tool_makes_no_delegate_call_and_charges_no_budget(
+    bound_context: DelegationContext,
+) -> None:
+    log: list[tuple[object, ...]] = []
+    build_delegate_tools(_fleet(), _factory(FakeClient(log)))
+
+    # Well past the per-app budget of 3 — a handoff asks the app for nothing,
+    # so there is nothing to rate-limit and no thread to keep.
+    for _ in range(5):
+        _open("open_arcade", intent="fire up the arcade")
+
+    assert log == []
+    assert bound_context.thread_for("arcade") is None
 
 
 # --- thread creation + reuse ---------------------------------------------------
@@ -394,7 +475,13 @@ def test_list_agents_reports_fleet_from_manifests() -> None:
     assert apps["chess"]["tool"] == "ask_chess"
     assert apps["chess"]["description"] == "Plays chess."
     assert apps["tasks"]["examples"] == ["what's due today"]
-    assert listing["non_agent_apps"] == ["odysseus"]
+    # Openable apps are reported separately — they're a handoff, not a delegate.
+    openable = {entry["app"]: entry for entry in listing["openable_apps"]}
+    assert set(openable) == {"arcade"}
+    assert openable["arcade"]["tool"] == "open_arcade"
+    assert openable["arcade"]["examples"] == ["fire up the arcade"]
+    # Only an app with neither block is inert.
+    assert listing["inert_apps"] == ["odysseus"]
 
 
 # --- prompt fleet layer --------------------------------------------------------
@@ -407,13 +494,27 @@ def test_render_fleet_section_lists_tools_and_examples() -> None:
     assert "Plays chess." in section
     # Examples are present as routing hints.
     assert "move my knight to f3" in section
-    # Non-agent members are named as un-delegable.
+    # Open tools are listed too, as a handoff rather than a delegation.
+    assert "open_arcade" in section
+    assert "Opens the arcade in the browser." in section
+    assert "fire up the arcade" in section
+    assert "hand the user OVER" in section
+    # Only the app with neither block is named as un-actionable.
     assert "odysseus" in section
 
 
-def test_render_fleet_section_empty_without_agents() -> None:
+def test_render_fleet_section_empty_without_tool_bearing_apps() -> None:
     fleet = Fleet(apps=(FleetApp("odysseus", "Odysseus", "127.0.0.1:7000", agent=None),))
     assert render_fleet_section(fleet) == ""
+
+
+def test_render_fleet_section_lists_an_open_only_fleet() -> None:
+    # No agents at all: the section is still worth rendering — conductor can
+    # hand the user over even when it can delegate to nothing.
+    arcade = _fleet().get("arcade")
+    assert arcade is not None
+    section = render_fleet_section(Fleet(apps=(arcade,)))
+    assert "open_arcade" in section
 
 
 def test_system_prompt_composes_base_glitch_fleet_then_date() -> None:

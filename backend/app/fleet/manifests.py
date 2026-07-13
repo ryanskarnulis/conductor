@@ -2,11 +2,13 @@
 
 The fleet is declarative. Each app in the workspace drops an ``app.yaml`` at its
 repo root (schema in ``../gateway/README.md``); an app that ships a standard
-agent adds an ``agent:`` block (``../agent-standard/app-yaml-agent-block.md``).
-Conductor scans ``{fleet_manifest_dir}/*/app.yaml``, records every well-formed
-app as a fleet member, and — for the ones with an ``agent:`` block — learns the
-delegate base path and the routing hints. Adding an app to the fleet is then
-purely declarative: no conductor code changes.
+agent adds an ``agent:`` block (``../agent-standard/app-yaml-agent-block.md``),
+and an app the user is better off *inside* adds an ``open:`` block
+(``../agent-standard/app-yaml-open-block.md``). Conductor scans
+``{fleet_manifest_dir}/*/app.yaml``, records every well-formed app as a fleet
+member, and learns from those blocks what it can do with each one: delegate to
+it, hand the user over to it, both, or neither. Adding an app to the fleet is
+then purely declarative: no conductor code changes.
 
 Discovery never crashes on a bad manifest. A file that isn't valid YAML, isn't
 a mapping, or is missing a required field is skipped with a ``structlog``
@@ -48,8 +50,34 @@ class AgentSpec:
 
 
 @dataclass(frozen=True)
+class OpenSpec:
+    """An app's ``open:`` block: hand the *user* over instead of delegating.
+
+    Some apps are places you go, not services you call — chess is a board you
+    play in, and relaying moves through conductor's chat is a worse game than
+    the app itself. Such an app declares ``open:`` (instead of, or alongside,
+    ``agent:``) and conductor builds it an ``open_<app>`` tool that redirects
+    the browser rather than an ``ask_<app>`` that proxies it.
+    """
+
+    # One sentence, second person — becomes the open tool's description.
+    description: str
+    # Path on the app's front door to land on, e.g. "/".
+    path: str
+    # Query param the user's own words ride along in, e.g. "intent". ``None``
+    # means the app takes no intent: hand off to a bare URL.
+    intent_param: str | None
+    # Routing hints; conductor embeds them in its system prompt.
+    examples: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class FleetApp:
-    """One fleet member. ``agent`` is ``None`` for apps without an agent."""
+    """One fleet member. ``agent``/``open`` are ``None`` when not declared.
+
+    The two are independent: an app may be delegable (``agent:``), openable
+    (``open:``), both, or neither (a fleet member conductor can only name).
+    """
 
     name: str
     title: str
@@ -57,10 +85,15 @@ class FleetApp:
     # `fleet_upstream_host` is set (docker); the port is always preserved.
     upstream: str
     agent: AgentSpec | None
+    open: OpenSpec | None = None
 
     @property
     def has_agent(self) -> bool:
         return self.agent is not None
+
+    @property
+    def has_open(self) -> bool:
+        return self.open is not None
 
     @property
     def agent_base_url(self) -> str:
@@ -76,17 +109,22 @@ class FleetApp:
 
 @dataclass(frozen=True)
 class Fleet:
-    """The discovered fleet: every member, agent-bearing or not."""
+    """The discovered fleet: every member, tool-bearing or not."""
 
     apps: tuple[FleetApp, ...]
 
     def agent_apps(self) -> tuple[FleetApp, ...]:
-        """Members that ship an agent (the ones conductor builds tools for)."""
+        """Members that ship an agent (the ones conductor delegates to)."""
         return tuple(app for app in self.apps if app.has_agent)
 
-    def non_agent_apps(self) -> tuple[FleetApp, ...]:
-        """Members without an agent — known to the fleet, but not delegable."""
-        return tuple(app for app in self.apps if not app.has_agent)
+    def open_apps(self) -> tuple[FleetApp, ...]:
+        """Members conductor can hand the user off to (the ones it opens)."""
+        return tuple(app for app in self.apps if app.has_open)
+
+    def inert_apps(self) -> tuple[FleetApp, ...]:
+        """Members conductor can neither delegate to nor open — it can only
+        name them. An app is inert only when it declares *neither* block."""
+        return tuple(app for app in self.apps if not app.has_agent and not app.has_open)
 
     def get(self, name: str) -> FleetApp | None:
         return next((app for app in self.apps if app.name == name), None)
@@ -130,6 +168,36 @@ def _parse_agent(block: Any) -> AgentSpec | None:
     return AgentSpec(description=description.strip(), api=api, examples=examples)
 
 
+def _parse_open(block: Any) -> OpenSpec | None:
+    """An :class:`OpenSpec` from a manifest ``open:`` block, or ``None``.
+
+    Same contract as :func:`_parse_agent`: absent or malformed both mean "not
+    openable", so a bad block costs the app its open tool, never the fleet its
+    discovery. ``path`` defaults to ``/``; a blank ``intent_param`` means the
+    app wants no intent forwarded.
+    """
+    if not isinstance(block, dict):
+        return None
+    description = block.get("description")
+    if not isinstance(description, str) or not description.strip():
+        return None
+    path = block.get("path", "/")
+    if not isinstance(path, str) or not path.startswith("/"):
+        return None
+    raw_param = block.get("intent_param")
+    intent_param = raw_param.strip() if isinstance(raw_param, str) and raw_param.strip() else None
+    raw_examples = block.get("examples") or []
+    examples: tuple[str, ...] = ()
+    if isinstance(raw_examples, list):
+        examples = tuple(str(e) for e in raw_examples if isinstance(e, str))
+    return OpenSpec(
+        description=description.strip(),
+        path=path,
+        intent_param=intent_param,
+        examples=examples,
+    )
+
+
 def _load_manifest(path: Path, *, upstream_host: str, self_name: str) -> FleetApp | None:
     """Parse one ``app.yaml`` into a :class:`FleetApp`, or ``None`` to skip it."""
     try:
@@ -167,7 +235,17 @@ def _load_manifest(path: Path, *, upstream_host: str, self_name: str) -> FleetAp
     if raw.get("agent") is not None and agent is None:
         logger.warning("fleet_agent_block_malformed", path=str(path), name=name)
 
-    return FleetApp(name=name, title=title, upstream=resolved_upstream, agent=agent)
+    open_spec = _parse_open(raw.get("open"))
+    if raw.get("open") is not None and open_spec is None:
+        logger.warning("fleet_open_block_malformed", path=str(path), name=name)
+
+    return FleetApp(
+        name=name,
+        title=title,
+        upstream=resolved_upstream,
+        agent=agent,
+        open=open_spec,
+    )
 
 
 def discover_fleet(
@@ -197,6 +275,7 @@ def discover_fleet(
         manifest_dir=str(manifest_dir),
         apps=len(apps),
         agents=sum(1 for app in apps if app.has_agent),
+        openable=sum(1 for app in apps if app.has_open),
     )
     return Fleet(apps=tuple(apps))
 
