@@ -62,6 +62,9 @@ export function MicButton({ onTranscript, disabled }: MicButtonProps) {
   const [micState, setMicState] = useState<MicState>('idle')
   const [error, setError] = useState<string | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
+  // Held so teardown can release the mic: onstop stops the tracks on the
+  // normal record → send path, but teardown never lets onstop run.
+  const streamRef = useRef<MediaStream | null>(null)
   const vadRef = useRef<Vad | null>(null)
   // Conversation sessions are numbered; async continuations belonging to an
   // exited session must not touch state or reopen the mic.
@@ -70,10 +73,28 @@ export function MicButton({ onTranscript, disabled }: MicButtonProps) {
   // through before pause() takes effect.
   const busyRef = useRef(false)
 
+  /**
+   * Abandon any push-to-talk recording and release the microphone. Handlers
+   * are cleared first: this is the teardown path, so the half-captured clip
+   * must not reach transcription or setState on the way out.
+   */
+  function discardRecording() {
+    const recorder = recorderRef.current
+    if (recorder) {
+      recorder.ondataavailable = null
+      recorder.onstop = null
+      if (recorder.state !== 'inactive') recorder.stop()
+    }
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    recorderRef.current = null
+    streamRef.current = null
+  }
+
   useEffect(
     () => () => {
       sessionRef.current++
       vadRef.current?.destroy()
+      discardRecording()
     },
     [],
   )
@@ -144,20 +165,28 @@ export function MicButton({ onTranscript, disabled }: MicButtonProps) {
     if (!vad) {
       // No worklet/WASM support or the mic was refused to the VAD — degrade
       // to classic push-to-talk.
-      await startRecording()
+      await startRecording(session)
       return
     }
     vadRef.current = vad
     setMicState('listening')
   }
 
-  async function startRecording() {
+  async function startRecording(session: number) {
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     } catch {
+      if (sessionRef.current !== session) return
       setError('Microphone unavailable — check browser permissions.')
       setMicState('idle')
+      return
+    }
+    if (sessionRef.current !== session) {
+      // The user tapped out (or the component unmounted) while the permission
+      // prompt was up. The grant still arrived — release it rather than open
+      // a mic nobody asked for and nothing is left to close.
+      stream.getTracks().forEach((t) => t.stop())
       return
     }
     const recorder = new MediaRecorder(stream)
@@ -169,9 +198,12 @@ export function MicButton({ onTranscript, disabled }: MicButtonProps) {
       // Release the mic as soon as the clip is captured; transcription is
       // backend work.
       stream.getTracks().forEach((t) => t.stop())
+      recorderRef.current = null
+      streamRef.current = null
       setMicState('transcribing')
       const clip = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' })
       const text = await transcribe(clip)
+      if (sessionRef.current !== session) return
       setMicState('idle')
       if (text === null) {
         setError('Voice input is unavailable.')
@@ -182,6 +214,7 @@ export function MicButton({ onTranscript, disabled }: MicButtonProps) {
       }
     }
     recorderRef.current = recorder
+    streamRef.current = stream
     recorder.start()
     setMicState('recording')
   }
