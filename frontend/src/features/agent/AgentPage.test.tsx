@@ -150,6 +150,97 @@ describe('AgentPage', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
+  // Some apps are places the user goes: a turn that ends in `open_<app>` sends
+  // the tab there once the send-off line has landed.
+  describe('app handoff', () => {
+    const handoffPayload = {
+      handoff: 'chess',
+      title: 'Chess',
+      path: '/',
+      upstream: '127.0.0.1:8000',
+      intent_param: 'intent',
+      intent: "let's play chess",
+    }
+    const handoffTurn = message({
+      id: 6,
+      role: 'assistant',
+      content: "Board's up — go.",
+      stop_reason: 'completed',
+      tool_calls: [
+        {
+          tool: 'open_chess',
+          arguments: { intent: "let's play chess" },
+          result: JSON.stringify(handoffPayload),
+          error: null,
+        },
+      ],
+    })
+
+    let assign: ReturnType<typeof vi.fn>
+
+    beforeEach(() => {
+      assign = vi.fn()
+      Object.defineProperty(window, 'location', {
+        value: Object.assign(new URL('http://localhost:3000/c/1'), { assign }),
+        writable: true,
+        configurable: true,
+      })
+    })
+
+    async function play() {
+      renderAt('/c/1')
+      await screen.findByText('Nothing is due today.')
+      mockPost.mockResolvedValue({
+        user_message: message({ id: 5, content: "let's play chess" }),
+        assistant_message: handoffTurn,
+      })
+      mockGet.mockResolvedValue({
+        ...detail,
+        messages: [...detail.messages, message({ id: 5, content: "let's play chess" }), handoffTurn],
+      })
+      fireEvent.change(screen.getByLabelText('Message conductor'), {
+        target: { value: "let's play chess" },
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    }
+
+    it('shows the send-off, then navigates to the app with the intent', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        await play()
+
+        // The reply lands and is readable before the tab goes anywhere.
+        expect(await screen.findByText("Board's up — go.")).toBeInTheDocument()
+        expect(screen.getByText('Opened chess')).toBeInTheDocument()
+        expect(assign).not.toHaveBeenCalled()
+
+        await vi.advanceTimersByTimeAsync(1_200)
+
+        // Dev host (no domain to swap into) → the app's upstream, intent in tow.
+        expect(assign).toHaveBeenCalledWith("http://127.0.0.1:8000/?intent=let%27s+play+chess")
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('does not navigate when merely reopening the conversation later', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        // The handoff rides on the persisted trajectory, so history has it too
+        // — but replaying history must never fling the user back into chess.
+        mockGet.mockResolvedValue({ ...detail, messages: [...detail.messages, handoffTurn] })
+        renderAt('/c/1')
+
+        expect(await screen.findByText("Board's up — go.")).toBeInTheDocument()
+        await vi.advanceTimersByTimeAsync(5_000)
+
+        expect(assign).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
   it('explains a run that stopped without a reply', async () => {
     mockGet.mockResolvedValue({
       ...detail,

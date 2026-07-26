@@ -50,11 +50,15 @@ def test_base_prompt_covers_conductor_behavioral_contract() -> None:
     assert "faithfully" in prompt
     # Clarify-on-ambiguity.
     assert "clarifying question" in prompt
-    # Conductor owns destructive-op confirmation (rule tightened after the
-    # routing evals caught "reset the chess game" delegating unconfirmed —
-    # see tests/test_agent_evals.py's confirm-* goldens).
-    assert "Destructive requests get confirmed FIRST" in prompt
+    # Conductor owns destructive-op confirmation — but only for the apps it
+    # DELEGATES to. An `open_*` app does its own confirming (conductor isn't
+    # acting on it, just opening the door), so the rule is scoped to `ask_*`.
+    assert "Destructive requests to an app you DELEGATE to" in prompt
     assert "do NOT call a tool this turn" in prompt
+    assert "does not apply to `open_*` apps" in prompt
+    # The handoff rule: one open_* call ends the turn, intent rides along.
+    assert "hands the USER over to an app" in prompt
+    assert "one `open_*` call is the whole turn" in prompt
     # Out-of-fleet requests get an honest refusal.
     assert "no app in the fleet" in prompt
     # Local-first.

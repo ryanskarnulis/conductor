@@ -12,6 +12,10 @@ import { useConversations } from './useConversations'
 import { useTurnActivity } from './useTurnActivity'
 import { delegateAckText } from './voiceAck'
 
+// Long enough for the send-off line to be read, short enough that it still
+// feels like one motion rather than a page that forgot to redirect.
+const HANDOFF_DELAY_MS = 1_200
+
 export function AgentPage() {
   const params = useParams<{ conversationId?: string }>()
   const navigate = useNavigate()
@@ -26,7 +30,7 @@ export function AgentPage() {
     remove,
   } = useConversations()
   const onExchange = useCallback(() => void refresh(), [refresh])
-  const { detail, loading, error, pendingText, send } = useConversation(
+  const { detail, loading, error, pendingText, handoff, send } = useConversation(
     activeId !== null && Number.isFinite(activeId) ? activeId : null,
     onExchange,
   )
@@ -83,6 +87,18 @@ export function AgentPage() {
       void playText(ack)
     }
   }, [activity])
+
+  // The handoff: some apps are places you go, not services conductor calls.
+  // When a turn ends in `open_<app>`, conductor's reply is a send-off line —
+  // so let it land and be read (and, on a voice turn, get a beat of speech
+  // out) before the tab goes. Same tab, deliberately: this is a handoff, not
+  // a spawned window, and an async reply can't open one without the popup
+  // blocker eating it.
+  useEffect(() => {
+    if (!handoff) return
+    const timer = setTimeout(() => window.location.assign(handoff.url), HANDOFF_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [handoff])
 
   // Keep the newest turn in view as messages/pending state arrive.
   // (Guarded call: jsdom has no scrollIntoView.)
