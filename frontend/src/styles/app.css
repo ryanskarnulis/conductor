@@ -45,3 +45,32 @@ button:disabled {
   font-size: 0.9rem;
   padding: 8px 2px;
 }
+
+/* Floating back-to-gateway button (GatewayLink.tsx) — copied verbatim across apps. */
+.gateway-link {
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 50;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--surface-veil);
+  border: 1px solid var(--silk-border);
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+
+.gateway-link:hover,
+.gateway-link:focus-visible {
+  border-color: var(--glow);
+  box-shadow: 0 0 12px var(--glow-soft);
+}
+
+.gateway-link img {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: block;
+}
