@@ -12,7 +12,11 @@ dependencies = [
     # signature (app/tools/registry.py), and ToolError is re-exported as the
     # domain-error type — the same FastMCP machinery PCC uses. The MCP stdio
     # server itself arrives in a later slice; only the utilities are used here.
-    "mcp>=1.20.0",
+    # <2 because mcp 2.0.0 (released 2026-07-28) drops `mcp.server.fastmcp` —
+    # registry.py, app/mcp/server.py and the test suite all die at collection
+    # on it (CI-only red; local venvs still hold 1.x). chess hit this first
+    # and pinned the same way. Migrating to the 2.x shape is its own slice.
+    "mcp>=1.20.0,<2",
     # llama.cpp provider speaks the OpenAI wire format over plain httpx
     # (app/ai/providers/llamacpp.py); the per-app delegate client
     # (app/fleet/delegate.py) reuses it.
