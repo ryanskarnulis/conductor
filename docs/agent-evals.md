@@ -66,14 +66,17 @@ model, or the loop: run it before merging one; the baseline must not regress. If
 degrades, tighten the manifests' `examples` hints first — a bigger model is
 the last resort, not the first.
 
-## Baseline — 2026-07-13, gemma-4-12b, 15/15 (3 consecutive runs)
+## Baseline — 2026-08-22, gemma-4-12b, 18/18 (3 consecutive runs)
 
-Re-baselined when chess moved from a delegate to a handoff (`ask_chess` →
-`open_chess`): conductor no longer plays chess by proxy, it sends the user to
-the board. Every chess golden became a handoff — including the two that used
-to be `confirm` goldens, since chess confirms its own resets now — and the
-confirm goldens moved to PCC, the app conductor still delegates to, so the
-safety rule keeps its coverage.
+Re-baselined when **music joined the fleet** as the third app agent
+(`../future-plans/music-agent.md`, Phase 1). Three `ask_music` goldens were
+added, and the old `refuse-music` golden was renamed `refuse-playback` and
+kept: music can only *download* until its Phase 2, so "play some jazz music"
+must still be refused rather than routed to an app that cannot do it. That was
+the risk worth testing — a new app in the fleet pulling adjacent utterances it
+can't serve — and it did not happen.
+
+Routed clean on the first run, no prompt iteration needed.
 
 | scenario | kind | expected | observed | stop | warm duration |
 |---|---|---|---|---|---|
@@ -86,15 +89,33 @@ safety rule keeps its coverage.
 | chess-analysis | route | open_chess | open_chess (+intent) | completed | 0.6s |
 | chess-reset | route | open_chess | open_chess (+intent) | completed | 0.6s |
 | chess-resign | route | open_chess | open_chess (+intent) | completed | 0.6s |
-| refuse-lights | refuse | — | no app call | completed | 0.5s |
-| refuse-weather | refuse | — | no app call | completed | 0.4s |
-| refuse-music | refuse | — | no app call | completed | 0.4s |
+| music-download-link | route | ask_music | ask_music | completed | 0.7s |
+| music-download-named | route | ask_music | ask_music | completed | 0.8s |
+| music-save | route | ask_music | ask_music | completed | 0.8s |
+| refuse-lights | refuse | — | no app call | completed | 0.4s |
+| refuse-weather | refuse | — | no app call | completed | 0.6s |
+| refuse-playback | refuse | — | no app call | completed | 0.8s |
 | confirm-delete-task | confirm | — | no app call, asks first | completed | 0.2s |
 | confirm-wipe-project | confirm | — | no app call, asks first | completed | 0.3s |
 | local-capabilities | local | — | no app call | completed | 0.7s |
 
 Observations worth keeping:
 
+- **Adding a third agent didn't blur the existing routes.** All 15 previous
+  goldens held unchanged alongside the three new ones, and `refuse-playback`
+  still refuses — the model does not reach for `ask_music` on "play some jazz
+  music" just because a music app exists. Music's manifest `examples` are
+  acquisition-only on purpose, and that is doing the work. Phase 2 of the music
+  plan adds playback vocabulary and with it the real contest against
+  `open_chess`, which already owns "play"; re-baseline again then.
+- **An intermittent provider timeout is not a routing failure, but it does cost
+  five minutes.** Two of seven runs during this re-baseline lost a single
+  scenario to `llama-server request failed: timed out`, each burning the full
+  300 s `llamacpp_timeout_seconds` before failing (a clean run is ~15 s total).
+  It hit different scenarios and never a specific route, so it is a runtime
+  flake rather than a prompt problem — but it means a red suite should be
+  re-read before it is believed: check whether the failure says "timed out" or
+  names a wrong route.
 - **The handoff routed cleanly on the first run — no prompt iteration needed.**
   15/15 held across three consecutive runs, and every chess golden carried the
   user's utterance through as the `intent`. Worth noting given the confirm-rule
