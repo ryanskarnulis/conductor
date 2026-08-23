@@ -113,8 +113,10 @@ export function AgentPage() {
     openConversation(conversation.id)
   }
 
-  const removeConversation = async (id: number, title: string | null) => {
-    if (!window.confirm(`Delete “${title ?? 'this conversation'}”?`)) return
+  // No confirm prompt: deletes are soft (the row is recoverable server-side),
+  // and the browser's "prevent additional dialogs" checkbox makes a repeated
+  // window.confirm() return false — which silently broke deleting entirely.
+  const removeConversation = async (id: number) => {
     await remove(id)
     if (id === activeId) navigate('/')
   }
@@ -181,7 +183,7 @@ export function AgentPage() {
                   type="button"
                   className="agent-conversation-delete"
                   aria-label={`Delete conversation ${conversation.title ?? conversation.id}`}
-                  onClick={() => void removeConversation(conversation.id, conversation.title)}
+                  onClick={() => void removeConversation(conversation.id)}
                 >
                   <Trash2 size={15} aria-hidden="true" />
                 </button>
