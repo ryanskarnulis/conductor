@@ -62,9 +62,65 @@ repo location). The suite skips itself if discovery doesn't find both
 
 This suite gates every change to the base prompt, the vendored Glitch
 personality, the manifests' `agent:`/`open:` descriptions and examples, the
-model, or the loop: run it before merging one; the baseline must not regress. If routing
+model, or the loop: run it before merging one; the baseline must not regress.
+
+**Including when the manifest belongs to another repo.** A fleet app widening
+its own `agent.description` is a change to this suite's inputs, and that PR
+lands somewhere else entirely — which is how `refuse-playback` went red for a
+day without anyone noticing (see the regression note above). If you touch an
+app's `agent:` block, run this. If routing
 degrades, tighten the manifests' `examples` hints first — a bigger model is
 the last resort, not the first.
+
+## Regression — 2026-08-23: `refuse-playback` has been red since music #9
+
+Found while adding music's sorting goldens (Phase 2.5). **It is not caused by
+that change, and it is not sampling noise.** "play some jazz music" routes to
+`ask_music` instead of being refused, deterministically, and bisecting music's
+`app.yaml` says exactly when it started:
+
+| music's manifest | `refuse-playback` |
+|---|---|
+| Phase 1 (music #4) — what the 18/18 below was measured against | **passes** 3/3 |
+| Phase 2 (music #9), *"queues a whole album or playlist"* | **fails** 3/3 |
+| Phase 2.5 (music #17), + sorting | **fails** 3/3 |
+
+So music #9 broke it and nothing caught it, which is the finding worth keeping:
+**this suite gates a sibling app's manifest, and a sibling app's PR has no
+reason to run it.** Music #9 re-baselined *music's own* eval suite and stopped
+there. The gating rule below names manifest descriptions and examples — it just
+never says whose repo the change lands in, and the answer is usually not this
+one.
+
+The likely words are "playlist" and "library": both read as playback.
+
+**A fix was attempted and is not merged, because it trades one golden for
+another.** Adding *"It cannot play or put on music, and it has no speakers: it
+only fetches files and files them away"* to music's `agent.description` fixes
+`refuse-playback` 3/3 — and breaks `music-save` ("save this track to the music
+folder"), which stops routing anywhere at all (`acted=-`) in 2 of 3 full runs
+while still passing 4/4 in isolation. The negation is strong enough to suppress
+music routing generally. A narrower phrasing that scopes the negative to
+*speakers and playback* without dampening "save"/"folder" is the open question;
+it needs a few iterations against the real model, at ~15 s a run plus the
+timeout flake below.
+
+**Options, none of them taken yet:**
+
+1. Narrow the negative sentence until both goldens hold.
+2. Accept the route and retire `refuse-playback` — music's own agent answers
+   truthfully that it cannot play, so the user gets a correct answer one hop
+   later rather than a wrong one. This is a real option, not a cop-out, but it
+   weakens the invariant that conductor does not route to apps that cannot do
+   the thing.
+3. Leave it red until Phase 6 (Sonos), which deletes the golden anyway — music
+   *will* play, and then the current routing becomes correct.
+
+**Also observed:** the provider timeout the music plan documented is still
+here — two full runs of 21 goldens lost one scenario each to
+`llama-server request failed: timed out`, burning the full 300 s
+(`chess-reset` once, one other once). A full run is ~15 s healthy and ~320 s
+when it hits. A red suite still has to be read before it is believed.
 
 ## Baseline — 2026-08-22, gemma-4-12b, 18/18 (3 consecutive runs)
 
