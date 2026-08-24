@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { MessageSquarePlus, SendHorizontal, Trash2, Volume2, VolumeX } from 'lucide-react'
+import {
+  ListMusic,
+  MessageSquarePlus,
+  SendHorizontal,
+  Trash2,
+  Volume2,
+  VolumeX,
+} from 'lucide-react'
 import { formatRelative } from '../../utils/dates'
 import { MicButton } from '../../voice/MicButton'
 import { playText } from '../../voice/tts'
@@ -8,7 +15,7 @@ import { ConductorMark } from './ConductorMark'
 import { MessageBubble } from './MessageBubble'
 import { PendingExchange } from './PendingExchange'
 import { SortPanel } from '../sort/SortPanel'
-import { isSortTurn } from '../sort/sortTurn'
+import { latestSortTurnId } from '../sort/sortTurn'
 import { useConversation } from './useConversation'
 import { useConversations } from './useConversations'
 import { useTurnActivity } from './useTurnActivity'
@@ -38,11 +45,14 @@ export function AgentPage() {
   )
 
   // The sort panel opens on a turn where music actually ran its sorting tool,
-  // read off the trajectory rather than the reply text (`sortTurn.ts`). It
-  // shows on the *newest* turn only: a button on a scrolled-back question would
-  // answer something that has already been answered.
+  // read off the trajectory rather than the reply text (`sortTurn.ts`), and it
+  // then **stays** open: a pass outlives the turn that started it, and saying
+  // "one at a time" out loud is a turn of its own that need not run the tool
+  // again. It closes when it is dismissed, and a later sorting turn — a fresh
+  // "sort my music" — opens it again.
   const messages = detail?.messages ?? []
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : undefined
+  const sortTurnId = latestSortTurnId(messages)
   const [panelHiddenFor, setPanelHiddenFor] = useState<number | null>(null)
 
   const [draft, setDraft] = useState('')
@@ -248,14 +258,27 @@ export function AgentPage() {
               <li ref={threadEndRef} className="agent-thread-sentinel" aria-hidden="true" />
             </ul>
 
-            {isSortTurn(lastMessage) &&
-              !sending &&
-              panelHiddenFor !== (lastMessage?.id ?? null) && (
-                <SortPanel
-                  onFiled={(text) => void note(text)}
-                  onDismiss={() => setPanelHiddenFor(lastMessage?.id ?? null)}
-                />
-              )}
+            {sortTurnId !== null && panelHiddenFor === sortTurnId && (
+              <button
+                type="button"
+                className="sort-reopen"
+                onClick={() => setPanelHiddenFor(null)}
+              >
+                <ListMusic size={14} aria-hidden="true" />
+                Back to sorting
+              </button>
+            )}
+
+            {sortTurnId !== null && panelHiddenFor !== sortTurnId && (
+              <SortPanel
+                // Every finished turn re-reads the worklist: an answer given by
+                // voice or by typing files songs too, and the buttons have to
+                // move with it.
+                syncKey={lastMessage?.id ?? 0}
+                onFiled={(text) => void note(text)}
+                onDismiss={() => setPanelHiddenFor(sortTurnId)}
+              />
+            )}
 
             <form className="agent-composer" onSubmit={(e) => void submit(e)}>
               <textarea

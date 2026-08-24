@@ -18,8 +18,25 @@ export function isSortTurn(message: AgentMessage | undefined): boolean {
   if (message === undefined || message.role !== 'assistant') return false
   return (message.tool_calls ?? []).some(
     (record) =>
-      record.tool === ASK_TOOL && record.error === null && (record.app_tools ?? []).includes(SORT_TOOL),
+      record.tool === ASK_TOOL &&
+      record.error === null &&
+      (record.app_tools ?? []).includes(SORT_TOOL),
   )
+}
+
+/** The id of the most recent sorting turn in a thread, or null if there is none.
+ *
+ * The panel keys off *this*, not off the last message, because a sorting pass
+ * outlives the turn that started it. Answering "one at a time" out loud is a
+ * turn of its own, and it does not necessarily run the sorting tool again —
+ * looking only at the newest message made the panel vanish mid-pass and stay
+ * gone, which is exactly what a person doing this by voice will do first.
+ */
+export function latestSortTurnId(messages: readonly AgentMessage[]): number | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isSortTurn(messages[index])) return messages[index].id
+  }
+  return null
 }
 
 /** The note a filing leaves in the thread, so a click reads as the answer it was.

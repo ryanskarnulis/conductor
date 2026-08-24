@@ -75,6 +75,12 @@ keep working exactly as they do now.
       crosses styles, client-side skip, a new folder made on the spot, and a
       note turn per filing. Newest turn only, so a scrolled-back question can
       not be answered twice.**
+- [x] **[S] Two bugs from the first real use.** **Done 2026-08-24 (#TBD):
+      answering by voice closed the panel and nothing brought it back (it was
+      keyed to the last message, and a spoken "one at a time" is a turn that
+      need not run the tool); and filing part of an opened group collapsed it
+      and jumped to the next artist, so "one at a time" meant one answer. Both
+      have regression tests.**
 - [ ] **[S] Drive it against the real library once.** The chain is verified end
       to end against a 60-file copy (worklist → open a group → file two songs by
       title → note turn), and every layer has tests, but nobody has yet sorted
