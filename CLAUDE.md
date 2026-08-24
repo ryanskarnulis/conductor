@@ -282,6 +282,36 @@ one) must never be exposed to another agent — which is why `app.yaml`
 deliberately ships no `agent:` block. Like every fleet app it also stays on
 `../agent-standard/NEW-APP-CHECKLIST.md`.
 
+### Fleet action proxy (`api/routes_fleet.py`)
+
+`GET|POST /api/fleet/{app}/actions/{path}` forwards one call to the prefix an
+app declares as `agent.actions` (`../agent-standard/app-yaml-agent-block.md`)
+— the **only** thing conductor does without a model in the path.
+
+It exists for one shape of work: a person answering the same question dozens of
+times. Music's sorting pass is ~150 questions, and a click that waits for a
+local 12B to read a sentence and re-emit it as a tool call is a slow way of
+typing, not a button (`../future-plans/music-agent.md`, Phase 2.6).
+
+Proxying rather than letting the page dial the app is what keeps every app in
+the fleet as headless as it was: the page stays same-origin with conductor, so
+no app grows a CORS allow-list for another app's page or becomes writable by a
+foreign origin. The boundary:
+
+- **Only declared prefixes.** No `agent.actions`, no proxy — which is every app
+  but music today. Unknown app and no-actions app answer the same 404; telling
+  them apart only maps the fleet for whoever is asking.
+- **No climbing out of it.** A `..` segment (percent-encoded is the form that
+  survives a client's normalization) is a 400 before a socket opens.
+- **The browser's headers are not forwarded** — a proxy that passes them on
+  hands one origin's cookies and auth to another service.
+- **Short timeouts** (5s connect / 30s read), not the delegate client's 300s:
+  nothing here waits on a model, so a button that hangs a page for five minutes
+  is a bug, not patience. Per-IP capped at `FLEET_ACTIONS_PER_MIN` (120 —
+  higher than the agent surface, because one answer per click is the point).
+- **The app's own status and body pass through untouched**: a 422 saying "that
+  artist is already sorted" is the app's answer to the person.
+
 ## Conversations API (`api/`, `services/`, `db/`)
 
 The HTTP front for conductor's own loop, PCC's conversations shape with the

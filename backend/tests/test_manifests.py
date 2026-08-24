@@ -8,6 +8,8 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from app.fleet.manifests import discover_fleet
 
 _PCC_MANIFEST = """\
@@ -242,3 +244,56 @@ def test_empty_upstream_host_keeps_manifest_value(tmp_path: Path) -> None:
 def test_missing_manifest_dir_returns_empty_fleet(tmp_path: Path) -> None:
     fleet = discover_fleet(tmp_path / "does-not-exist")
     assert fleet.apps == ()
+
+
+# --- the actions prefix -------------------------------------------------------
+
+_ACTIONS_MANIFEST = """\
+name: music
+title: Music
+upstream: 127.0.0.1:8500
+agent:
+  description: "Downloads and sorts music."
+  api: /api/agent
+  actions: /api/sorting/
+  examples:
+    - "sort my music"
+"""
+
+
+def test_an_app_can_declare_a_prefix_a_page_may_act_on(tmp_path: Path) -> None:
+    """One prefix, so a panel in conductor's UI can answer without a model turn."""
+    _write(tmp_path, "music", _ACTIONS_MANIFEST)
+
+    music = discover_fleet(tmp_path).get("music")
+
+    assert music is not None and music.agent is not None
+    # Trailing slash trimmed, so the proxy joins one way rather than two.
+    assert music.agent.actions == "/api/sorting"
+    assert music.actions_base_url == "http://127.0.0.1:8500/api/sorting"
+
+
+def test_most_apps_declare_none_and_have_no_such_url(tmp_path: Path) -> None:
+    _write(tmp_path, "chess", _CHESS_MANIFEST)
+
+    chess = discover_fleet(tmp_path).get("chess")
+
+    assert chess is not None and chess.agent is not None
+    assert chess.agent.actions is None
+    with pytest.raises(ValueError, match="no actions prefix"):
+        _ = chess.actions_base_url
+
+
+def test_a_malformed_actions_prefix_costs_the_prefix_and_nothing_else(tmp_path: Path) -> None:
+    """Same rule as the block itself: a bad key never costs the app its tool.
+
+    It must be a rooted path — it is the whole of what conductor will forward
+    to, so "anything" is not an option.
+    """
+    _write(tmp_path, "music", _ACTIONS_MANIFEST.replace("actions: /api/sorting/", "actions: true"))
+
+    music = discover_fleet(tmp_path).get("music")
+
+    assert music is not None and music.agent is not None
+    assert music.agent.actions is None
+    assert music.has_agent, "the app still delegates"

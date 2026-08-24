@@ -202,6 +202,13 @@ GOLDENS: tuple[Golden, ...] = (
     ),
     Golden("music-download-named", "grab the song Odessa by Caribou", "route", "ask_music"),
     Golden("music-save", "save this track to the music folder", "route", "ask_music"),
+    # Sorting the library (music Phase 2.5). New vocabulary reaching the router:
+    # "sort", "organize", "folder" — none of it contested by chess or PCC, but
+    # "organize my library" is the one worth pinning, because organizing things
+    # is exactly what a task app sounds like it should do.
+    Golden("music-sort", "sort my music", "route", "ask_music"),
+    Golden("music-sort-ask", "what songs still need sorting?", "route", "ask_music"),
+    Golden("music-organize", "organize my library into folders", "route", "ask_music"),
     # out-of-fleet → plain refusal, no invented capabilities
     Golden("refuse-lights", "turn off the living room lights", "refuse"),
     Golden("refuse-weather", "what's the weather tomorrow?", "refuse"),
