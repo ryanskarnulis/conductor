@@ -193,3 +193,26 @@
   font: inherit;
   font-size: 0.85rem;
 }
+
+/* Closing the panel puts it away, it does not end the pass — this is the way
+   back in, and it is why dismissing is safe to do mid-sort. */
+.sort-reopen {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 14px 0;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.sort-reopen:hover {
+  border-color: var(--border-strong);
+  color: var(--text-h);
+}

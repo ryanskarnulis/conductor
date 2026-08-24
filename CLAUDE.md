@@ -318,13 +318,23 @@ The one piece of app-specific UI in conductor, and the client half of the proxy
 above. It opens under the thread when a turn's trajectory shows music actually
 ran `sort_music` (`sortTurn.ts` — read off `app_tools`, never grepped out of the
 reply text: a panel that looks for a tool name inside a 12B's paraphrase breaks
-the first time the model rephrases), and it renders the **live** worklist
-fetched from music, not a snapshot of what the reply said. So an answer given by
+the first time the model rephrases) and **stays** open for the rest of the pass,
+keyed to the newest sorting turn anywhere in the thread rather than to the last
+message. A pass outlives the turn that starts it: saying "one at a time" out
+loud is a turn of its own and need not run the tool again, and keying to the
+last message made the panel vanish mid-pass and stay gone. Dismissing leaves a
+"Back to sorting" chip, so closing it is never a one-way door. It renders the
+**live** worklist fetched from music, not a snapshot of what the reply said, and
+re-reads it whenever a turn lands so a spoken answer moves the buttons. So an answer given by
 voice, by `python -m app.sort` in a terminal, or by dragging a file in a file
 manager moves the buttons too.
 
 - Folder buttons file the whole group; `One at a time` opens it up and files
   only the ticked songs — an artist orders the questions, it never answers them.
+  An opened group **stays open until it is empty**: going song by song means
+  several answers about one artist, so filing part of a group returns to the
+  rest of it. `All of them` collapses back, as a choice rather than something
+  that happens to you mid-answer.
 - Skipping is client-side: not answering is not an act and writes nothing.
 - The panel never decides a genre. It offers the folders that exist and shows
   the `tags say:` hint exactly as the terminal pass does — the only signal the

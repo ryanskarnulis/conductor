@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentMessage } from '../../types/agent'
-import { filingNote, isSortTurn } from './sortTurn'
+import { filingNote, isSortTurn, latestSortTurnId } from './sortTurn'
 
 function assistant(toolCalls: AgentMessage['tool_calls']): AgentMessage {
   return {
@@ -101,5 +101,37 @@ describe('filingNote', () => {
         notFound: ['Blackout'],
       }),
     ).toContain("couldn't find Blackout")
+  })
+})
+
+
+describe('latestSortTurnId', () => {
+  const sorted = {
+    ...assistant([
+      { tool: 'ask_music', arguments: {}, result: 'five waiting', error: null, app_tools: ['sort_music'] },
+    ]),
+    id: 4,
+  }
+  const chatted = {
+    ...assistant([
+      { tool: 'ask_music', arguments: {}, result: 'sure thing', error: null, app_tools: null },
+    ]),
+    id: 6,
+  }
+
+  it('holds the pass open across turns that did not run the tool', () => {
+    // The bug this exists for: answering "one at a time" out loud is a turn of
+    // its own, it need not run the sorting tool again, and looking only at the
+    // newest message made the panel vanish mid-pass and stay gone.
+    expect(latestSortTurnId([sorted, chatted])).toBe(4)
+  })
+
+  it('follows the newest sorting turn when there is a later one', () => {
+    expect(latestSortTurnId([sorted, chatted, { ...sorted, id: 9 }])).toBe(9)
+  })
+
+  it('is null in a thread that never sorted anything', () => {
+    expect(latestSortTurnId([chatted])).toBeNull()
+    expect(latestSortTurnId([])).toBeNull()
   })
 })

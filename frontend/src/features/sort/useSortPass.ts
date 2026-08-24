@@ -11,7 +11,14 @@ import { filingNote } from './sortTurn'
  * the library as it is right now, so an answer given by voice, by the terminal
  * pass, or by dragging a file in a file manager moves the buttons too. That is
  * what filing directly buys beyond speed — a snapshot of what a model last said
- * would go stale the moment anything else touched the folder.
+ * would go stale the moment anything else touched the folder. `syncKey` is how
+ * that gets in: it changes when a turn lands, and the pass re-reads itself.
+ *
+ * **An opened group stays open until it is empty.** Going song by song means
+ * several answers about one artist — two into Dubstep, three into House — so
+ * filing part of a group returns to the rest of it rather than to the next
+ * artist. Collapsing back to the whole group is `collapse`, and it is a choice
+ * somebody makes, not something that happens to them mid-answer.
  *
  * Skipping is client-side on purpose: not answering is not an act, and it must
  * not write anything. A skipped artist is still waiting, and is asked about
@@ -27,7 +34,7 @@ interface UseSortPass {
   busy: boolean
   error: string | null
   file: (genre: string, tracks?: string[]) => Promise<void>
-  open: () => Promise<void>
+  open: () => void
   collapse: () => void
   skip: () => void
   retry: () => void
@@ -43,9 +50,16 @@ function failure(e: unknown): string {
   return e instanceof Error ? e.message : 'That did not go through'
 }
 
-export function useSortPass(onFiled: (note: string) => void): UseSortPass {
+export function useSortPass(
+  onFiled: (note: string) => void,
+  syncKey: number = 0,
+): UseSortPass {
   const [status, setStatus] = useState<SortStatus | null>(null)
   const [opened, setOpened] = useState<OpenedGroup | null>(null)
+  // The artist whose group is open, held separately from the group's contents:
+  // it is the *question* being asked, and it survives each answer while the
+  // contents are re-read after every one of them.
+  const [openedArtist, setOpenedArtist] = useState<string | null>(null)
   const [skipped, setSkipped] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -59,17 +73,29 @@ export function useSortPass(onFiled: (note: string) => void): UseSortPass {
 
   useEffect(() => {
     live.current = true
-    getWorklist()
+    const reading =
+      openedArtist === null ? getWorklist() : openGroup(openedArtist)
+    reading
       .then((fresh) => {
-        if (live.current) setStatus(fresh)
+        if (!live.current) return
+        setStatus(fresh)
+        setOpened(fresh.opened)
       })
       .catch((e: unknown) => {
-        if (live.current) setError(failure(e))
+        if (!live.current) return
+        // The opened artist having nothing left is the ordinary end of going
+        // song by song, not a failure: fall back to the worklist, which the
+        // effect re-reads on the next pass.
+        if (openedArtist !== null && e instanceof ApiError && e.status === 404) {
+          setOpenedArtist(null)
+          return
+        }
+        setError(failure(e))
       })
     return () => {
       live.current = false
     }
-  }, [attempt])
+  }, [attempt, openedArtist, syncKey])
 
   const current =
     status?.next_up.find((group) => !skipped.includes(group.artist)) ?? null
@@ -79,6 +105,7 @@ export function useSortPass(onFiled: (note: string) => void): UseSortPass {
       if (current === null || busy) return
       setBusy(true)
       setError(null)
+      const someOfThem = (tracks ?? []).length > 0
       try {
         const answered = await fileSongs({
           artist: current.artist,
@@ -86,7 +113,15 @@ export function useSortPass(onFiled: (note: string) => void): UseSortPass {
           tracks: tracks ?? [],
         })
         setStatus(answered)
-        setOpened(null)
+        if (someOfThem) {
+          // Still going song by song through this artist — re-read the group so
+          // what is left is what is on screen. If nothing is left, that read
+          // 404s and the pass moves on by itself.
+          setAttempt((n) => n + 1)
+        } else {
+          setOpenedArtist(null)
+          setOpened(null)
+        }
         onFiled(
           filingNote({
             artist: answered.filed_artist ?? current.artist,
@@ -105,25 +140,23 @@ export function useSortPass(onFiled: (note: string) => void): UseSortPass {
     [busy, current, onFiled],
   )
 
-  const open = useCallback(async () => {
+  // Opening is a change of question, not a fetch: the effect owns every read,
+  // so the group's contents come from the same place after an answer as before
+  // one.
+  const open = useCallback(() => {
     if (current === null || busy) return
-    setBusy(true)
     setError(null)
-    try {
-      const detail = await openGroup(current.artist)
-      setStatus(detail)
-      setOpened(detail.opened)
-    } catch (e: unknown) {
-      setError(failure(e))
-    } finally {
-      setBusy(false)
-    }
+    setOpenedArtist(current.artist)
   }, [busy, current])
 
-  const collapse = useCallback(() => setOpened(null), [])
+  const collapse = useCallback(() => {
+    setOpenedArtist(null)
+    setOpened(null)
+  }, [])
 
   const skip = useCallback(() => {
     if (current === null) return
+    setOpenedArtist(null)
     setOpened(null)
     setSkipped((names) => [...names, current.artist])
   }, [current])
@@ -134,5 +167,27 @@ export function useSortPass(onFiled: (note: string) => void): UseSortPass {
     setAttempt((n) => n + 1)
   }, [])
 
-  return { status, current, opened, loading, busy, error, file, open, collapse, skip, retry }
+  // The question on screen is the opened artist while there is one, so an
+  // answer about part of a group never jumps to somebody else mid-decision.
+  const asking =
+    openedArtist !== null
+      ? (status?.next_up.find((group) => group.artist === openedArtist) ??
+        (opened !== null
+          ? { artist: opened.artist, tracks: opened.tracks.length, titles: opened.tracks, tags_say: opened.tags_say }
+          : null))
+      : current
+
+  return {
+    status,
+    current: asking,
+    opened,
+    loading,
+    busy,
+    error,
+    file,
+    open,
+    collapse,
+    skip,
+    retry,
+  }
 }

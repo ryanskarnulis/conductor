@@ -18,11 +18,15 @@ import { useSortPass } from './useSortPass'
 export function SortPanel({
   onFiled,
   onDismiss,
+  syncKey = 0,
 }: {
   onFiled: (note: string) => void
   onDismiss: () => void
+  /** Changes when a turn lands, so the pass re-reads what is waiting: an answer
+   * given by voice or by typing files songs too. */
+  syncKey?: number
 }) {
-  const pass = useSortPass(onFiled)
+  const pass = useSortPass(onFiled, syncKey)
   const [selected, setSelected] = useState<string[]>([])
   const [naming, setNaming] = useState(false)
   const [newFolder, setNewFolder] = useState('')

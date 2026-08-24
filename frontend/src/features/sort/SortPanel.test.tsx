@@ -38,9 +38,20 @@ beforeEach(() => {
   mockWorklist.mockResolvedValue(status())
 })
 
-function panel(onFiled = vi.fn()) {
-  render(<SortPanel onFiled={onFiled} onDismiss={vi.fn()} />)
-  return onFiled
+function panel(onFiled = vi.fn(), syncKey = 0) {
+  const view = render(<SortPanel onFiled={onFiled} onDismiss={vi.fn()} syncKey={syncKey} />)
+  return { onFiled, view }
+}
+
+/** A group opened up, as `openGroup` answers it. */
+function openedWith(tracks: string[], remaining = tracks.length) {
+  return status({
+    opened: { artist: 'Zeds Dead', tracks, tags_say: [] },
+    next_up: [
+      { artist: 'Zeds Dead', tracks: remaining, titles: tracks, tags_say: [] },
+      { artist: 'Matroda', tracks: 2, titles: ['Get Down'], tags_say: [] },
+    ],
+  })
 }
 
 describe('SortPanel', () => {
@@ -62,7 +73,7 @@ describe('SortPanel', () => {
     mockFile.mockResolvedValue(
       status({ filed_tracks: 5, filed_artist: 'Zeds Dead', filed_into: 'Dubstep' }),
     )
-    const onFiled = panel()
+    const { onFiled } = panel()
 
     fireEvent.click(await screen.findByRole('button', { name: 'Dubstep' }))
 
@@ -79,7 +90,7 @@ describe('SortPanel', () => {
       }),
     )
     mockFile.mockResolvedValue(status({ filed_tracks: 1, filed_into: 'House' }))
-    const onFiled = panel()
+    const { onFiled } = panel()
 
     fireEvent.click(await screen.findByRole('button', { name: /One at a time/ }))
     const collapse = await screen.findByLabelText('Collapse')
@@ -137,7 +148,7 @@ describe('SortPanel', () => {
   it("reports the app's own refusal instead of guessing at it", async () => {
     const { ApiError } = await import('../../api/client')
     mockFile.mockRejectedValue(new ApiError(422, { detail: 'ask again as a correction' }))
-    const onFiled = panel()
+    const { onFiled } = panel()
 
     fireEvent.click(await screen.findByRole('button', { name: 'Dubstep' }))
 
@@ -150,5 +161,85 @@ describe('SortPanel', () => {
     panel()
 
     expect(await screen.findByText(/Nothing left waiting/)).toBeInTheDocument()
+  })
+})
+
+
+describe('going song by song', () => {
+  it('stays on the artist after filing some of their songs', async () => {
+    // The bug: filing two of five collapsed the group and jumped to the next
+    // artist, so "one at a time" meant "one answer, then never mind".
+    mockOpen
+      .mockResolvedValueOnce(openedWith(['Collapse', 'Rumble', 'Blackout']))
+      .mockResolvedValueOnce(openedWith(['Rumble', 'Blackout'], 2))
+    mockFile.mockResolvedValue(
+      status({ filed_tracks: 1, filed_artist: 'Zeds Dead', filed_into: 'Dubstep' }),
+    )
+    panel()
+
+    fireEvent.click(await screen.findByRole('button', { name: /One at a time/ }))
+    fireEvent.click(await screen.findByLabelText('Collapse'))
+    fireEvent.click(screen.getByRole('button', { name: 'Dubstep' }))
+
+    // What is left of that artist is what is on screen — the filed song gone,
+    // the rest still there, and no jump to Matroda.
+    await waitFor(() => expect(screen.queryByLabelText('Collapse')).not.toBeInTheDocument())
+    expect(screen.getByLabelText('Rumble')).toBeInTheDocument()
+    expect(screen.getByLabelText('Blackout')).toBeInTheDocument()
+    expect(screen.queryByText('Matroda')).not.toBeInTheDocument()
+    expect(mockOpen).toHaveBeenCalledTimes(2)
+  })
+
+  it('moves on by itself once the last song of a group is filed', async () => {
+    const { ApiError } = await import('../../api/client')
+    mockOpen
+      .mockResolvedValueOnce(openedWith(['Collapse']))
+      .mockRejectedValueOnce(new ApiError(404, { detail: 'nothing waiting' }))
+    mockFile.mockResolvedValue(
+      status({
+        filed_tracks: 1,
+        next_up: [{ artist: 'Matroda', tracks: 2, titles: ['Get Down'], tags_say: [] }],
+      }),
+    )
+    mockWorklist.mockResolvedValue(
+      status({ next_up: [{ artist: 'Matroda', tracks: 2, titles: ['Get Down'], tags_say: [] }] }),
+    )
+    panel()
+
+    fireEvent.click(await screen.findByRole('button', { name: /One at a time/ }))
+    fireEvent.click(await screen.findByLabelText('Collapse'))
+    fireEvent.click(screen.getByRole('button', { name: 'House' }))
+
+    expect(await screen.findByText('Matroda')).toBeInTheDocument()
+  })
+
+  it('collapses back to the whole group only when asked to', async () => {
+    mockOpen.mockResolvedValue(openedWith(['Collapse', 'Rumble']))
+    panel()
+
+    fireEvent.click(await screen.findByRole('button', { name: /One at a time/ }))
+    await screen.findByLabelText('Collapse')
+    fireEvent.click(screen.getByRole('button', { name: 'All of them' }))
+
+    await waitFor(() => expect(screen.queryByLabelText('Collapse')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Dubstep' })).toBeEnabled()
+  })
+})
+
+describe('keeping up with the conversation', () => {
+  it('re-reads the worklist when a turn lands', async () => {
+    // An answer given by voice files songs too, and the buttons have to move.
+    const { view } = panel(vi.fn(), 1)
+    await screen.findByText('Zeds Dead')
+    mockWorklist.mockResolvedValue(
+      status({
+        unsorted_tracks: 2,
+        next_up: [{ artist: 'Matroda', tracks: 2, titles: ['Get Down'], tags_say: [] }],
+      }),
+    )
+
+    view.rerender(<SortPanel onFiled={vi.fn()} onDismiss={vi.fn()} syncKey={2} />)
+
+    expect(await screen.findByText('Matroda')).toBeInTheDocument()
   })
 })

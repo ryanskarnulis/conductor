@@ -144,6 +144,78 @@ describe('AgentPage', () => {
     expect(screen.getByLabelText('Message conductor')).toBeEnabled()
   })
 
+  it('keeps the panel open through a turn that did not sort anything', async () => {
+    // Saying "one at a time" out loud is a turn of its own and need not run the
+    // sorting tool again. Keying the panel to the newest message made it vanish
+    // mid-pass and stay gone — which is what happens the first time somebody
+    // drives this by voice.
+    mockGet.mockResolvedValue({
+      ...detail,
+      messages: [
+        message({ content: 'sort my music' }),
+        message({
+          id: 2,
+          role: 'assistant',
+          content: 'yo, Zeds Dead has 5 waiting.',
+          stop_reason: 'completed',
+          tool_calls: [
+            {
+              tool: 'ask_music',
+              arguments: { message: 'sort my music' },
+              result: 'five waiting',
+              error: null,
+              app_tools: ['sort_music'],
+            },
+          ],
+        }),
+        message({ id: 3, content: 'one at a time' }),
+        message({
+          id: 4,
+          role: 'assistant',
+          content: 'aight, go song by song then',
+          stop_reason: 'completed',
+          tool_calls: null,
+        }),
+      ],
+    })
+
+    renderAt('/c/1')
+
+    expect(await screen.findByLabelText('Sort music')).toBeInTheDocument()
+  })
+
+  it('can be dismissed and opened again without saying anything', async () => {
+    mockGet.mockResolvedValue({
+      ...detail,
+      messages: [
+        message({ content: 'sort my music' }),
+        message({
+          id: 2,
+          role: 'assistant',
+          content: 'yo, Zeds Dead has 5 waiting.',
+          stop_reason: 'completed',
+          tool_calls: [
+            {
+              tool: 'ask_music',
+              arguments: {},
+              result: 'five waiting',
+              error: null,
+              app_tools: ['sort_music'],
+            },
+          ],
+        }),
+      ],
+    })
+
+    renderAt('/c/1')
+    fireEvent.click(await screen.findByLabelText('Hide the sorting panel'))
+    expect(screen.queryByLabelText('Sort music')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Back to sorting/ }))
+
+    expect(await screen.findByLabelText('Sort music')).toBeInTheDocument()
+  })
+
   it('leaves the panel shut on every other kind of turn', async () => {
     renderAt('/c/1')
 
