@@ -37,7 +37,7 @@ from app.ai.provider import (
     tool_result_message,
 )
 from app.config import get_settings
-from app.tools import registry
+from app.tools import registry, runtime
 from app.tools.registry import ToolError, UnknownToolError
 
 logger = structlog.get_logger(__name__)
@@ -181,6 +181,12 @@ class ToolCallRecord(BaseModel):
     arguments: dict[str, Any]
     result: str | None = None
     error: str | None = None
+    # For a delegate call, the tools the *app* ran while answering. Persisted
+    # and shown, never sent to the model — its `role: tool` message carries
+    # `result` alone, so this cannot spend context or be narrated back. The UI
+    # reads it to know what a turn actually did, which a paraphrased reply
+    # cannot be trusted to say.
+    app_tools: list[str] | None = None
 
 
 class AgentRunResult(BaseModel):
@@ -314,6 +320,9 @@ class AgentLoop:
         """
         record = ToolCallRecord(tool=call.name, arguments=call.arguments)
         schema_error = False
+        # Cleared per dispatch and reset after, so what one delegate call
+        # reported can never be read as the next call's.
+        delegated = runtime.delegated_tools.set(None)
         try:
             outcome = registry.call_tool(call.name, call.arguments, actor=actor)
         except UnknownToolError as exc:
@@ -327,8 +336,11 @@ class AgentLoop:
             record.error = str(exc)
         else:
             record.result = _result_text(outcome)
+            record.app_tools = list(runtime.delegated_tools.get() or []) or None
             logger.info("agent_tool_call", tool=call.name, ok=True)
             return record, record.result, False
+        finally:
+            runtime.delegated_tools.reset(delegated)
         logger.warning(
             "agent_tool_call",
             tool=call.name,

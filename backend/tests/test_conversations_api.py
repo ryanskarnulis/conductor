@@ -92,6 +92,8 @@ def test_post_message_runs_loop_and_persists_exchange(client: TestClient) -> Non
             "arguments": {"topic": "chess"},
             "result": "facts about chess",
             "error": None,
+            # A local tool, not a delegate call — nothing else ran.
+            "app_tools": None,
         }
     ]
 
@@ -238,3 +240,64 @@ def test_activity_is_reported_while_the_run_is_in_flight(client: TestClient) -> 
     # The turn is over: the poll target reports idle again.
     after = client.get(f"/api/agent/conversations/{conversation_id}/activity").json()
     assert after["active"] is False
+
+
+# --- notes: what the person did without saying anything ------------------------
+
+
+def test_a_note_is_stored_as_the_persons_turn_with_no_model_run(client: TestClient) -> None:
+    """The sort panel files a song through the app directly; the thread still
+    has to show that it was answered."""
+    conversation = client.post("/api/agent/conversations", json={}).json()["id"]
+
+    response = client.post(
+        f"/api/agent/conversations/{conversation}/notes",
+        json={"content": "Zeds Dead → Dubstep (5 songs)"},
+    )
+
+    assert response.status_code == 201
+    note = response.json()
+    assert note["role"] == "user", "the person acted; nothing is put in conductor's mouth"
+    assert note["content"] == "Zeds Dead → Dubstep (5 songs)"
+    assert note["tool_calls"] is None and note["stop_reason"] is None
+
+    detail = client.get(f"/api/agent/conversations/{conversation}").json()
+    assert [message["content"] for message in detail["messages"]] == [
+        "Zeds Dead → Dubstep (5 songs)"
+    ]
+
+
+def test_a_note_needs_no_provider_at_all(client: TestClient) -> None:
+    """No loop dependency is overridden here on purpose: a note that could 502
+    because a model is cold is not a record, it is a second thing to go wrong."""
+    conversation = client.post("/api/agent/conversations", json={}).json()["id"]
+
+    response = client.post(
+        f"/api/agent/conversations/{conversation}/notes", json={"content": "filed 5"}
+    )
+
+    assert response.status_code == 201
+
+
+def test_a_note_on_a_missing_conversation_is_404(client: TestClient) -> None:
+    assert (
+        client.post("/api/agent/conversations/999/notes", json={"content": "x"}).status_code == 404
+    )
+
+
+def test_a_note_is_carried_into_the_next_turns_context(client: TestClient) -> None:
+    """Otherwise conductor's next reply contradicts what is on screen."""
+    conversation = client.post("/api/agent/conversations", json={}).json()["id"]
+    client.post(
+        f"/api/agent/conversations/{conversation}/notes",
+        json={"content": "Zeds Dead → Dubstep (5 songs)"},
+    )
+    provider = ScriptedProvider([text_turn("nice one")])
+    _use_loop(provider)
+
+    client.post(
+        f"/api/agent/conversations/{conversation}/messages", json={"content": "what's left?"}
+    )
+
+    sent = provider.requests[0]["messages"]
+    assert any("Zeds Dead → Dubstep" in str(message.get("content")) for message in sent)

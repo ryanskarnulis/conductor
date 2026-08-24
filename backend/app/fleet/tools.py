@@ -60,7 +60,7 @@ from app.fleet.delegate import (
     MessageRead,
 )
 from app.fleet.manifests import Fleet, FleetApp
-from app.tools import registry
+from app.tools import registry, runtime
 from app.tools.registry import ToolError
 
 logger = structlog.get_logger(__name__)
@@ -245,6 +245,11 @@ def _delegate(app: FleetApp, client_factory: ClientFactory, message: str) -> str
         latency_ms=_elapsed_ms(started),
         stop_reason=assistant.stop_reason,
     )
+    # Which of the app's own tools ran, recorded structurally as well as in the
+    # `[app did: …]` note. The note is prose for the model; this is for the UI,
+    # which has to know what a turn actually did rather than infer it from a
+    # 12B's paraphrase of it.
+    runtime.delegated_tools.set(tuple(call.tool for call in assistant.tool_calls or []))
     return _format_reply(app, assistant)
 
 
