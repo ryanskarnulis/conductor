@@ -302,6 +302,51 @@ def test_reply_relays_text_and_a_compact_activity_note(bound_context: Delegation
     assert "[...]" not in reply  # the raw tool result never leaks into history
 
 
+def test_the_apps_own_tools_are_recorded_structurally(
+    bound_context: DelegationContext,
+) -> None:
+    """The note is prose for the model; the UI needs to know what a turn did.
+
+    A panel that has to find "sort_music" inside a 12B's paraphrase of its own
+    reply is a panel that stops working the first time the model rephrases.
+    """
+    exchange = _exchange(
+        content="filed 5 into Dubstep",
+        tool_calls=[ToolCallRead(tool="sort_music", arguments={}, result="{}")],
+    )
+    build_delegate_tools(_fleet(), _factory(FakeClient([], send_effects=[exchange])))
+
+    from app.tools import runtime
+
+    token = runtime.delegated_tools.set(None)
+    try:
+        _ask("ask_tasks", "sort my music")
+        assert runtime.delegated_tools.get() == ("sort_music",)
+    finally:
+        runtime.delegated_tools.reset(token)
+
+
+def test_a_dispatched_delegate_call_carries_what_the_app_ran(
+    bound_context: DelegationContext,
+) -> None:
+    """End to end through the loop: the record the UI reads, off one turn."""
+    exchange = _exchange(
+        content="filed 5 into Dubstep",
+        tool_calls=[ToolCallRead(tool="sort_music", arguments={}, result="{}")],
+    )
+    build_delegate_tools(_fleet(), _factory(FakeClient([], send_effects=[exchange])))
+    provider = ScriptedProvider(
+        [_calls(("ask_tasks", {"message": "sort my music"})), _text("all filed")]
+    )
+
+    run = AgentLoop(provider).run("sort my music")
+
+    (record,) = run.tool_calls
+    assert record.app_tools == ["sort_music"]
+    # And it stays out of what the model was shown.
+    assert "sort_music" not in (record.result or "").replace("[tasks did: sort_music]", "")
+
+
 def test_empty_reply_reports_stop_reason(bound_context: DelegationContext) -> None:
     exchange = _exchange(content=None, stop_reason="max_iterations")
     build_delegate_tools(_fleet(), _factory(FakeClient([], send_effects=[exchange])))

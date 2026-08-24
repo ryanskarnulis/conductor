@@ -327,6 +327,13 @@ delegation seams wired in. All under `/api/agent`:
   assistant turn with its tool trajectory (`tool_calls` JSON) and stop reason.
   History replays **text turns only** — stale delegate transcripts never
   re-enter the model's window.
+- `POST /conversations/{id}/notes` — record something the person did in the UI
+  (filing a song from the sort panel, which reaches the app through the fleet
+  action proxy). **No model runs**: it appends the turn and commits. Stored as
+  the person's own turn, because the person is who acted — inventing an
+  assistant reply conductor never made is the one thing a truthful transcript
+  cannot do. It replays into the next turn's context like any other user turn,
+  which is the point: otherwise the model's next reply contradicts the panel.
 - `GET /conversations/{id}/activity` — the progress poll target while a POST
   blocks: the loop's `on_activity` beats land in the in-memory
   `turn_activity` registry (`kind: model|tool`, tool name, iteration, elapsed

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Generator, Sequence
+from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -125,6 +126,38 @@ def get_turn_activity(conversation_id: int, db: Session = Depends(get_db)) -> Tu
         iteration=activity.iteration,
         elapsed_seconds=round(time.monotonic() - activity.started_at, 1),
     )
+
+
+@router.post(
+    "/conversations/{conversation_id}/notes",
+    response_model=MessageRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit("agent_notes", per_min_attr="fleet_actions_per_min"))],
+)
+def post_note(
+    conversation_id: int,
+    data: MessageCreate,
+    db: Session = Depends(get_db),
+) -> Conversation | Any:
+    """Record something the person did in the UI. **No model runs.**
+
+    Some answers are given by clicking rather than by talking — filing a song
+    from the sort panel, which reaches the app through
+    ``app/api/routes_fleet.py`` and never passes through conductor's loop. The
+    act happened, so the thread has to show it: a transcript with a question in
+    it and no answer under it is a worse record than none, and the next turn's
+    model context would contradict what is on screen.
+
+    Stored as the person's own turn, because the person is who acted. Nothing
+    is put in conductor's mouth — inventing an assistant reply it never made is
+    the one thing a truthful transcript cannot do.
+    """
+    conversation = _get_or_404(db, conversation_id)
+    note = conversations_service.append_user_message(db, conversation, data.content)
+    db.commit()
+    db.refresh(note)
+    logger.info("agent_note", conversation_id=conversation_id, message_id=note.id)
+    return note
 
 
 @router.post(

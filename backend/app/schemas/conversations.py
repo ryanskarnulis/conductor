@@ -48,6 +48,9 @@ class ToolCallRead(BaseModel):
     arguments: dict[str, Any]
     result: str | None = None
     error: str | None = None
+    # For a delegate call, the tools the app ran while answering — persisted and
+    # sent to the UI, never to the model.
+    app_tools: list[str] | None = None
 
 
 class MessageRead(BaseModel):

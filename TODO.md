@@ -58,15 +58,17 @@ Conductor's half of `../future-plans/music-agent.md` Phase 2.6 — a panel in th
 chat UI that answers music's sorting pass by clicking, while typing and speaking
 keep working exactly as they do now.
 
-- [x] **[M] The fleet action proxy.** **Done 2026-08-24 (#TBD):
+- [x] **[M] The fleet action proxy.** **Done 2026-08-24 (#28):
       `GET|POST /api/fleet/{app}/actions/{path}` forwards to the prefix an app
       declares as `agent.actions`, so a page can act on an app without a model
       turn and without a cross-origin request. Only declared prefixes, no
       climbing out of them, no forwarded browser headers, short timeouts.**
-- [ ] **[S] Note turns.** A filing done by clicking has to land in the
-      transcript, or the thread shows a question with no answer under it and
-      the model's next reply contradicts the panel. An append-only endpoint
-      that stores the turn without running the loop.
+- [x] **[S] Note turns.** **Done 2026-08-24 (#TBD):
+      `POST /api/agent/conversations/{id}/notes` appends the person's turn with
+      no model run, and it replays into the next turn's context like any other.
+      Delegate records also gained `app_tools` — what the app ran, persisted
+      for the UI and never sent to the model — so the panel can tell a sorting
+      turn from any other without parsing a paraphrase.**
 - [ ] **[M] The panel itself.** Renders the live worklist (fetched, not a
       snapshot of a reply): folders as buttons, `one at a time` to open a group
       up, multi-select once opened, skip client-side. Buttons on the current
