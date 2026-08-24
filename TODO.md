@@ -69,7 +69,7 @@ keep working exactly as they do now.
       Delegate records also gained `app_tools` — what the app ran, persisted
       for the UI and never sent to the model — so the panel can tell a sorting
       turn from any other without parsing a paraphrase.**
-- [x] **[M] The panel itself.** **Done 2026-08-24 (#TBD): opens on a turn whose
+- [x] **[M] The panel itself.** **Done 2026-08-24 (#30): opens on a turn whose
       trajectory shows music ran `sort_music`, renders the live worklist,
       folders as buttons, `One at a time` + multi-select for an artist who
       crosses styles, client-side skip, a new folder made on the spot, and a
