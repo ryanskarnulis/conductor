@@ -312,6 +312,27 @@ foreign origin. The boundary:
 - **The app's own status and body pass through untouched**: a 422 saying "that
   artist is already sorted" is the app's answer to the person.
 
+### The sort panel (`frontend/src/features/sort/`)
+
+The one piece of app-specific UI in conductor, and the client half of the proxy
+above. It opens under the thread when a turn's trajectory shows music actually
+ran `sort_music` (`sortTurn.ts` — read off `app_tools`, never grepped out of the
+reply text: a panel that looks for a tool name inside a 12B's paraphrase breaks
+the first time the model rephrases), and it renders the **live** worklist
+fetched from music, not a snapshot of what the reply said. So an answer given by
+voice, by `python -m app.sort` in a terminal, or by dragging a file in a file
+manager moves the buttons too.
+
+- Folder buttons file the whole group; `One at a time` opens it up and files
+  only the ticked songs — an artist orders the questions, it never answers them.
+- Skipping is client-side: not answering is not an act and writes nothing.
+- The panel never decides a genre. It offers the folders that exist and shows
+  the `tags say:` hint exactly as the terminal pass does — the only signal the
+  file carries, and half of them are junk.
+- Every filing posts a note turn, so a click reads in the thread as the answer
+  it was. Typing and speaking keep working while it is open; it is an input, not
+  a mode.
+
 ## Conversations API (`api/`, `services/`, `db/`)
 
 The HTTP front for conductor's own loop, PCC's conversations shape with the

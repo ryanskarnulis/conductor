@@ -7,6 +7,8 @@ import { playText } from '../../voice/tts'
 import { ConductorMark } from './ConductorMark'
 import { MessageBubble } from './MessageBubble'
 import { PendingExchange } from './PendingExchange'
+import { SortPanel } from '../sort/SortPanel'
+import { isSortTurn } from '../sort/sortTurn'
 import { useConversation } from './useConversation'
 import { useConversations } from './useConversations'
 import { useTurnActivity } from './useTurnActivity'
@@ -30,10 +32,18 @@ export function AgentPage() {
     remove,
   } = useConversations()
   const onExchange = useCallback(() => void refresh(), [refresh])
-  const { detail, loading, error, pendingText, handoff, send } = useConversation(
+  const { detail, loading, error, pendingText, handoff, send, note } = useConversation(
     activeId !== null && Number.isFinite(activeId) ? activeId : null,
     onExchange,
   )
+
+  // The sort panel opens on a turn where music actually ran its sorting tool,
+  // read off the trajectory rather than the reply text (`sortTurn.ts`). It
+  // shows on the *newest* turn only: a button on a scrolled-back question would
+  // answer something that has already been answered.
+  const messages = detail?.messages ?? []
+  const lastMessage = messages.length > 0 ? messages[messages.length - 1] : undefined
+  const [panelHiddenFor, setPanelHiddenFor] = useState<number | null>(null)
 
   const [draft, setDraft] = useState('')
   const threadEndRef = useRef<HTMLLIElement>(null)
@@ -237,6 +247,15 @@ export function AgentPage() {
                   (the ul), or scrollIntoView can't scroll the thread. */}
               <li ref={threadEndRef} className="agent-thread-sentinel" aria-hidden="true" />
             </ul>
+
+            {isSortTurn(lastMessage) &&
+              !sending &&
+              panelHiddenFor !== (lastMessage?.id ?? null) && (
+                <SortPanel
+                  onFiled={(text) => void note(text)}
+                  onDismiss={() => setPanelHiddenFor(lastMessage?.id ?? null)}
+                />
+              )}
 
             <form className="agent-composer" onSubmit={(e) => void submit(e)}>
               <textarea

@@ -1,5 +1,6 @@
 import { apiClient } from './client'
 import type {
+  AgentMessage,
   Conversation,
   ConversationDetail,
   MessageExchange,
@@ -23,6 +24,18 @@ export async function createConversation(): Promise<Conversation> {
     body: JSON.stringify({}),
   })
   return (await res.json()) as Conversation
+}
+
+/** Record something the person did in the UI (filing a song from the sort
+ * panel). No model runs — it appends the turn and returns it, so a click that
+ * bypassed the loop still shows up in the thread as the answer it was. */
+export async function postNote(id: number, content: string): Promise<AgentMessage> {
+  const res = await apiClient(`/api/agent/conversations/${id}/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+  return (await res.json()) as AgentMessage
 }
 
 export async function getConversation(id: number): Promise<ConversationDetail> {
