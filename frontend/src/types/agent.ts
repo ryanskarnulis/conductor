@@ -14,6 +14,10 @@ export interface ToolCallRecord {
   arguments: Record<string, unknown>
   result: string | null
   error: string | null
+  /** For a delegate call, the tools the *app* ran while answering. Persisted
+   * for the UI and never sent to the model — it is how a panel can tell what a
+   * turn actually did without parsing the reply text for it. */
+  app_tools?: string[] | null
 }
 
 export type AgentStopReason = 'completed' | 'max_iterations' | 'correction_limit'

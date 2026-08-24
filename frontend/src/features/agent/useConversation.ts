@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getConversation, postMessage } from '../../api/agent'
+import { getConversation, postMessage, postNote } from '../../api/agent'
 import { ApiError } from '../../api/client'
 import type { ConversationDetail } from '../../types/agent'
 import { handoffFrom, type Handoff } from './handoff'
@@ -18,6 +18,10 @@ interface UseConversation {
   /** Resolves to the assistant's reply text on success (possibly ''), or
    * null when the run failed — voice uses the text to speak the reply. */
   send: (content: string) => Promise<string | null>
+  /** Record an action taken in the UI as a turn of its own. No model runs —
+   * the sort panel files through the app directly, and the thread still has to
+   * show that the question was answered. */
+  note: (content: string) => Promise<void>
 }
 
 /** Human-readable failure line for a `postMessage` run. */
@@ -123,5 +127,25 @@ export function useConversation(
     [conversationId, onExchange],
   )
 
-  return { detail, loading, error, pendingText, handoff, send }
+  const note = useCallback(
+    async (content: string): Promise<void> => {
+      if (conversationId === null) return
+      try {
+        await postNote(conversationId, content)
+        const fresh = await getConversation(conversationId)
+        setLoaded({ id: conversationId, value: fresh })
+        onExchange?.()
+      } catch (e: unknown) {
+        // The action itself already succeeded — only its record failed, so this
+        // must not read as "the song was not filed".
+        setErrorState({
+          id: conversationId,
+          value: `Filed, but the note did not reach the thread: ${sendErrorMessage(e)}`,
+        })
+      }
+    },
+    [conversationId, onExchange],
+  )
+
+  return { detail, loading, error, pendingText, handoff, send, note }
 }

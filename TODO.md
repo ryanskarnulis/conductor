@@ -63,16 +63,22 @@ keep working exactly as they do now.
       declares as `agent.actions`, so a page can act on an app without a model
       turn and without a cross-origin request. Only declared prefixes, no
       climbing out of them, no forwarded browser headers, short timeouts.**
-- [x] **[S] Note turns.** **Done 2026-08-24 (#TBD):
+- [x] **[S] Note turns.** **Done 2026-08-24 (#29):
       `POST /api/agent/conversations/{id}/notes` appends the person's turn with
       no model run, and it replays into the next turn's context like any other.
       Delegate records also gained `app_tools` — what the app ran, persisted
       for the UI and never sent to the model — so the panel can tell a sorting
       turn from any other without parsing a paraphrase.**
-- [ ] **[M] The panel itself.** Renders the live worklist (fetched, not a
-      snapshot of a reply): folders as buttons, `one at a time` to open a group
-      up, multi-select once opened, skip client-side. Buttons on the current
-      question only — never on scrolled-back turns.
+- [x] **[M] The panel itself.** **Done 2026-08-24 (#TBD): opens on a turn whose
+      trajectory shows music ran `sort_music`, renders the live worklist,
+      folders as buttons, `One at a time` + multi-select for an artist who
+      crosses styles, client-side skip, a new folder made on the spot, and a
+      note turn per filing. Newest turn only, so a scrolled-back question can
+      not be answered twice.**
+- [ ] **[S] Drive it against the real library once.** The chain is verified end
+      to end against a 60-file copy (worklist → open a group → file two songs by
+      title → note turn), and every layer has tests, but nobody has yet sorted
+      real music with it. Do that before calling Phase 2.6 done.
 
 ## Backlog
 

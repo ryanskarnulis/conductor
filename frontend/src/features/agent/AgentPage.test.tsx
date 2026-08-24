@@ -2,8 +2,15 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getConversation, getTurnActivity, listConversations, postMessage } from '../../api/agent'
+import { getWorklist } from '../../api/sort'
 import type { AgentMessage, ConversationDetail } from '../../types/agent'
 import { AgentPage } from './AgentPage'
+
+vi.mock('../../api/sort', () => ({
+  getWorklist: vi.fn(),
+  openGroup: vi.fn(),
+  fileSongs: vi.fn(),
+}))
 
 vi.mock('../../api/agent', () => ({
   createConversation: vi.fn(),
@@ -18,6 +25,7 @@ const mockList = vi.mocked(listConversations)
 const mockGet = vi.mocked(getConversation)
 const mockPost = vi.mocked(postMessage)
 const mockActivity = vi.mocked(getTurnActivity)
+const mockWorklist = vi.mocked(getWorklist)
 
 function message(overrides: Partial<AgentMessage>): AgentMessage {
   return {
@@ -90,9 +98,59 @@ beforeEach(() => {
     iteration: null,
     elapsed_seconds: null,
   })
+  mockWorklist.mockResolvedValue({
+    filed_tracks: 0,
+    filed_artist: null,
+    filed_into: null,
+    created_folder: false,
+    not_found: [],
+    opened: null,
+    unsorted_tracks: 5,
+    unsorted_artists: 1,
+    folders: ['Dubstep', 'House'],
+    next_up: [{ artist: 'Zeds Dead', tracks: 5, titles: ['Collapse'], tags_say: [] }],
+  })
 })
 
 describe('AgentPage', () => {
+  it('opens the sort panel on a turn where music ran its sorting tool', async () => {
+    mockGet.mockResolvedValue({
+      ...detail,
+      messages: [
+        message({ content: 'sort my music' }),
+        message({
+          id: 2,
+          role: 'assistant',
+          content: 'yo, Zeds Dead has 5 waiting. where they going?',
+          stop_reason: 'completed',
+          tool_calls: [
+            {
+              tool: 'ask_music',
+              arguments: { message: 'sort my music' },
+              result: 'five waiting',
+              error: null,
+              app_tools: ['sort_music'],
+            },
+          ],
+        }),
+      ],
+    })
+
+    renderAt('/c/1')
+
+    expect(await screen.findByLabelText('Sort music')).toBeInTheDocument()
+    // And typing still works while it is open — the panel is an input, not a
+    // mode.
+    expect(screen.getByLabelText('Message conductor')).toBeEnabled()
+  })
+
+  it('leaves the panel shut on every other kind of turn', async () => {
+    renderAt('/c/1')
+
+    await screen.findByText('Nothing is due today.')
+    expect(screen.queryByLabelText('Sort music')).not.toBeInTheDocument()
+  })
+
   it('renders the thread with the delegate-call trajectory', async () => {
     renderAt('/c/1')
 
