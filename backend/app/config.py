@@ -95,6 +95,13 @@ class Settings(BaseSettings):
     # beats during slow delegated turns ride this budget too).
     voice_requests_per_min: int = 30
 
+    # Per-IP cap on the fleet action proxy (`app/api/routes_fleet.py`). Higher
+    # than the agent surface because that is the whole point of it: one answer
+    # per click, given by somebody working down a list at their own speed, with
+    # no model turn behind any of them. Still capped — a page in a loop is a
+    # page in a loop.
+    fleet_actions_per_min: int = 120
+
     # --- fleet discovery + delegation ---------------------------------------
     # Where to find the fleet manifests: one `<app>/app.yaml` per sibling app.
     # Dev default is the workspace root (parent of this repo); docker sets

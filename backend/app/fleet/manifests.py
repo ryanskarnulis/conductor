@@ -47,6 +47,11 @@ class AgentSpec:
     api: str
     # Routing hints; conductor embeds them in its system prompt.
     examples: tuple[str, ...]
+    # Optional path prefix conductor may proxy a *browser* request to
+    # (``../agent-standard/app-yaml-agent-block.md``), so a page in conductor's
+    # UI can act on the app without a model turn and without a cross-origin
+    # request. ``None`` — the usual case — means the app has no such surface.
+    actions: str | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,17 @@ class FleetApp:
         if self.agent is None:
             raise ValueError(f"{self.name} has no agent block")
         return f"http://{self.upstream}{self.agent.api}"
+
+    @property
+    def actions_base_url(self) -> str:
+        """Base URL of the prefix this app lets conductor proxy a page's calls to.
+
+        Raises :class:`ValueError` when the app declares none, which is the
+        normal case — the proxy route gates on it rather than guessing a path.
+        """
+        if self.agent is None or not self.agent.actions:
+            raise ValueError(f"{self.name} declares no actions prefix")
+        return f"http://{self.upstream}{self.agent.actions}"
 
 
 @dataclass(frozen=True)
@@ -165,7 +181,16 @@ def _parse_agent(block: Any) -> AgentSpec | None:
     examples: tuple[str, ...] = ()
     if isinstance(raw_examples, list):
         examples = tuple(str(e) for e in raw_examples if isinstance(e, str))
-    return AgentSpec(description=description.strip(), api=api, examples=examples)
+    # A malformed `actions` costs the app its proxy prefix and nothing else —
+    # same rule as the block itself. It must be a rooted path: it is the whole
+    # of what conductor will forward to, so "anything" is not an option.
+    raw_actions = block.get("actions")
+    actions = (
+        raw_actions.rstrip("/")
+        if isinstance(raw_actions, str) and raw_actions.startswith("/")
+        else None
+    )
+    return AgentSpec(description=description.strip(), api=api, examples=examples, actions=actions)
 
 
 def _parse_open(block: Any) -> OpenSpec | None:

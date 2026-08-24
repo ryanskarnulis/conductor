@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRouter
 
-from app.api import routes_agent, routes_voice
+from app.api import routes_agent, routes_fleet, routes_voice
 from app.config import get_settings
 from app.fleet.manifests import fleet_from_settings
 from app.fleet.tools import build_delegate_tools, default_client_factory, render_fleet_section
@@ -19,6 +19,7 @@ logger = structlog.get_logger(__name__)
 
 api_router = APIRouter()
 api_router.include_router(routes_agent.router)
+api_router.include_router(routes_fleet.router)
 api_router.include_router(routes_voice.router)
 
 
@@ -32,6 +33,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     fleet = fleet_from_settings()
     build_delegate_tools(fleet, default_client_factory())
     app.state.fleet_section = render_fleet_section(fleet) or None
+    # Kept as well as rendered: `routes_fleet` looks apps up by name to proxy a
+    # page's action, which the prompt layer's rendered text cannot answer.
+    app.state.fleet = fleet
     logger.info(
         "startup",
         env=get_settings().app_env,
