@@ -8,6 +8,10 @@ upstream: 127.0.0.1:8300
 # Frontend liveness only — the backend's /health is not proxied by nginx.
 health: /
 lan: true
+# No launcher card: conductor is the web's keeper, so the spider hanging over
+# the launcher page opens it instead of a node on the ring. The vhost is
+# unaffected — conductor.$HOMELAB_DOMAIN is still how you get there.
+keeper: true
 runtime:
   type: compose
   start: docker compose up -d
