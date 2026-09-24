@@ -11,8 +11,7 @@ the right per-app agent over the standardized REST delegate contract
 `open:` block get an `open_<app>` handoff (the user's words carried as
 `?intent=`). The backend mirrors PCC's reference implementation
 (`../project-command-center/backend/app/`) — read the code as "same as PCC,
-minus deltas". `TODO.md` is the backlog; `DONE.md` the log;
-`docs/agent-evals.md` the routing eval baseline.
+minus deltas". `docs/agent-evals.md` is the routing eval baseline.
 
 ## Commands
 
@@ -26,6 +25,8 @@ backend dev `8301`, vite dev `5174`.
 
 ## Git workflow
 
+- The backlog is GitHub issues (`gh issue list`). File follow-up work as an
+  issue, never in a markdown file; PRs close issues with `Closes #N`.
 - Never commit to `main`. Branch → PR → squash-merge on green CI
   (`gh pr checks --watch`, then `gh pr merge --squash`). Run `./test.sh`
   before pushing. Deploys via `~/deploy/conductor` clean clones; an `app.yaml`
@@ -73,4 +74,6 @@ frontend on `8300`.
 - **Note turns** (`POST …/notes`) record what the person did in the UI as the
   person's own turn — never an invented assistant reply.
 - **Single-worker constraint:** the in-memory turn-activity registry and rate
-  limiter pin the deployment to one uvicorn worker until the SSE item ships.
+  limiter pin the deployment to one uvicorn worker until #38 (SSE) ships.
+- **The delegate contract never assumes a text-only client** — voice
+  convergence is a master-plan placeholder.
