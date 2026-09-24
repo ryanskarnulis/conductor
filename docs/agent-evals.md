@@ -48,7 +48,7 @@ deterministic 0/3, bisected to music #9's manifest line *"queues a whole album
 or playlist"* (2026-08-23). An attempted fix (a no-playback negative sentence
 in music's description) fixed it 3/3 but broke `music-save` in 2 of 3 full
 runs — the negation suppresses music routing generally. Options, none taken
-(now a `TODO.md` item): narrow the negative until both hold; retire the golden
+(tracked in #36): narrow the negative until both hold; retire the golden
 (music's own agent refuses truthfully one hop later); or leave red until music
 Phase 6 makes the route correct.
 
