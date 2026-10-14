@@ -89,7 +89,7 @@ ensure_backend_deps() {
 
   if backend_tools_missing; then
     log "Installing backend dependencies."
-    (cd "$BACKEND_DIR" && "$BACKEND_PYTHON" -m pip install -e '.[dev]')
+    (cd "$BACKEND_DIR" && "$BACKEND_PYTHON" -m pip install -e '.[dev]' -c requirements.lock)
   fi
 }
 

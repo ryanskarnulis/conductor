@@ -13,10 +13,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app/backend
 
-# -e keeps the source importable as `app`. No `[dev]` extra → pytest/mypy/ruff
-# are excluded from the runtime image.
+# requirements.lock pins every version; -e keeps the source importable as `app`.
+# No `[dev]` extra → pytest/mypy/ruff are excluded from the runtime image.
 COPY backend/ ./
-RUN pip install -e .
+RUN pip install -e . -c requirements.lock
 
 EXPOSE 8000
 
