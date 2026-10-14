@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: "3.14"
       - run: cp .env.example .env
-      - run: pip install -e .[dev]
+      - run: pip install -e .[dev] -c requirements.lock
       - name: Ruff lint
         run: ruff check .
       - name: Ruff format check
@@ -34,7 +34,7 @@ jobs:
         with:
           python-version: "3.14"
       - run: cp .env.example .env
-      - run: pip install -e .[dev]
+      - run: pip install -e .[dev] -c requirements.lock
       - name: Run tests
         run: pytest
 

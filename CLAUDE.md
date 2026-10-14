@@ -23,6 +23,10 @@ minus deltas". `docs/agent-evals.md` is the routing eval baseline.
 Ports (gateway registry): frontend `127.0.0.1:8300` (nginx, proxies `/api`),
 backend dev `8301`, vite dev `5174`.
 
+- After bumping a backend dep: `cd backend && .venv/bin/python -m pip freeze
+  --exclude-editable > requirements.lock`. CI, the Docker image and fresh
+  venvs install against it (`-c requirements.lock`).
+
 ## Git workflow
 
 - The backlog is GitHub issues (`gh issue list`). File follow-up work as an
