@@ -34,9 +34,31 @@ let sharedAudio: HTMLAudioElement | null = null
 let unlocked = false
 /** Object URL of the clip currently loaded in the shared element. */
 let liveUrl: string | null = null
+/** How one playback ended. `ended` played to the end; `error` failed while
+ * playing; `interrupted` was cut off by a newer clip; `blocked` was refused
+ * by the browser (autoplay); `no_audio` never got a clip (voice unavailable,
+ * a transport failure); `timeout` gave up at the speak deadline. */
+export type PlaybackOutcome =
+  | 'ended'
+  | 'error'
+  | 'interrupted'
+  | 'blocked'
+  | 'no_audio'
+  | 'timeout'
+
+/** Optional observer of one playback, for latency measurement. `id` rides the
+ * speak request as `X-Interaction-Id`, so the host's server can join its own
+ * record of the synthesis to the client's; the callbacks fire once each, at
+ * the moment the clip is loaded and the moment audio actually starts. */
+export interface PlaybackObserver {
+  id?: string
+  onReady?: () => void
+  onStart?: () => void
+}
+
 /** The most recently requested playback, settled when it finishes (or fails,
  * or is interrupted) — never rejected. */
-let currentPlayback: Promise<void> = Promise.resolve()
+let currentPlayback: Promise<PlaybackOutcome | void> = Promise.resolve()
 /** Settles the promise of the clip currently in the element; called when a
  * new clip interrupts it, because its own onended will never fire. */
 let settleInterrupted: (() => void) | null = null
@@ -72,16 +94,16 @@ export function unlockAudio(): void {
  * never listens to its own voice.
  */
 export function audioIdle(): Promise<void> {
-  return currentPlayback
+  return currentPlayback.then(() => undefined)
 }
 
 /**
  * Fetch spoken audio for `text` and play it. Resolves once playback has
  * *finished* — not merely started — so callers can sequence work after the
- * reply has been heard. Never rejects.
+ * reply has been heard, with how it finished. Never rejects.
  */
-export function playText(text: string): Promise<void> {
-  const playback = speak(text)
+export function playText(text: string, observer?: PlaybackObserver): Promise<PlaybackOutcome> {
+  const playback = speak(text, observer)
   currentPlayback = playback
   return playback
 }
@@ -90,10 +112,16 @@ export function playText(text: string): Promise<void> {
  * Request the audio for `text` and hand back an object URL for it, or null
  * when voice is unavailable (503/502) or the deadline has already passed.
  */
-async function loadClip(text: string, signal: AbortSignal): Promise<string | null> {
+async function loadClip(
+  text: string,
+  signal: AbortSignal,
+  id: string | undefined,
+): Promise<string | null> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (id) headers['X-Interaction-Id'] = id
   const res = await fetch('/api/voice/speak', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ text }),
     signal,
   })
@@ -108,7 +136,7 @@ async function loadClip(text: string, signal: AbortSignal): Promise<string | nul
   return url
 }
 
-async function speak(text: string): Promise<void> {
+async function speak(text: string, observer?: PlaybackObserver): Promise<PlaybackOutcome> {
   // Voice out is best-effort: a transport failure (offline, DNS, aborted
   // connection), an unreadable body or a request that never answers at all
   // must settle exactly like a 503 does, or the hands-free loop awaiting
@@ -118,21 +146,23 @@ async function speak(text: string): Promise<void> {
   // stays pending forever.
   const controller = new AbortController()
   let expire = () => {}
+  let timedOut = false
   const expired = new Promise<null>((resolve) => {
     expire = () => resolve(null)
   })
   const deadline = setTimeout(() => {
+    timedOut = true
     controller.abort()
     expire()
   }, SPEAK_DEADLINE_MS)
 
   let url: string
   try {
-    const clip = await Promise.race([loadClip(text, controller.signal), expired])
-    if (clip === null) return
+    const clip = await Promise.race([loadClip(text, controller.signal, observer?.id), expired])
+    if (clip === null) return timedOut ? 'timeout' : 'no_audio'
     url = clip
   } catch {
-    return
+    return timedOut ? 'timeout' : 'no_audio'
   } finally {
     // Every exit — played, unavailable, failed, expired — drops the timer.
     clearTimeout(deadline)
@@ -145,20 +175,31 @@ async function speak(text: string): Promise<void> {
   if (liveUrl) URL.revokeObjectURL(liveUrl)
   liveUrl = url
   el.src = url
-  await new Promise<void>((resolve) => {
-    settleInterrupted = resolve
-    const finish = () => {
+  observer?.onReady?.()
+  return new Promise<PlaybackOutcome>((resolve) => {
+    let settled = false
+    const finish = (outcome: PlaybackOutcome) => {
+      if (settled) return
+      settled = true
       if (liveUrl === url) {
         URL.revokeObjectURL(url)
         liveUrl = null
       }
-      if (settleInterrupted === resolve) settleInterrupted = null
-      resolve()
+      if (settleInterrupted === interrupt) settleInterrupted = null
+      resolve(outcome)
     }
-    el.onended = finish
-    el.onerror = finish
+    const interrupt = () => finish('interrupted')
+    settleInterrupted = interrupt
+    let started = false
+    el.onplaying = () => {
+      if (started || liveUrl !== url) return
+      started = true
+      observer?.onStart?.()
+    }
+    el.onended = () => finish('ended')
+    el.onerror = () => finish('error')
     // Autoplay blocked (no unlocked element) or playback failed — don't
     // leak the URL, and settle so callers never hang.
-    el.play().then(undefined, finish)
+    el.play().then(undefined, () => finish('blocked'))
   })
 }
