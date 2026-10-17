@@ -80,9 +80,11 @@ export function MicButton({ onTranscript, beginUtterance, disabled }: MicButtonP
   // Conversation sessions are numbered; async continuations belonging to an
   // exited session must not touch state or reopen the mic.
   const sessionRef = useRef(0)
-  // An utterance is already being processed — drop any VAD event that slips
-  // through before pause() takes effect.
-  const busyRef = useRef(false)
+  // The session whose utterance is being processed, or null — drop any VAD
+  // event that slips through before pause() takes effect. Scoped to the
+  // session, not the component: a latch left held by an ended conversation
+  // would silently swallow the next one's utterances (#508).
+  const busyRef = useRef<number | null>(null)
 
   /**
    * Abandon any push-to-talk recording and release the microphone. Handlers
@@ -117,14 +119,17 @@ export function MicButton({ onTranscript, beginUtterance, disabled }: MicButtonP
 
   function endConversation() {
     sessionRef.current++
+    // Whatever the ended session is still awaiting, the next one must not
+    // inherit its latch.
+    busyRef.current = null
     vadRef.current?.destroy()
     vadRef.current = null
     setMicState('idle')
   }
 
   async function handleUtterance(audio: Float32Array, session: number) {
-    if (busyRef.current) return
-    busyRef.current = true
+    if (busyRef.current !== null) return
+    busyRef.current = session
     const interactionId = beginUtterance?.()
     try {
       vadRef.current?.pause()
@@ -159,7 +164,8 @@ export function MicButton({ onTranscript, beginUtterance, disabled }: MicButtonP
       endConversation()
       setError('Voice conversation stopped — tap to start again.')
     } finally {
-      busyRef.current = false
+      // An abandoned turn settling late must not unlock a newer session.
+      if (busyRef.current === session) busyRef.current = null
     }
   }
 
@@ -167,9 +173,14 @@ export function MicButton({ onTranscript, beginUtterance, disabled }: MicButtonP
     const session = ++sessionRef.current
     setError(null)
     setMicState('starting')
+    // Half-duplex across sessions too: a reply still playing — from a session
+    // just ended, or a typed command — must finish before the mic opens, or
+    // the agent's own words get transcribed as the player's (#508).
+    await audioIdle()
+    if (sessionRef.current !== session) return
     const vad = await createVad({
       onSpeechStart: () => {
-        if (sessionRef.current === session && !busyRef.current) setMicState('capturing')
+        if (sessionRef.current === session && busyRef.current === null) setMicState('capturing')
       },
       onSpeechEnd: (audio) => {
         if (sessionRef.current === session) void handleUtterance(audio, session)
