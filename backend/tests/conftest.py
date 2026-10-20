@@ -11,6 +11,8 @@ from app.api import rate_limit, routes_agent, turn_activity
 from app.config import get_settings
 from app.db.models import Base
 from app.db.session import get_db
+from app.fleet.manifests import Fleet
+from app.fleet.thread_cleanup import SubagentThreadCleanup
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
 from app.tools import registry
@@ -82,9 +84,13 @@ def client(
     db_session: Session, session_factory: sessionmaker[Session]
 ) -> Generator[TestClient, None, None]:
     """The app over the test database: routes share ``db_session``; the
-    thread-store dependency gets its own sessions against the same engine."""
+    thread-store and thread-cleanup dependencies get their own sessions against
+    the same engine (cleanup over an empty fleet, so nothing leaves the test)."""
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[routes_agent.get_thread_store] = lambda: DbThreadStore(session_factory)
+    app.dependency_overrides[routes_agent.get_thread_cleanup] = lambda: SubagentThreadCleanup(
+        Fleet(apps=()), session_factory
+    )
     try:
         with TestClient(app) as test_client:
             yield test_client
