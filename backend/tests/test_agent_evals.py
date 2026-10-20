@@ -29,6 +29,13 @@ Opt-in like the app evals, so CI and default local runs never touch the GPU:
 manifest-``examples``, model, or loop change — run it before merging one; the
 baseline must not regress. If routing fails here, tighten the manifests'
 ``agent.examples`` hints before considering bigger models.
+
+Infrastructure is retried, not scored (#25, ported from chess's
+``evalstats``): a provider death — llama-swap evicting the model mid-suite
+reads as a 502 ``llama-server request failed: timed out`` — is thrown away and
+re-taken on a fresh conversation, bounded per scenario and across the suite.
+Each ``[eval]`` line carries the scenario's ``infra=`` count and the session
+ends with an ``infra_spent`` line, so a run that limped stays visible.
 """
 
 from __future__ import annotations
@@ -53,6 +60,7 @@ from app.fleet.manifests import FleetApp
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
 from app.tools import registry
+from tests.evalstats import InfraBudget, Outcome, classify
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("CONDUCTOR_AGENT_EVALS") != "1",
@@ -65,6 +73,14 @@ pytestmark = pytest.mark.skipif(
 WORKSPACE_ROOT = Path(
     os.environ.get("CONDUCTOR_EVAL_FLEET_DIR", str(Path(__file__).resolve().parents[3]))
 )
+
+# Sized off the observed cadence rather than chess's: one sample per golden and
+# roughly one model swap in a bad suite (~2 of 7 runs, #25), but a timed-out
+# attempt costs the provider's full 300 s timeout — so a couple of re-runs per
+# golden, and a suite ceiling that stops a dead server inside ~30 min.
+_INFRA_RETRIES = int(os.environ.get("CONDUCTOR_EVAL_INFRA_RETRIES", "2"))
+_INFRA_BUDGET = int(os.environ.get("CONDUCTOR_EVAL_INFRA_BUDGET", "6"))
+_INFRA = InfraBudget(retries=_INFRA_RETRIES, budget=_INFRA_BUDGET)
 
 # The agents today's goldens are written against.
 EXPECTED_AGENT_TOOLS = frozenset({"ask_tasks", "open_chess", "ask_music"})
@@ -117,6 +133,18 @@ class FakeDelegateClient:
                 created_at=now,
             ),
         )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _report_infra() -> Generator[None, None, None]:
+    """Close the run with what it cost: wall clock and infra budget spent.
+
+    A green suite that retried its way there should say so — the wall clock
+    alone was the only tell before (#25: 12 s clean vs 315 s with one swap).
+    """
+    started = time.monotonic()
+    yield
+    print(f"\n[eval] suite {time.monotonic() - started:.1f}s {_INFRA.summary()}")
 
 
 @pytest.fixture
@@ -231,16 +259,43 @@ def test_routing_golden(
     eval_client: TestClient,
     delegate_calls: list[tuple[str, str]],
 ) -> None:
-    created = eval_client.post("/api/agent/conversations", json={})
-    assert created.status_code == 201
-    conversation_id = created.json()["id"]
+    infra = 0
+    while True:
+        # A fresh conversation per attempt: a failed turn leaves its user
+        # message behind, and a retry must not see it as history.
+        delegate_calls.clear()
+        created = eval_client.post("/api/agent/conversations", json={})
+        assert created.status_code == 201
+        conversation_id = created.json()["id"]
 
-    started = time.monotonic()
-    response = eval_client.post(
-        f"/api/agent/conversations/{conversation_id}/messages",
-        json={"content": golden.utterance},
-    )
-    duration = time.monotonic() - started
+        started = time.monotonic()
+        response = eval_client.post(
+            f"/api/agent/conversations/{conversation_id}/messages",
+            json={"content": golden.utterance},
+        )
+        duration = time.monotonic() - started
+        detail = None if response.status_code == 200 else response.json().get("detail")
+        outcome = classify(status_code=response.status_code, detail=detail)
+        if outcome is not Outcome.INFRA:
+            break
+        # Not a sample: the provider died, so the routing decision was never made.
+        infra += 1
+        retry = _INFRA.spend(golden.id)
+        print(
+            f"[eval]   ⟳ infra death {infra}, {_INFRA_RETRIES} retries allowed ({golden.id}, "
+            f"{duration:.1f}s): {detail}"
+        )
+        if not retry:
+            pytest.fail(
+                f"{golden.id}: INFRA_ABORTED after {infra} provider deaths "
+                f"({_INFRA.summary()}). Routing was not tested: llama-server is "
+                f"not staying up. Last error: {detail}"
+            )
+    if outcome is Outcome.PROVIDER_REJECTED:
+        pytest.fail(
+            f"{golden.id}: llama-server refused the request ({detail}). Not routing and "
+            "not a timeout: a retry would get the same refusal, so look at the request."
+        )
     assert response.status_code == 200, response.text
     assistant = response.json()["assistant_message"]
     calls = assistant["tool_calls"] or []
@@ -251,7 +306,7 @@ def test_routing_golden(
     print(
         f"[eval] scenario={golden.id} kind={golden.kind} expected={golden.route or '-'} "
         f"acted={acted or '-'} trajectory={trajectory or '-'} "
-        f"stop={assistant['stop_reason']} duration={duration:.1f}s"
+        f"stop={assistant['stop_reason']} duration={duration:.1f}s infra={infra}"
     )
 
     assert assistant["stop_reason"] == "completed"
