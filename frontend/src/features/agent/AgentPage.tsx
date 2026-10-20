@@ -285,9 +285,7 @@ export function AgentPage() {
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={onComposerKeyDown}
-                placeholder={
-                  sending ? 'Conductor is working…' : 'Message conductor (Enter to send)'
-                }
+                placeholder={sending ? 'Conductor is working…' : 'Ask conductor…'}
                 aria-label="Message conductor"
                 rows={2}
                 disabled={sending}
