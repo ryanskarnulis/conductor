@@ -19,10 +19,13 @@ from fastapi.testclient import TestClient
 
 from app.ai.speech import (
     STT_PROMPT,
+    VOCABULARY,
+    speech_client_from_settings,
+)
+from app.ai.speech_client import (
     SpeechClient,
     SpeechRequestError,
     SpeechResponseError,
-    speech_client_from_settings,
 )
 from app.api import routes_voice
 from app.config import get_settings
@@ -70,7 +73,7 @@ class FakeSpeechServer:
 
 def test_transcribe_forwards_audio_and_returns_text() -> None:
     server = FakeSpeechServer(text="ask chess to play e4")
-    speech = SpeechClient(client=server.client(), stt_model="whisper-test")
+    speech = SpeechClient(vocabulary=VOCABULARY, client=server.client(), stt_model="whisper-test")
     text = speech.transcribe(b"opus-bytes", filename="clip.webm")
     assert text == "ask chess to play e4"
     (request,) = server.requests
@@ -83,7 +86,7 @@ def test_transcribe_forwards_audio_and_returns_text() -> None:
 
 def test_transcribe_biases_whisper_with_the_routing_vocabulary_prompt() -> None:
     server = FakeSpeechServer()
-    speech = SpeechClient(client=server.client())
+    speech = SpeechClient(vocabulary=VOCABULARY, client=server.client())
     speech.transcribe(b"opus-bytes")
     (request,) = server.requests
     assert STT_PROMPT.encode() in request.read()
@@ -99,7 +102,9 @@ def test_stt_prompt_covers_the_fleet_routing_vocabulary() -> None:
 
 def test_speak_forwards_text_and_returns_audio_bytes() -> None:
     server = FakeSpeechServer(audio=b"kokoro-mp3")
-    speech = SpeechClient(client=server.client(), tts_model="tts-test", tts_voice="af_test")
+    speech = SpeechClient(
+        vocabulary=VOCABULARY, client=server.client(), tts_model="tts-test", tts_voice="af_test"
+    )
     assert speech.speak("Asked chess.") == b"kokoro-mp3"
     (request,) = server.requests
     assert request.url.path == "/v1/audio/speech"
@@ -114,7 +119,9 @@ def test_speak_forwards_text_and_returns_audio_bytes() -> None:
 def test_speak_uses_the_dedicated_tts_client_when_given() -> None:
     stt_server = FakeSpeechServer()
     tts_server = FakeSpeechServer(audio=b"house-voice-mp3")
-    speech = SpeechClient(client=stt_server.client(), tts_client=tts_server.client())
+    speech = SpeechClient(
+        vocabulary=VOCABULARY, client=stt_server.client(), tts_client=tts_server.client()
+    )
     assert speech.speak("Done.") == b"house-voice-mp3"
     assert stt_server.requests == []
     assert speech.transcribe(b"opus-bytes") == "ask tasks what's due today"
@@ -125,7 +132,7 @@ def test_speak_uses_the_dedicated_tts_client_when_given() -> None:
 
 
 def test_transcribe_upstream_http_error_raises_request_error() -> None:
-    speech = SpeechClient(client=FakeSpeechServer(status=500).client())
+    speech = SpeechClient(vocabulary=VOCABULARY, client=FakeSpeechServer(status=500).client())
     with pytest.raises(SpeechRequestError):
         speech.transcribe(b"opus-bytes")
 
@@ -136,17 +143,19 @@ def test_transcribe_unreachable_server_raises_request_error() -> None:
 
     client = httpx.Client(base_url="http://speech:8400/v1", transport=httpx.MockTransport(refuse))
     with pytest.raises(SpeechRequestError):
-        SpeechClient(client=client).transcribe(b"opus-bytes")
+        SpeechClient(vocabulary=VOCABULARY, client=client).transcribe(b"opus-bytes")
 
 
 def test_transcribe_malformed_body_raises_response_error() -> None:
-    speech = SpeechClient(client=FakeSpeechServer(body={"nope": "x"}).client())
+    speech = SpeechClient(
+        vocabulary=VOCABULARY, client=FakeSpeechServer(body={"nope": "x"}).client()
+    )
     with pytest.raises(SpeechResponseError):
         speech.transcribe(b"opus-bytes")
 
 
 def test_speak_upstream_http_error_raises_request_error() -> None:
-    speech = SpeechClient(client=FakeSpeechServer(status=503).client())
+    speech = SpeechClient(vocabulary=VOCABULARY, client=FakeSpeechServer(status=503).client())
     with pytest.raises(SpeechRequestError):
         speech.speak("Done.")
 
@@ -187,7 +196,7 @@ def voice_client() -> Generator[TestClient, None, None]:
     """App client with a fake speech backend injected."""
     server = FakeSpeechServer()
     app.dependency_overrides[routes_voice.get_speech_client] = lambda: SpeechClient(
-        client=server.client()
+        vocabulary=VOCABULARY, client=server.client()
     )
     with TestClient(app) as client:
         yield client
@@ -240,7 +249,7 @@ def test_speak_without_speech_service_is_503() -> None:
 def test_transcribe_upstream_failure_is_502() -> None:
     server = FakeSpeechServer(status=500)
     app.dependency_overrides[routes_voice.get_speech_client] = lambda: SpeechClient(
-        client=server.client()
+        vocabulary=VOCABULARY, client=server.client()
     )
     try:
         with TestClient(app) as client:
@@ -256,7 +265,7 @@ def test_transcribe_upstream_failure_is_502() -> None:
 def test_speak_upstream_failure_is_502() -> None:
     server = FakeSpeechServer(status=503)
     app.dependency_overrides[routes_voice.get_speech_client] = lambda: SpeechClient(
-        client=server.client()
+        vocabulary=VOCABULARY, client=server.client()
     )
     try:
         with TestClient(app) as client:
