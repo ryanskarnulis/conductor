@@ -56,7 +56,7 @@ jobs:
           layout="$RUNNER_TEMP/check-sync"
           rm -rf "$layout" && mkdir -p "$layout"
           git clone --depth 1 https://github.com/ryanskarnulis/agent-standard "$layout/agent-standard"
-          git clone --depth 1 https://github.com/ryanskarnulis/chess "$layout/chess"
+          git clone --depth 1 https://github.com/ryanskarnulis/speech "$layout/speech"
           cp -r "$GITHUB_WORKSPACE" "$layout/app"
           if ! "$layout/agent-standard/check-sync.sh"; then
             echo "::warning title=Vendored-file drift::check-sync.sh found drift against the canonical files — re-copy per the re-vendor rule (see job log)."

@@ -30,9 +30,9 @@ export default defineConfig(({ mode }) => {
       host: env.DEV_HOST || '127.0.0.1',
       port: 5174,
       strictPort: true,
-      // The vendored voice modules (src/voice/, chess-canonical) fetch
-      // relative /api/voice/* URLs — same-origin by design. nginx proxies
-      // /api in the docker deployment; this is the dev equivalent.
+      // The vendored voice modules (src/voice/, canonical in ../speech/client/)
+      // fetch relative /api/voice/* URLs — same-origin by design. nginx
+      // proxies /api in the docker deployment; this is the dev equivalent.
       proxy: { '/api': 'http://127.0.0.1:8301' },
     },
     test: {

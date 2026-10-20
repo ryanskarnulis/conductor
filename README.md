@@ -63,7 +63,7 @@ per the fleet contract (`../agent-standard/voice.md`), and
 text, biased toward conductor's fleet-routing vocabulary and app names) and
 `POST /api/voice/speak` (text → mp3, the fleet house voice). Both are
 rate-limited per client IP (`VOICE_REQUESTS_PER_MIN`, default 30). The chat
-panel's vendored MicButton (chess-canonical modules in `frontend/src/voice/`)
+panel's vendored MicButton (modules canonical in `../speech/client/`, copied into `frontend/src/voice/`)
 gives push-to-talk and hands-free conversation mode; voice-initiated turns
 get the reply spoken, typed turns stay silent. Because a delegated turn can
 block 12–22 s, voice-initiated turns also speak an acknowledgment ("Asking

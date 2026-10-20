@@ -1,4 +1,4 @@
-// vendored voice module — canonical: chess/frontend/src/wav.ts (agent-standard/voice.md); re-copy, never edit
+// vendored voice module — canonical: speech/client/frontend/wav.ts (agent-standard/voice.md); re-copy, never edit
 // The VAD emits raw Float32 samples (16 kHz mono, -1..1); the transcribe
 // endpoint wants a real audio container. 16-bit PCM WAV is the simplest
 // format every STT backend accepts.
