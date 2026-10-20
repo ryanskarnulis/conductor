@@ -20,7 +20,7 @@ from collections.abc import Generator, Sequence
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.ai.loop import AgentLoop, LoopActivity, loop_from_settings
@@ -32,6 +32,7 @@ from app.config import get_settings
 from app.db.models import Conversation
 from app.db.session import SessionLocal, get_db
 from app.fleet.context import DelegationContext, ThreadStore, use_delegation_context
+from app.fleet.thread_cleanup import SubagentThreadCleanup
 from app.fleet.thread_store import DbThreadStore
 from app.schemas.conversations import (
     ConversationCreate,
@@ -64,6 +65,15 @@ def get_agent_loop(request: Request) -> Generator[AgentLoop, None, None]:
 def get_thread_store() -> ThreadStore:
     """The DB-backed subagent-thread map; tests override this dependency."""
     return DbThreadStore(SessionLocal)
+
+
+def get_thread_cleanup(request: Request) -> SubagentThreadCleanup | None:
+    """Best-effort subagent-thread cleanup over the discovered fleet (``None``
+    before discovery); tests override this dependency."""
+    fleet = getattr(request.app.state, "fleet", None)
+    if fleet is None:
+        return None
+    return SubagentThreadCleanup(fleet, SessionLocal)
 
 
 def _get_or_404(db: Session, conversation_id: int) -> Conversation:
@@ -100,11 +110,19 @@ def get_conversation(conversation_id: int, db: Session = Depends(get_db)) -> Con
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_conversation(conversation_id: int, db: Session = Depends(get_db)) -> None:
+def delete_conversation(
+    conversation_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    thread_cleanup: SubagentThreadCleanup | None = Depends(get_thread_cleanup),
+) -> None:
     conversation = _get_or_404(db, conversation_id)
     conversations_service.soft_delete_conversation(db, conversation)
     db.commit()
     logger.info("conversation_deleted", conversation_id=conversation_id)
+    if thread_cleanup is not None:
+        # After the response: the person's delete never waits on the fleet.
+        background_tasks.add_task(thread_cleanup, str(conversation_id))
 
 
 @router.get("/conversations/{conversation_id}/activity", response_model=TurnActivityRead)

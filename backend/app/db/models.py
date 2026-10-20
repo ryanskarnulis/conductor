@@ -92,11 +92,12 @@ class DelegateThread(Base, TimestampMixin):
     ``ThreadStore`` protocol (``app/fleet/context.py``) uses. The master id is
     a string on purpose: HTTP runs use the master :class:`Conversation` id
     stringified, but the protocol allows any driver-scoped key, so the column
-    carries the key verbatim and takes no FK. Rows whose master conversation
-    is gone are inert, not dangerous — a pruned subagent thread 404s and the
-    delegate tool recreates it — so nothing cascades and no ``deleted_at`` is
-    needed (``forget`` hard-deletes the one row; it is a cache entry, not user
-    content).
+    carries the key verbatim and takes no FK. Deleting a master conversation
+    asks each app to delete its thread and then drops the rows, best-effort
+    (``app/fleet/thread_cleanup.py``); a row that survives is inert, not
+    dangerous — a pruned subagent thread 404s and the delegate tool recreates
+    it. No ``deleted_at`` is needed: rows are hard-deleted cache entries, not
+    user content.
     """
 
     __tablename__ = "delegate_threads"
