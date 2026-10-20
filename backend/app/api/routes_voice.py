@@ -16,7 +16,8 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel, field_validator
 
-from app.ai.speech import SpeechClient, SpeechError, speech_client_from_settings
+from app.ai.speech import speech_client_from_settings
+from app.ai.speech_client import SpeechClient, SpeechError
 from app.api.rate_limit import rate_limit
 
 logger = structlog.get_logger(__name__)
