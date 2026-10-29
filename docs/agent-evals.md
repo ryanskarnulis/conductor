@@ -25,8 +25,10 @@ CONDUCTOR_AGENT_EVALS=1 .venv/bin/pytest tests/test_agent_evals.py -v -s
 ```
 
 Opt-in; needs llama-swap up (cold load ~100 s). Overrides: `LLAMACPP_BASE_URL`,
-`LLAMACPP_MODEL`, `CONDUCTOR_EVAL_FLEET_DIR`, `CONDUCTOR_EVAL_INFRA_RETRIES`
-(default 2), `CONDUCTOR_EVAL_INFRA_BUDGET` (default 6). The suite skips itself unless
+`LLAMACPP_MODEL`, `CONDUCTOR_EVAL_FLEET_DIR`, `CONDUCTOR_EVAL_RUNS` (block
+size, default 5), `CONDUCTOR_EVAL_MAX_RUNS` (default 20),
+`CONDUCTOR_EVAL_INFRA_RETRIES` (default 3), `CONDUCTOR_EVAL_INFRA_BUDGET`
+(default 12). The suite skips itself unless
 discovery finds both `ask_tasks` and `open_chess`.
 
 ## The gating rule
@@ -38,21 +40,30 @@ change to this suite's inputs (that is exactly how `refuse-playback` went red
 without anyone noticing). If routing degrades, tighten manifest `examples`
 first; a bigger model is the last resort.
 
+**No golden may go statistically below its floor** (0.8, the agent standard's
+sampled gate, `STANDARD.md` §6). Each golden is sampled in blocks of 5, a fresh
+conversation per sample, and judged by the vendored `backend/tests/evalstats.py`
+(spec `test_evalstats.py`, conductor's drift guards `test_evalstats_app.py`; re-copy
+from `../agent-standard/`, never edit): a one-sided 95% Wilson upper bound below
+the floor is red, a rate at the floor green, anything between buys another
+block up to 20. At n=5: 0–2 red, 3 escalates, 4–5 green. An `UNDECIDED` count at
+the cap passes, flagged. A known red is `xfail`, not gated.
+
 ## Infrastructure is retried, not scored
 
 A provider death (llama-swap evicting or reloading the model mid-suite: a 502
 `llama-server request failed: timed out`, a refused connection, or a 5xx while
 it swaps) never decided a route, so it is not scored. The harness throws the
-attempt away and re-takes it on a fresh conversation, up to
+sample away and re-takes it on a fresh conversation, up to
 `CONDUCTOR_EVAL_INFRA_RETRIES` per scenario and `CONDUCTOR_EVAL_INFRA_BUDGET`
-across the suite (`backend/tests/evalstats.py`, conductor's cut of chess's).
-A timed-out attempt still costs the full 300 s, so the defaults stop a dead
-server inside ~30 min.
+across the suite (`InfraBudget` in the vendored `evalstats.py`). A timed-out
+sample still costs the full 300 s, so the defaults stop a dead server inside
+~an hour.
 
 Reading a run:
 
-- `[eval] … infra=N` on a scenario line: it passed or failed on a real
-  routing decision after N thrown-away attempts.
+- `[eval] scenario=… PASS_RATE=p/n (…) ci=[lo,hi] DECISION … infra=N`: the
+  verdict over real routing decisions, after N thrown-away samples.
 - `[eval] suite …s infra_spent=S/B (scenario=n, …)` closes the run — a green
   suite that limped says so, and says which scenarios ate the budget.
 - `INFRA_ABORTED` — the scenario ran out of retries. Routing was not tested:
@@ -62,6 +73,19 @@ Reading a run:
   retrying; look at the request.
 
 Any other red is a routing answer.
+
+## Known reds (xfail, not gated)
+
+Under the sampled gate (2026-10-28) two goldens read below the floor on main;
+both are `xfail` in `KNOWN_REDS` until fixed:
+
+- `refuse-playback` — 0/5, deterministic (below).
+- `music-save` — "save this track to the music folder": 2/5, then 13/20 (65%,
+  ci [0.47, 0.80]); every miss answers locally with no app call. The
+  one-sample gate passed it by luck in every recorded baseline.
+
+The rest of the suite: 19/21 ABOVE_FLOOR at 5/5, infra 2/12 (two llama-swap
+timeouts on `chess-reset`, re-taken, never scored), 684 s.
 
 ## Open regression — `refuse-playback` red since music #9
 
