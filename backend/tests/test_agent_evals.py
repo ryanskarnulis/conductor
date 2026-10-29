@@ -30,12 +30,17 @@ manifest-``examples``, model, or loop change — run it before merging one; the
 baseline must not regress. If routing fails here, tighten the manifests'
 ``agent.examples`` hints before considering bigger models.
 
-Infrastructure is retried, not scored (#25, ported from chess's
-``evalstats``): a provider death — llama-swap evicting the model mid-suite
-reads as a 502 ``llama-server request failed: timed out`` — is thrown away and
-re-taken on a fresh conversation, bounded per scenario and across the suite.
-Each ``[eval]`` line carries the scenario's ``infra=`` count and the session
-ends with an ``infra_spent`` line, so a run that limped stays visible.
+The verdict is the standard's sampled gate (STANDARD.md §6), from the vendored
+``tests/evalstats.py``: each golden is sampled in blocks of
+``CONDUCTOR_EVAL_RUNS`` (5) on a fresh conversation per sample, a one-sided
+Wilson upper bound below the 0.8 floor is red, a rate at the floor green, and
+anything between buys another block up to ``CONDUCTOR_EVAL_MAX_RUNS`` (20).
+Infrastructure is retried, not scored (#25): a provider death — llama-swap
+evicting the model mid-suite reads as a 502 ``llama-server request failed:
+timed out`` — is thrown away and re-taken, bounded per scenario and across the
+suite. Each ``[eval]`` verdict line carries the scenario's ``infra=`` count and
+the session ends with an ``infra_spent`` line, so a run that limped stays
+visible.
 """
 
 from __future__ import annotations
@@ -46,13 +51,14 @@ from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.main as main_module
-from app.api import routes_agent
+from app.api import rate_limit, routes_agent
 from app.config import get_settings
 from app.db.session import get_db
 from app.fleet.delegate import MessageExchange, MessageRead
@@ -60,7 +66,15 @@ from app.fleet.manifests import FleetApp
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
 from app.tools import registry
-from tests.evalstats import InfraBudget, Outcome, classify
+from tests.evalstats import (
+    Decision,
+    GateAborted,
+    InfraBudget,
+    Taken,
+    classify,
+    provider_failure_kind,
+    run_gate,
+)
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("CONDUCTOR_AGENT_EVALS") != "1",
@@ -74,12 +88,17 @@ WORKSPACE_ROOT = Path(
     os.environ.get("CONDUCTOR_EVAL_FLEET_DIR", str(Path(__file__).resolve().parents[3]))
 )
 
-# Sized off the observed cadence rather than chess's: one sample per golden and
-# roughly one model swap in a bad suite (~2 of 7 runs, #25), but a timed-out
-# attempt costs the provider's full 300 s timeout — so a couple of re-runs per
-# golden, and a suite ceiling that stops a dead server inside ~30 min.
-_INFRA_RETRIES = int(os.environ.get("CONDUCTOR_EVAL_INFRA_RETRIES", "2"))
-_INFRA_BUDGET = int(os.environ.get("CONDUCTOR_EVAL_INFRA_BUDGET", "6"))
+# Block size and sampling cap (STANDARD.md §6). RUNS=1 takes one sample per
+# golden (a miss is red); RUNS >= MAX_RUNS forces a fixed count.
+_BLOCK_RUNS = int(os.environ.get("CONDUCTOR_EVAL_RUNS", "5"))
+_MAX_RUNS = int(os.environ.get("CONDUCTOR_EVAL_MAX_RUNS", "20"))
+
+# Sized off the observed cadence rather than chess's: roughly one model swap in
+# a bad suite (~2 of 7 runs, #25), but a timed-out sample costs the provider's
+# full 300 s timeout — so a few re-takes per golden, and a suite ceiling that
+# stops a dead server inside ~an hour.
+_INFRA_RETRIES = int(os.environ.get("CONDUCTOR_EVAL_INFRA_RETRIES", "3"))
+_INFRA_BUDGET = int(os.environ.get("CONDUCTOR_EVAL_INFRA_BUDGET", "12"))
 _INFRA = InfraBudget(retries=_INFRA_RETRIES, budget=_INFRA_BUDGET)
 
 # The agents today's goldens are written against.
@@ -253,64 +272,18 @@ GOLDENS: tuple[Golden, ...] = (
 )
 
 
-@pytest.mark.parametrize("golden", GOLDENS, ids=lambda golden: golden.id)
-def test_routing_golden(
-    golden: Golden,
-    eval_client: TestClient,
-    delegate_calls: list[tuple[str, str]],
+def _check(
+    golden: Golden, assistant: dict[str, Any], delegate_calls: list[tuple[str, str]]
 ) -> None:
-    infra = 0
-    while True:
-        # A fresh conversation per attempt: a failed turn leaves its user
-        # message behind, and a retry must not see it as history.
-        delegate_calls.clear()
-        created = eval_client.post("/api/agent/conversations", json={})
-        assert created.status_code == 201
-        conversation_id = created.json()["id"]
-
-        started = time.monotonic()
-        response = eval_client.post(
-            f"/api/agent/conversations/{conversation_id}/messages",
-            json={"content": golden.utterance},
-        )
-        duration = time.monotonic() - started
-        detail = None if response.status_code == 200 else response.json().get("detail")
-        outcome = classify(status_code=response.status_code, detail=detail)
-        if outcome is not Outcome.INFRA:
-            break
-        # Not a sample: the provider died, so the routing decision was never made.
-        infra += 1
-        retry = _INFRA.spend(golden.id)
-        print(
-            f"[eval]   ⟳ infra death {infra}, {_INFRA_RETRIES} retries allowed ({golden.id}, "
-            f"{duration:.1f}s): {detail}"
-        )
-        if not retry:
-            pytest.fail(
-                f"{golden.id}: INFRA_ABORTED after {infra} provider deaths "
-                f"({_INFRA.summary()}). Routing was not tested: llama-server is "
-                f"not staying up. Last error: {detail}"
-            )
-    if outcome is Outcome.PROVIDER_REJECTED:
-        pytest.fail(
-            f"{golden.id}: llama-server refused the request ({detail}). Not routing and "
-            "not a timeout: a retry would get the same refusal, so look at the request."
-        )
-    assert response.status_code == 200, response.text
-    assistant = response.json()["assistant_message"]
+    """One sample's assertions: did this turn route the way the golden says?"""
     calls = assistant["tool_calls"] or []
     trajectory = [call["tool"] for call in calls]
     # Both tool families act on an app: ask_ delegates to it, open_ sends the
     # user to it. Either is a route; everything else (list_agents) is not.
     acted = [tool for tool in trajectory if tool.startswith(("ask_", "open_"))]
-    print(
-        f"[eval] scenario={golden.id} kind={golden.kind} expected={golden.route or '-'} "
-        f"acted={acted or '-'} trajectory={trajectory or '-'} "
-        f"stop={assistant['stop_reason']} duration={duration:.1f}s infra={infra}"
-    )
 
-    assert assistant["stop_reason"] == "completed"
-    assert assistant["content"] is not None and assistant["content"].strip()
+    assert assistant["stop_reason"] == "completed", f"stop={assistant['stop_reason']}"
+    assert assistant["content"] is not None and assistant["content"].strip(), "empty reply"
 
     if golden.kind == "route":
         assert golden.route is not None
@@ -330,3 +303,105 @@ def test_routing_golden(
         # refuse / confirm / local: conductor must not act on an app this turn.
         assert acted == [], f"expected no app call for {golden.kind}, got {acted}"
         assert delegate_calls == []
+
+
+# Known reds (STANDARD.md §6): measured below the floor on main, so they are
+# xfail rather than gated. Drop the mark once one goes green (non-strict, so
+# an XPASS reads as the cue rather than a failure).
+KNOWN_REDS: dict[str, str] = {
+    # Deterministic since music #9's "queues a whole album or playlist" (#36).
+    "refuse-playback": "routes to ask_music, 0/5 (2026-10-28) — #36",
+    # Hidden by the one-sample gate; the sampled gate reads it 2/5, then 13/20.
+    # The misses answer locally with no app call.
+    "music-save": "answers without routing, 13/20 (2026-10-28)",
+}
+
+
+def _golden_params() -> list[Any]:
+    return [
+        pytest.param(
+            golden,
+            id=golden.id,
+            marks=[pytest.mark.xfail(reason=KNOWN_REDS[golden.id], strict=False)]
+            if golden.id in KNOWN_REDS
+            else [],
+        )
+        for golden in GOLDENS
+    ]
+
+
+@pytest.mark.parametrize("golden", _golden_params())
+def test_routing_golden(
+    golden: Golden,
+    eval_client: TestClient,
+    delegate_calls: list[tuple[str, str]],
+) -> None:
+    durations: list[float] = []
+
+    def take(_seed: int | None) -> Taken:
+        # A fresh conversation per sample: a failed turn leaves its user
+        # message behind, and the next sample must not see it as history. And
+        # a fresh rate-limit window: the route allows 10 messages a minute per
+        # client, and an escalated scenario takes up to 20 samples from one.
+        rate_limit._reset()
+        delegate_calls.clear()
+        created = eval_client.post("/api/agent/conversations", json={})
+        assert created.status_code == 201
+        conversation_id = created.json()["id"]
+
+        started = time.monotonic()
+        response = eval_client.post(
+            f"/api/agent/conversations/{conversation_id}/messages",
+            json={"content": golden.utterance},
+        )
+        duration = time.monotonic() - started
+        if response.status_code != 200:
+            detail = response.json().get("detail")
+            outcome = classify(
+                status_code=response.status_code,
+                stop_reason=None,
+                error=None,
+                provider_failure=provider_failure_kind(str(detail or "")),
+            )
+            return Taken(outcome, failure=f"HTTP {response.status_code}: {detail}", detail=detail)
+        durations.append(duration)
+        assistant = response.json()["assistant_message"]
+        error: BaseException | None = None
+        try:
+            _check(golden, assistant, delegate_calls)
+        except Exception as exc:  # classify: an AssertionError is a miss, else HARNESS
+            error = exc
+        outcome = classify(status_code=200, stop_reason=assistant["stop_reason"], error=error)
+        trajectory = [call["tool"] for call in assistant["tool_calls"] or []]
+        print(
+            f"[eval]   {golden.id} {outcome} trajectory={trajectory or '-'} "
+            f"stop={assistant['stop_reason']} {duration:.1f}s"
+        )
+        return Taken(outcome, failure=str(error) if error else None, error=error)
+
+    def on_infra(infra: int, sample: Taken) -> None:
+        print(f"[eval]   ⟳ infra death {infra}/{_INFRA_RETRIES} ({golden.id}): {sample.detail}")
+
+    try:
+        result = run_gate(
+            golden.id,
+            take,
+            budget=_INFRA,
+            block_runs=_BLOCK_RUNS,
+            max_runs=_MAX_RUNS,
+            on_infra=on_infra,
+        )
+    except GateAborted as aborted:
+        pytest.fail(str(aborted))
+    span = f" {min(durations):.1f}–{max(durations):.1f}s" if durations else ""
+    print(
+        f"[eval] scenario={golden.id} kind={golden.kind} expected={golden.route or '-'} "
+        f"PASS_RATE={result.summary()}{span}"
+    )
+    for mode, count in sorted(result.failure_modes.items(), key=lambda item: -item[1]):
+        print(f"[eval]   ×{count} {mode}")
+    assert result.decision is not Decision.BELOW_FLOOR, (
+        f"{golden.id} is below its floor with evidence, not noise: {result.summary()}"
+    )
+    if result.decision is Decision.UNDECIDED:
+        print(f"[eval]   ⚠ UNDECIDED at the sampling cap: {result.summary()}")
