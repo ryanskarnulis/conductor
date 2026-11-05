@@ -26,7 +26,7 @@ Contract behaviors live here, not in the client:
 - **Thread reuse + 404 recreate-once.** The subagent thread is looked up in the
   :class:`DelegationContext`; a :class:`DelegateThreadGone` triggers exactly one
   recreate-and-retry (a second 404 fails the call).
-- **Typed delegate faults → domain errors.** Rate-limit, unavailable, protocol,
+- **Typed delegate faults → domain errors.** Rate-limit, unavailable, outcome-unknown, protocol,
   and double-404 all become informative :class:`ToolError` s (the model reads
   them and adapts); a 429 surfaces its ``Retry-After`` and is never auto-retried.
 - **Budget.** The per-turn per-app call is charged before the request, so an
@@ -51,6 +51,7 @@ from app.fleet.delegate import (
     CONDUCTOR_ACTOR,
     DelegateClient,
     DelegateError,
+    DelegateOutcomeUnknown,
     DelegateProtocolError,
     DelegateRateLimited,
     DelegateRequestRejected,
@@ -270,6 +271,12 @@ def _to_tool_error(app: FleetApp, exc: DelegateError) -> ToolError:
         return ToolError(
             f"{app.name} rejected the request as invalid. Do not retry the same message — "
             f"rephrase or shorten it, or report the failure."
+        )
+    if isinstance(exc, DelegateOutcomeUnknown):
+        return ToolError(
+            f"{app.name}'s agent stopped partway through this request, so what it did is "
+            f"unknown: some changes may have been made. Do not retry or resend it. Tell the "
+            f"user it stopped partway and to check {app.name} before asking again."
         )
     if isinstance(exc, DelegateUnavailable):
         return ToolError(

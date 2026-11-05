@@ -12,6 +12,7 @@ import json
 from collections.abc import Callable, Generator, Sequence
 from datetime import date, datetime
 
+import httpx
 import pytest
 import structlog
 
@@ -22,6 +23,7 @@ from app.fleet.context import (
     use_delegation_context,
 )
 from app.fleet.delegate import (
+    DelegateClient,
     DelegateRateLimited,
     DelegateRequestRejected,
     DelegateThreadGone,
@@ -408,6 +410,81 @@ def test_unavailable_becomes_tool_error(bound_context: DelegationContext) -> Non
 
     with pytest.raises(ToolError, match="unavailable"):
         _ask("ask_chess", "play e4")
+
+
+class _FakeApp:
+    """A fake app agent behind httpx.MockTransport for the real DelegateClient.
+
+    Each ``POST …/messages`` records a write and then answers with
+    ``message_status`` — the shape of PCC/music persisting a partial run and
+    returning 5xx when the run dies after its tools ran (#60). ``refuse_connect``
+    makes every request fail before it is sent.
+    """
+
+    def __init__(self, *, message_status: int = 502, refuse_connect: bool = False) -> None:
+        self.message_status = message_status
+        self.refuse_connect = refuse_connect
+        self.writes: list[str] = []
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if self.refuse_connect:
+            raise httpx.ConnectError("connection refused")
+        if request.url.path.endswith("/conversations"):
+            return httpx.Response(201, json={"id": 7})
+        self.writes.append(json.loads(request.content)["content"])
+        return httpx.Response(self.message_status, json={"detail": "provider failed"})
+
+    def factory(self, app: FleetApp) -> DelegateClient:
+        transport = httpx.MockTransport(self.handle)
+        return DelegateClient(
+            f"http://{app.upstream}/api/agent", client=httpx.Client(transport=transport)
+        )
+
+
+@pytest.mark.parametrize("status", [500, 502, 504])
+def test_5xx_after_a_write_reports_partial_work_and_never_suggests_retry(
+    bound_context: DelegationContext, status: int
+) -> None:
+    app = _FakeApp(message_status=status)
+    build_delegate_tools(_fleet(), app.factory)
+
+    with pytest.raises(ToolError) as excinfo:
+        _ask("ask_tasks", "add a task to pay rent")
+
+    message = str(excinfo.value)
+    assert "stopped partway" in message
+    assert "may have been made" in message
+    assert "Do not retry" in message
+    assert "try again" not in message.lower()
+    assert "unavailable" not in message
+    # Exactly one write went out: conductor never resent it.
+    assert app.writes == ["add a task to pay rent"]
+
+
+def test_connect_error_keeps_the_unavailable_try_again_wording(
+    bound_context: DelegationContext,
+) -> None:
+    app = _FakeApp(refuse_connect=True)
+    build_delegate_tools(_fleet(), app.factory)
+
+    with pytest.raises(ToolError) as excinfo:
+        _ask("ask_tasks", "add a task to pay rent")
+
+    message = str(excinfo.value)
+    assert "unavailable right now" in message
+    assert "try again shortly" in message
+    assert app.writes == []
+
+
+def test_outcome_unknown_audits_its_error_class(bound_context: DelegationContext) -> None:
+    build_delegate_tools(_fleet(), _FakeApp(message_status=502).factory)
+
+    with structlog.testing.capture_logs() as logs:
+        with pytest.raises(ToolError):
+            _ask("ask_tasks", "add a task to pay rent")
+
+    events = [log for log in logs if log["event"] == "delegate_call"]
+    assert [event["error"] for event in events] == ["DelegateOutcomeUnknown"]
 
 
 def test_request_rejected_becomes_do_not_retry_tool_error(

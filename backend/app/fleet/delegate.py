@@ -15,8 +15,13 @@ can react precisely and no bare ``httpx`` exception ever escapes:
   recreates and retries exactly once.
 - :class:`DelegateRateLimited` (429) — carries ``Retry-After``; surfaced, never
   auto-retried.
-- :class:`DelegateUnavailable` — connect error, timeout, 503, or any 5xx
-  (a 502 is the app's own provider failing); the app is reported as down.
+- :class:`DelegateUnavailable` — the app never acted: a connect-phase error
+  (nothing was sent), a 503, or any 5xx/timeout on a request with no side
+  effects. Retrying is safe.
+- :class:`DelegateOutcomeUnknown` — a ``send_message`` that went out and then
+  failed (a 500/502/504, or a read timeout/drop). The app's run may have done
+  writes before dying (PCC and music persist the partial run and return 5xx),
+  so the result is unknown and a retry could duplicate them (#60).
 - :class:`DelegateRequestRejected` — any other 4xx (e.g. a 422 for a message
   the app's schema refuses): the request itself is invalid, so retrying the
   same input can never succeed.
@@ -39,6 +44,16 @@ from pydantic import BaseModel, ValidationError
 logger = structlog.get_logger(__name__)
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
+
+# Transport faults raised before any request bytes reach the app: a retry is
+# safe because the app cannot have acted. Every other transport fault (read
+# timeout, dropped connection, write error) may land after the app started.
+_NOT_SENT_ERRORS: tuple[type[httpx.HTTPError], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.UnsupportedProtocol,
+)
 
 # The actor conductor presents to every app agent. The app binds it as the
 # audit actor for all mutations in the run (in place of its default
@@ -68,7 +83,15 @@ class DelegateRateLimited(DelegateError):
 
 
 class DelegateUnavailable(DelegateError):
-    """No usable response: connect error, timeout, 503, or any 5xx."""
+    """The app didn't act: nothing was sent, a 503, or a failed side-effect-free call."""
+
+
+class DelegateOutcomeUnknown(DelegateError):
+    """A message went out and the run failed: the app may have acted partway.
+
+    Deliberately *not* a :class:`DelegateUnavailable` — nothing may treat it as
+    retry-safe.
+    """
 
 
 class DelegateRequestRejected(DelegateError):
@@ -177,6 +200,7 @@ class DelegateClient:
             "POST",
             f"/conversations/{conversation_id}/messages",
             json={"content": message},
+            may_have_acted=True,
         )
         return self._parse(response, MessageExchange)
 
@@ -189,16 +213,25 @@ class DelegateClient:
         """``DELETE /conversations/{id}`` — soft-delete/reset the thread (204)."""
         self._send("DELETE", f"/conversations/{conversation_id}")
 
-    def _send(self, method: str, path: str, *, json: Any = None) -> httpx.Response:
-        """One request with the actor header, mapping every fault to a typed error."""
+    def _send(
+        self, method: str, path: str, *, json: Any = None, may_have_acted: bool = False
+    ) -> httpx.Response:
+        """One request with the actor header, mapping every fault to a typed error.
+
+        ``may_have_acted`` marks a request whose handler runs the app's agent
+        (and so its writes): once it is sent, a failure is
+        :class:`DelegateOutcomeUnknown` rather than :class:`DelegateUnavailable`.
+        """
         url = f"{self._base_url}{path}"
         headers = {"X-Agent-Actor": self._actor}
         try:
             response = self._client.request(method, url, json=json, headers=headers)
         except httpx.HTTPError as exc:
-            # Connect error, timeout, or any other transport failure — no usable
-            # response, so the app is unavailable for this call.
             logger.warning("delegate_request_failed", url=url, error=str(exc))
+            if may_have_acted and not isinstance(exc, _NOT_SENT_ERRORS):
+                raise DelegateOutcomeUnknown(
+                    f"request to {url} failed after it was sent: {exc}"
+                ) from exc
             raise DelegateUnavailable(f"request to {url} failed: {exc}") from exc
 
         status = response.status_code
@@ -210,7 +243,12 @@ class DelegateClient:
                 retry_after=_parse_retry_after(response.headers.get("Retry-After")),
             )
         if status >= 500:
-            raise DelegateUnavailable(f"{method} {path} → {status}: {response.text[:300]}")
+            detail = f"{method} {path} → {status}: {response.text[:300]}"
+            # A 503 means the app turned the request away; any other 5xx on a
+            # run may follow writes the app already made (and persisted).
+            if may_have_acted and status != httpx.codes.SERVICE_UNAVAILABLE:
+                raise DelegateOutcomeUnknown(detail)
+            raise DelegateUnavailable(detail)
         if status >= 400:
             # A client error that isn't 404/429 (e.g. a 422 schema rejection).
             # The request is at fault, not the app — retrying it can't succeed.
