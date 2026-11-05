@@ -23,6 +23,9 @@ as it was written before the decision.
 9. Added: a code-built honest ack, barge-in and spoken corrections, situational
    context in the state block, memory you can see and edit, self-report from
    the ledger, and a persona in the narrator only.
+10. The UI is to be the most epic, futuristic thing you've seen: designed first
+    in Claude Design (concepts, design system, prototypes), then built as its
+    own track beside the phases. Visuals never run ahead of the receipts.
 
 ## TL;DR
 
