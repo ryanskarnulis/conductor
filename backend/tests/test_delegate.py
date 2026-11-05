@@ -15,6 +15,7 @@ import pytest
 from app.fleet.delegate import (
     CONDUCTOR_ACTOR,
     DelegateClient,
+    DelegateOutcomeUnknown,
     DelegateProtocolError,
     DelegateRateLimited,
     DelegateRequestRejected,
@@ -158,13 +159,38 @@ def test_429_without_retry_after_has_none() -> None:
     assert excinfo.value.retry_after is None
 
 
-@pytest.mark.parametrize("status", [500, 502, 503])
-def test_5xx_raises_unavailable(status: int) -> None:
+@pytest.mark.parametrize("status", [500, 502, 504])
+def test_5xx_on_send_message_raises_outcome_unknown(status: int) -> None:
+    # PCC and music persist a partial run and answer 500/502/504 when a run dies
+    # after its tools ran (#60): the app may have acted, so this is not "down".
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, text="boom")
+
+    with pytest.raises(DelegateOutcomeUnknown):
+        _client(handler).send_message(12, "hi")
+
+
+def test_outcome_unknown_is_not_an_unavailable() -> None:
+    # Nothing that treats DelegateUnavailable as retry-safe may catch it.
+    assert not issubclass(DelegateOutcomeUnknown, DelegateUnavailable)
+
+
+def test_503_on_send_message_raises_unavailable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="loading")
+
+    with pytest.raises(DelegateUnavailable):
+        _client(handler).send_message(12, "hi")
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_5xx_on_create_conversation_raises_unavailable(status: int) -> None:
+    # Creating an empty thread runs no agent: no writes to be unsure about.
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(status, text="boom")
 
     with pytest.raises(DelegateUnavailable):
-        _client(handler).send_message(12, "hi")
+        _client(handler).create_conversation()
 
 
 @pytest.mark.parametrize("status", [400, 422])
@@ -186,12 +212,46 @@ def test_connect_error_raises_unavailable() -> None:
         _client(handler).create_conversation()
 
 
-def test_timeout_raises_unavailable() -> None:
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.ConnectError("connection refused"),
+        httpx.ConnectTimeout("connect timed out"),
+        httpx.PoolTimeout("no free connection"),
+    ],
+)
+def test_not_sent_errors_on_send_message_raise_unavailable(error: httpx.HTTPError) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    with pytest.raises(DelegateUnavailable):
+        _client(handler).send_message(12, "hi")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.ReadTimeout("read timed out"),
+        httpx.ReadError("connection reset"),
+        httpx.RemoteProtocolError("server disconnected"),
+    ],
+)
+def test_after_send_errors_on_send_message_raise_outcome_unknown(
+    error: httpx.HTTPError,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    with pytest.raises(DelegateOutcomeUnknown):
+        _client(handler).send_message(12, "hi")
+
+
+def test_timeout_on_get_raises_unavailable() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("read timed out")
 
     with pytest.raises(DelegateUnavailable):
-        _client(handler).send_message(12, "hi")
+        _client(handler).get_conversation(12)
 
 
 def test_unparseable_body_raises_protocol_error() -> None:
