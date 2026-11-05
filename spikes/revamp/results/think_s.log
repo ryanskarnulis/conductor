@@ -1,0 +1,5 @@
+26b-think-v2s 0 ok   6.14s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-think-v2s 0 ok   8.81s cross-named-task: say=result ask:music:{"request": "download Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+26b-think-v2s 0 ok  12.40s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+26b-think-v2s 0 ok  10.02s cross-two-reads: say=result look:tasks:{} | look:music:{}
+26b-think-v2s 0 ok  10.63s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}

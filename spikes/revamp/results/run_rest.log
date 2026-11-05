@@ -1,0 +1,1281 @@
+12b 0 ok   1.70s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} Monday", "destructive": false}
+12b 0 ok   1.82s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b 0 inv  1.20s ho-two-reads: say=status look:music:{} | look:tasks:{}
+12b 0 ok   0.86s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b 0 ok   1.10s ho-amend: say=result amend::{"target": "music:job:17", "change": "limit the download to the first twenty songs"}
+12b 0 ok   0.92s ho-recall: say=result recall::{"query": "what do you remember about the fence project?"}
+12b 0 ok   0.47s ho-knowledge: say=knowledge 
+12b 0 ok   0.41s ho-decline-score: say=decline 
+12b 0 ok   1.01s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b 0 ok   0.84s ho-chess-last: say=result look:chess:{}
+12b 1 ok   1.65s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+12b 1 ok   1.86s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes like this: 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b 1 inv  1.08s ho-two-reads: say=knowledge look:music:{} | look:tasks:{}
+12b 1 ok   0.86s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b 1 ok   1.23s ho-amend: say=result amend::{"target": "music:job:17", "change": "change the playlist 'Road Trip' to only include the first twenty songs"}
+12b 1 ok   0.93s ho-recall: say=result recall::{"query": "what do you remember about the fence project?"}
+12b 1 ok   0.45s ho-knowledge: say=knowledge 
+12b 1 ok   0.39s ho-decline-score: say=decline 
+12b 1 ok   1.04s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b 1 ok   0.84s ho-chess-last: say=result look:chess:{}
+12b 2 ok   1.55s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} Monday", "destructive": false}
+12b 2 ok   1.87s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes like this: 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b 2 ok   1.08s ho-two-reads: say=result look:music:{} | look:tasks:{}
+12b 2 ok   0.84s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b 2 BAD  1.11s ho-amend: say=result ask:music:{"request": "make it the first twenty instead", "destructive": false}
+12b 2 ok   0.95s ho-recall: say=result recall::{"query": "what do you remember about the fence project?"}
+12b 2 ok   0.47s ho-knowledge: say=knowledge 
+12b 2 ok   0.39s ho-decline-score: say=decline 
+12b 2 ok   1.04s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b 2 inv  1.00s ho-chess-last: say=status look:chess:{}
+12b 3 ok   1.53s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} Monday", "destructive": false}
+12b 3 ok   1.87s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes like this: 'I can't do without you' and download it", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b 3 inv  1.25s ho-two-reads: say=status look:music:{} | look:tasks:{}
+12b 3 ok   0.87s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b 3 ok   1.23s ho-amend: say=result amend::{"target": "music:job:17", "change": "change the playlist 'Road Trip' to the first twenty songs"}
+12b 3 ok   0.96s ho-recall: say=result recall::{"query": "What do you remember about the fence project?"}
+12b 3 ok   0.45s ho-knowledge: say=knowledge 
+12b 3 ok   0.39s ho-decline-score: say=decline 
+12b 3 ok   1.04s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b 3 ok   0.88s ho-chess-last: say=result look:chess:{}
+12b 4 ok   1.64s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+12b 4 ok   1.91s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b 4 inv  1.26s ho-two-reads: say=status look:music:{} | look:tasks:{}
+12b 4 ok   0.85s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b 4 BAD  1.34s ho-amend: say=result ask:music:{"request": "change the playlist download to only the first twenty songs", "destructive": false}
+12b 4 ok   0.89s ho-recall: say=result recall::{"query": "what do you remember about the fence project?"}
+12b 4 ok   0.46s ho-knowledge: say=knowledge 
+12b 4 ok   0.38s ho-decline-score: say=decline 
+12b 4 ok   1.03s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b 4 ok   0.85s ho-chess-last: say=result look:chess:{}
+12b-v2 0 ok   0.43s tasks-due: say=result look:tasks:{}
+12b-v2 0 ok   0.55s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+12b-v2 0 ok   0.61s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+12b-v2 0 ok   0.54s chess-play: say=result open:chess:{"intent": "let's play chess"}
+12b-v2 0 ok   0.53s chess-move: say=result open:chess:{"intent": "play e4"}
+12b-v2 0 ok   0.38s chess-status: say=result look:chess:{}
+12b-v2 0 BAD  0.38s chess-analysis: say=result look:chess:{}
+12b-v2 0 ok   0.52s chess-reset: say=result open:chess:{"intent": "reset the chess game"}
+12b-v2 0 ok   0.49s chess-resign: say=result open:chess:{"intent": "resign the game"}
+12b-v2 0 ok   0.60s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+12b-v2 0 ok   0.55s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+12b-v2 0 ok   0.52s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+12b-v2 0 ok   0.47s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+12b-v2 0 ok   0.38s music-sort-ask: say=result look:music:{}
+12b-v2 0 ok   0.50s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+12b-v2 0 ok   0.27s refuse-lights: say=decline 
+12b-v2 0 ok   0.31s refuse-weather: say=decline 
+12b-v2 0 BAD  0.52s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false}
+12b-v2 0 ok   0.50s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+12b-v2 0 ok   0.50s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+12b-v2 0 BAD  0.40s local-capabilities: say=chat 
+12b-v2 0 ok   0.92s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort the album {s1} this weekend", "destructive": false}
+12b-v2 0 ok   1.35s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+12b-v2 0 ok   1.07s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "add a task for Sunday to sort {s1}", "destructive": false}
+12b-v2 0 ok   0.57s cross-two-reads: say=result look:tasks:{} | look:music:{}
+12b-v2 0 ok   0.88s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+12b-v2 0 ok   0.91s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+12b-v2 0 BAD  1.04s s15-same-again: say=result ask:music:{"request": "download their other album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-v2 0 ok   0.68s s6-that-song: say=result ask:music:{"request": "put the song \"Odessa\" by Caribou in the house folder", "destructive": false}
+12b-v2 0 ok   0.90s ref-task-from-song: say=result recall::{"query": "that Caribou song"} | ask:tasks:{"request": "add a task to make a party playlist with {s1}", "destructive": false}
+12b-v2 0 ok   0.62s s7-dennis: say=result ask:tasks:{"request": "push the Dentist appointment to Friday", "destructive": false}
+12b-v2 0 ok   1.62s ref-ambiguous: say=result ask_user::{"question": "Which dentist task should I push to Friday? \n1. Dentist appointment (due Wed)\n2. Call the dentist about the bill (due Thu)", "options": ["Dentist appointment", "Call the dentist about the bill"]} | ask:tasks:{"request": "push {s1} to Friday", "destructive": false}
+12b-v2 0 ok   0.42s s9-yes: say=result confirm::{"answer": "yes"}
+12b-v2 0 ok   0.38s s9-no: say=result confirm::{"answer": "no"}
+12b-v2 0 ok   0.46s s10-stop: say=result cancel::{"target": "music:job:31"}
+12b-v2 0 BAD  0.76s amend-job: say=result ask:music:{"request": "stop the current playlist download and download only the first ten songs from it", "destructive": true}
+12b-v2 0 ok   0.49s s11-undo: say=result undo::{"target": "last"}
+12b-v2 0 ok   0.50s s5-garage: say=result recall::{"query": "garage shelves"}
+12b-v2 0 ok   0.58s memory-caribou: say=result recall::{"query": "last time I downloaded something by Caribou"}
+12b-v2 0 ok   0.41s knowledge-egg: say=knowledge 
+12b-v2 0 ok   0.35s knowledge-capital: say=knowledge 
+12b-v2 0 ok   0.42s decline-news: say=decline 
+12b-v2 0 ok   2.03s s14-plan-week: say=result ask:tasks:{"request": "find the project called garage project and list all tasks associated with it", "destructive": false} | think::{"problem": "Based on the tasks from {s1}, propose a plan for the upcoming week (Thursday to next Wednesday) to complete the garage project, prioritizing what's urgent.", "inputs": ["s1"]}
+12b-v2 0 ok   0.43s status-now: say=self 
+12b-v2 0 BAD  0.40s status-last: say=knowledge 
+12b-v2 0 ok   0.24s chat-thanks: say=chat 
+12b-v2 0 ok   0.87s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} Monday", "destructive": false}
+12b-v2 0 ok   1.03s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b-v2 0 ok   0.58s ho-two-reads: say=result look:music:{} | look:tasks:{}
+12b-v2 0 ok   0.44s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b-v2 0 BAD  0.72s ho-amend: say=result ask:music:{"request": "make the 'Road Trip' playlist download only the first twenty songs instead", "destructive": true}
+12b-v2 0 ok   0.50s ho-recall: say=result recall::{"query": "fence project"}
+12b-v2 0 ok   0.39s ho-knowledge: say=knowledge 
+12b-v2 0 ok   0.27s ho-decline-score: say=decline 
+12b-v2 0 ok   0.51s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b-v2 0 ok   0.40s ho-chess-last: say=result look:chess:{}
+12b-v2 1 ok   0.39s tasks-due: say=result look:tasks:{}
+12b-v2 1 ok   0.52s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+12b-v2 1 ok   0.63s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+12b-v2 1 ok   0.54s chess-play: say=result open:chess:{"intent": "let's play chess"}
+12b-v2 1 ok   0.57s chess-move: say=result open:chess:{"intent": "move my pawn to e4"}
+12b-v2 1 ok   0.38s chess-status: say=result look:chess:{}
+12b-v2 1 BAD  0.39s chess-analysis: say=result look:chess:{}
+12b-v2 1 ok   0.54s chess-reset: say=result open:chess:{"intent": "reset the chess game"}
+12b-v2 1 ok   0.48s chess-resign: say=result open:chess:{"intent": "resign the game"}
+12b-v2 1 ok   0.62s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+12b-v2 1 ok   0.55s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+12b-v2 1 ok   0.52s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+12b-v2 1 ok   0.47s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+12b-v2 1 ok   0.39s music-sort-ask: say=result look:music:{}
+12b-v2 1 ok   0.51s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+12b-v2 1 ok   0.34s refuse-lights: say=decline 
+12b-v2 1 ok   0.35s refuse-weather: say=decline 
+12b-v2 1 BAD  0.52s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false}
+12b-v2 1 ok   0.51s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+12b-v2 1 ok   0.50s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+12b-v2 1 BAD  0.39s local-capabilities: say=knowledge 
+12b-v2 1 ok   0.97s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort the album from {s1} this weekend", "destructive": false}
+12b-v2 1 ok   1.35s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+12b-v2 1 ok   1.07s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+12b-v2 1 ok   0.91s cross-two-reads: say=result look:tasks:{} | look:music:{}
+12b-v2 1 ok   0.74s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+12b-v2 1 ok   0.89s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+12b-v2 1 BAD  1.47s s15-same-again: say=result ask:music:{"request": "what is my other album by Caribou?", "destructive": false} | ask:music:{"request": "download {s1}", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-v2 1 ok   0.68s s6-that-song: say=result ask:music:{"request": "put the song \"Odessa\" by Caribou in the house folder", "destructive": false}
+12b-v2 1 ok   0.91s ref-task-from-song: say=result recall::{"query": "that Caribou song"} | ask:tasks:{"request": "add a task to make a party playlist with {s1}", "destructive": false}
+12b-v2 1 ok   0.60s s7-dennis: say=result ask:tasks:{"request": "push the Dentist appointment to Friday", "destructive": false}
+12b-v2 1 ok   1.27s ref-ambiguous: say=result ask_user::{"question": "Which dentist task should I move to Friday?", "options": ["Dentist appointment", "Call the dentist about the bill"]} | ask:tasks:{"request": "push {s1} to Friday", "destructive": false}
+12b-v2 1 ok   0.42s s9-yes: say=result confirm::{"answer": "yes"}
+12b-v2 1 ok   0.42s s9-no: say=result confirm::{"answer": "no"}
+12b-v2 1 ok   0.46s s10-stop: say=result cancel::{"target": "music:job:31"}
+12b-v2 1 ok   0.63s amend-job: say=result amend::{"target": "music:job:17", "change": "only download the first ten songs"}
+12b-v2 1 ok   0.49s s11-undo: say=result undo::{"target": "last"}
+12b-v2 1 ok   0.54s s5-garage: say=result recall::{"query": "what did we decide about the garage shelves last week?"}
+12b-v2 1 ok   0.52s memory-caribou: say=result recall::{"query": "When did I last download something by Caribou?"}
+12b-v2 1 ok   0.39s knowledge-egg: say=knowledge 
+12b-v2 1 ok   0.34s knowledge-capital: say=knowledge 
+12b-v2 1 BAD  0.46s decline-news: say=knowledge 
+12b-v2 1 ok   0.89s s14-plan-week: say=result think::{"problem": "Plan the person's week around the garage project based on existing tasks and project status.", "inputs": []}
+12b-v2 1 ok   0.44s status-now: say=self 
+12b-v2 1 BAD  0.45s status-last: say=chat 
+12b-v2 1 ok   0.26s chat-thanks: say=chat 
+12b-v2 1 ok   0.89s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} Monday", "destructive": false}
+12b-v2 1 ok   1.03s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b-v2 1 ok   0.91s ho-two-reads: say=result look:music:{} | look:tasks:{}
+12b-v2 1 ok   0.44s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b-v2 1 BAD  0.66s ho-amend: say=result ask:music:{"request": "change the playlist 'Road Trip' to only include the first twenty songs", "destructive": false}
+12b-v2 1 ok   0.52s ho-recall: say=result recall::{"query": "fence project"}
+12b-v2 1 ok   0.42s ho-knowledge: say=knowledge 
+12b-v2 1 ok   0.29s ho-decline-score: say=decline 
+12b-v2 1 ok   0.51s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b-v2 1 ok   0.40s ho-chess-last: say=result look:chess:{}
+12b-v2 2 ok   0.39s tasks-due: say=result look:tasks:{}
+12b-v2 2 ok   0.51s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+12b-v2 2 ok   0.63s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+12b-v2 2 ok   0.52s chess-play: say=result open:chess:{"intent": "let's play chess"}
+12b-v2 2 ok   0.60s chess-move: say=result open:chess:{"intent": "move my pawn to e4"}
+12b-v2 2 ok   0.37s chess-status: say=result look:chess:{}
+12b-v2 2 BAD  0.40s chess-analysis: say=result look:chess:{}
+12b-v2 2 ok   0.52s chess-reset: say=result open:chess:{"intent": "reset the chess game"}
+12b-v2 2 ok   0.48s chess-resign: say=result open:chess:{"intent": "resign the game"}
+12b-v2 2 ok   0.60s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+12b-v2 2 ok   0.55s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+12b-v2 2 ok   0.52s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+12b-v2 2 ok   0.47s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+12b-v2 2 ok   0.37s music-sort-ask: say=result look:music:{}
+12b-v2 2 ok   0.51s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+12b-v2 2 ok   0.31s refuse-lights: say=decline 
+12b-v2 2 ok   0.33s refuse-weather: say=decline 
+12b-v2 2 BAD  0.52s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false}
+12b-v2 2 ok   0.50s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+12b-v2 2 ok   0.51s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+12b-v2 2 ok   0.26s local-capabilities: say=self 
+12b-v2 2 ok   0.88s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-v2 2 ok   1.35s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+12b-v2 2 ok   1.07s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+12b-v2 2 ok   0.57s cross-two-reads: say=result look:tasks:{} | look:music:{}
+12b-v2 2 ok   0.74s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+12b-v2 2 ok   0.89s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+12b-v2 2 ok   1.04s s15-same-again: say=result ask:music:{"request": "download the other album by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-v2 2 ok   0.64s s6-that-song: say=result ask:music:{"request": "put the Caribou song 'Odessa' in the house folder", "destructive": false}
+12b-v2 2 ok   0.98s ref-task-from-song: say=result recall::{"query": "the Caribou song from the recent music activity"} | ask:tasks:{"request": "add a task to make a party playlist with {s1}", "destructive": false}
+12b-v2 2 ok   0.60s s7-dennis: say=result ask:tasks:{"request": "push the Dentist appointment to Friday", "destructive": false}
+12b-v2 2 ok   1.72s ref-ambiguous: say=result ask_user::{"question": "Which dentist task should I move to Friday: 'Dentist appointment' (originally due Wednesday) or 'Call the dentist about the bill' (due today)?", "options": ["Dentist appointment", "Call the dentist about the bill"]} | ask:tasks:{"request": "push the {s1} to Friday", "destructive": false}
+12b-v2 2 ok   0.43s s9-yes: say=result confirm::{"answer": "yes"}
+12b-v2 2 ok   0.40s s9-no: say=result confirm::{"answer": "no"}
+12b-v2 2 ok   0.45s s10-stop: say=result cancel::{"target": "music:job:31"}
+12b-v2 2 ok   0.63s amend-job: say=result amend::{"target": "music:job:17", "change": "only download the first ten songs"}
+12b-v2 2 ok   0.49s s11-undo: say=result undo::{"target": "last"}
+12b-v2 2 ok   0.64s s5-garage: say=result recall::{"query": "decisions about garage shelves from last week"}
+12b-v2 2 ok   0.72s memory-caribou: say=result ask:music:{"request": "find the last time I downloaded a song by Caribou", "destructive": false}
+12b-v2 2 ok   0.37s knowledge-egg: say=knowledge 
+12b-v2 2 ok   0.34s knowledge-capital: say=knowledge 
+12b-v2 2 ok   0.43s decline-news: say=decline 
+12b-v2 2 inv  3.07s s14-plan-week: say=result ask:tasks:{"request": "find the garage project and its tasks", "destructive": false} | think::{"problem": "based on the garage project tasks found in {s1}, create a plan for the upcoming week (starting tomorrow) and suggest which tasks to prioritize each day.", "inputs": ["s1"]} | ask_user::{"question": "Would you like me to schedule these tasks into your calendar for the week?", "optio
+12b-v2 2 ok   0.45s status-now: say=self 
+12b-v2 2 BAD  0.42s status-last: say=knowledge 
+12b-v2 2 ok   0.27s chat-thanks: say=chat 
+12b-v2 2 ok   0.89s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+12b-v2 2 ok   1.02s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b-v2 2 ok   0.57s ho-two-reads: say=result look:music:{} | look:tasks:{}
+12b-v2 2 ok   0.46s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b-v2 2 ok   0.69s ho-amend: say=result amend::{"target": "music:job:17", "change": "change the download to the first twenty songs instead of the full playlist"}
+12b-v2 2 ok   0.51s ho-recall: say=result recall::{"query": "fence project"}
+12b-v2 2 ok   0.41s ho-knowledge: say=knowledge 
+12b-v2 2 ok   0.28s ho-decline-score: say=decline 
+12b-v2 2 ok   0.50s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b-v2 2 ok   0.40s ho-chess-last: say=result look:chess:{}
+12b-v2 3 ok   0.39s tasks-due: say=result look:tasks:{}
+12b-v2 3 ok   0.51s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+12b-v2 3 ok   0.40s tasks-week: say=result look:tasks:{}
+12b-v2 3 ok   0.54s chess-play: say=result open:chess:{"intent": "let's play chess"}
+12b-v2 3 ok   0.57s chess-move: say=result open:chess:{"intent": "move e4"}
+12b-v2 3 ok   0.37s chess-status: say=result look:chess:{}
+12b-v2 3 BAD  0.39s chess-analysis: say=result look:chess:{}
+12b-v2 3 ok   0.52s chess-reset: say=result open:chess:{"intent": "reset the chess game"}
+12b-v2 3 ok   0.48s chess-resign: say=result open:chess:{"intent": "resign the game"}
+12b-v2 3 ok   0.60s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+12b-v2 3 ok   0.55s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+12b-v2 3 ok   0.52s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+12b-v2 3 ok   0.49s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+12b-v2 3 ok   0.38s music-sort-ask: say=result look:music:{}
+12b-v2 3 ok   0.52s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+12b-v2 3 ok   0.31s refuse-lights: say=decline 
+12b-v2 3 BAD  0.40s refuse-weather: say=knowledge 
+12b-v2 3 BAD  0.52s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false}
+12b-v2 3 ok   0.52s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+12b-v2 3 ok   0.51s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+12b-v2 3 BAD  0.37s local-capabilities: say=knowledge 
+12b-v2 3 ok   0.90s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort the {s1} this weekend", "destructive": false}
+12b-v2 3 ok   0.97s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+12b-v2 3 ok   1.11s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "add a task for Sunday to sort the playlist from {s1}", "destructive": false}
+12b-v2 3 ok   0.91s cross-two-reads: say=result look:tasks:{} | look:music:{}
+12b-v2 3 ok   0.76s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+12b-v2 3 ok   0.89s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+12b-v2 3 BAD  1.52s s15-same-again: say=result ask:music:{"request": "what is my other album by Caribou?", "destructive": false} | ask:music:{"request": "download the album {s1}", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-v2 3 ok   0.98s s6-that-song: say=result ask:music:{"request": "put the song \"Odessa\" by Caribou in the house folder", "destructive": false}
+12b-v2 3 ok   0.98s ref-task-from-song: say=result recall::{"query": "the Caribou song mentioned in the recent music history"} | ask:tasks:{"request": "add a task to make a party playlist with {s1}", "destructive": false}
+12b-v2 3 ok   0.60s s7-dennis: say=result ask:tasks:{"request": "push the Dentist appointment to Friday", "destructive": false}
+12b-v2 3 ok   1.53s ref-ambiguous: say=result ask_user::{"question": "Which dentist task should I push to Friday: 'Dentist appointment' or 'Call the dentist about the bill'?", "options": ["Dentist appointment", "Call the dentist about the bill"]} | ask:tasks:{"request": "push {s1} to friday", "destructive": false}
+12b-v2 3 ok   0.43s s9-yes: say=result confirm::{"answer": "yes"}
+12b-v2 3 ok   0.42s s9-no: say=result confirm::{"answer": "no"}
+12b-v2 3 ok   0.44s s10-stop: say=result cancel::{"target": "music:job:31"}
+12b-v2 3 ok   0.69s amend-job: say=result amend::{"target": "music:job:17", "change": "download only the first ten songs instead of the whole playlist"}
+12b-v2 3 ok   0.53s s11-undo: say=result undo::{"target": "pcc:task:301"}
+12b-v2 3 ok   0.54s s5-garage: say=result recall::{"query": "what did we decide about the garage shelves last week?"}
+12b-v2 3 ok   0.57s memory-caribou: say=result ask:music:{"request": "when did I last download something by Caribou?", "destructive": false}
+12b-v2 3 ok   0.39s knowledge-egg: say=knowledge 
+12b-v2 3 ok   0.34s knowledge-capital: say=knowledge 
+12b-v2 3 BAD  0.46s decline-news: say=knowledge 
+12b-v2 3 ok   1.25s s14-plan-week: say=result ask:tasks:{"request": "find all tasks and projects related to the garage project", "destructive": false} | think::{"problem": "plan my week around the garage project using the tasks found in {s1}", "inputs": ["s1"]}
+12b-v2 3 ok   0.43s status-now: say=self 
+12b-v2 3 BAD  0.48s status-last: say=chat 
+12b-v2 3 ok   0.27s chat-thanks: say=chat 
+12b-v2 3 ok   1.30s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+12b-v2 3 ok   1.02s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b-v2 3 ok   0.91s ho-two-reads: say=result look:music:{} | look:tasks:{}
+12b-v2 3 ok   0.44s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b-v2 3 ok   0.73s ho-amend: say=result amend::{"target": "music:job:17", "change": "change the download to the first twenty songs instead of the whole playlist"}
+12b-v2 3 ok   0.51s ho-recall: say=result recall::{"query": "what do you remember about the fence project?"}
+12b-v2 3 ok   0.43s ho-knowledge: say=knowledge 
+12b-v2 3 BAD  0.39s ho-decline-score: say=knowledge 
+12b-v2 3 ok   0.50s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b-v2 3 ok   0.39s ho-chess-last: say=result look:chess:{}
+12b-v2 4 ok   0.37s tasks-due: say=result look:tasks:{}
+12b-v2 4 ok   0.52s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+12b-v2 4 ok   0.61s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+12b-v2 4 ok   0.50s chess-play: say=result open:chess:{"intent": "let's play chess"}
+12b-v2 4 ok   0.59s chess-move: say=result open:chess:{"intent": "move my pawn to e4"}
+12b-v2 4 ok   0.38s chess-status: say=result look:chess:{}
+12b-v2 4 BAD  0.57s chess-analysis: say=result look:chess:{}
+12b-v2 4 ok   0.52s chess-reset: say=result open:chess:{"intent": "reset the chess game"}
+12b-v2 4 ok   0.48s chess-resign: say=result open:chess:{"intent": "resign the game"}
+12b-v2 4 ok   0.62s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+12b-v2 4 ok   0.55s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+12b-v2 4 ok   0.51s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+12b-v2 4 ok   0.47s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+12b-v2 4 ok   0.38s music-sort-ask: say=result look:music:{}
+12b-v2 4 ok   0.51s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+12b-v2 4 ok   0.33s refuse-lights: say=decline 
+12b-v2 4 BAD  0.39s refuse-weather: say=knowledge 
+12b-v2 4 BAD  0.52s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false}
+12b-v2 4 ok   0.51s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+12b-v2 4 ok   0.51s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+12b-v2 4 BAD  0.39s local-capabilities: say=knowledge 
+12b-v2 4 ok   0.88s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-v2 4 ok   1.01s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task for tomorrow to put {s1} on the party playlist", "destructive": false}
+12b-v2 4 ok   1.17s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "add a task for Sunday to sort the playlist downloaded in {s1}", "destructive": false}
+12b-v2 4 ok   0.91s cross-two-reads: say=result look:tasks:{} | look:music:{}
+12b-v2 4 ok   0.74s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+12b-v2 4 ok   0.89s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+12b-v2 4 ok   1.04s s15-same-again: say=result ask:music:{"request": "download their other album by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-v2 4 ok   0.68s s6-that-song: say=result ask:music:{"request": "put the song \"Odessa\" by Caribou in the house folder", "destructive": false}
+12b-v2 4 ok   1.03s ref-task-from-song: say=result recall::{"query": "what is the Caribou song mentioned recently?"} | ask:tasks:{"request": "add a task to make a party playlist with the song {s1}", "destructive": false}
+12b-v2 4 ok   0.56s s7-dennis: say=result ask:tasks:{"request": "push the dentist appointment to Friday", "destructive": false}
+12b-v2 4 ok   1.61s ref-ambiguous: say=result ask_user::{"question": "Which dentist task should I push to Friday: 'Dentist appointment' (due Wed) or 'Call the dentist about the bill' (due Thu)?", "options": ["Dentist appointment", "Call the dentist about the bill"]} | ask:tasks:{"request": "push {s1} to Friday", "destructive": false}
+12b-v2 4 ok   0.43s s9-yes: say=result confirm::{"answer": "yes"}
+12b-v2 4 ok   0.40s s9-no: say=result confirm::{"answer": "no"}
+12b-v2 4 ok   0.45s s10-stop: say=result cancel::{"target": "music:job:31"}
+12b-v2 4 BAD  0.67s amend-job: say=result ask:music:{"request": "grab the first ten songs from the 'Road Trip' playlist", "destructive": false}
+12b-v2 4 ok   0.49s s11-undo: say=result undo::{"target": "last"}
+12b-v2 4 ok   0.63s s5-garage: say=result recall::{"query": "decisions about garage shelves last week"}
+12b-v2 4 ok   0.58s memory-caribou: say=result ask:music:{"request": "when did I last download something by Caribou?", "destructive": false}
+12b-v2 4 ok   0.43s knowledge-egg: say=knowledge 
+12b-v2 4 ok   0.33s knowledge-capital: say=knowledge 
+12b-v2 4 BAD  0.46s decline-news: say=knowledge 
+12b-v2 4 ok   1.62s s14-plan-week: say=result ask:tasks:{"request": "find the garage project and show me the current tasks and timeline", "destructive": false} | think::{"problem": "based on the garage project details from {s1}, plan a weekly schedule for the user to complete the work, identifying key focus areas for each day.", "inputs": ["s1"]}
+12b-v2 4 ok   0.45s status-now: say=self 
+12b-v2 4 BAD  0.40s status-last: say=knowledge 
+12b-v2 4 ok   0.25s chat-thanks: say=chat 
+12b-v2 4 ok   1.31s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+12b-v2 4 ok   1.07s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you' and download it", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b-v2 4 ok   0.56s ho-two-reads: say=result look:music:{} | look:tasks:{}
+12b-v2 4 ok   0.45s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b-v2 4 BAD  0.75s ho-amend: say=result ask:music:{"request": "change the current download job to only the first twenty songs instead of the whole playlist", "destructive": false}
+12b-v2 4 ok   0.65s ho-recall: say=result recall::{"query": "What information is there about the fence project?"}
+12b-v2 4 ok   0.39s ho-knowledge: say=knowledge 
+12b-v2 4 ok   0.28s ho-decline-score: say=decline 
+12b-v2 4 ok   0.51s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b-v2 4 ok   0.40s ho-chess-last: say=result look:chess:{}
+12b-t03-v2 0 ok   0.43s tasks-due: say=result look:tasks:{}
+12b-t03-v2 0 ok   0.55s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+12b-t03-v2 0 ok   0.61s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+12b-t03-v2 0 ok   0.52s chess-play: say=result open:chess:{"intent": "let's play chess"}
+12b-t03-v2 0 ok   0.60s chess-move: say=result open:chess:{"intent": "move my pawn to e4"}
+12b-t03-v2 0 ok   0.39s chess-status: say=result look:chess:{}
+12b-t03-v2 0 BAD  0.38s chess-analysis: say=result look:chess:{}
+12b-t03-v2 0 ok   0.52s chess-reset: say=result open:chess:{"intent": "reset the chess game"}
+12b-t03-v2 0 ok   0.50s chess-resign: say=result open:chess:{"intent": "resign the game"}
+12b-t03-v2 0 ok   0.60s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+12b-t03-v2 0 ok   0.55s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+12b-t03-v2 0 ok   0.52s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+12b-t03-v2 0 ok   0.47s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+12b-t03-v2 0 ok   0.39s music-sort-ask: say=result look:music:{}
+12b-t03-v2 0 ok   0.51s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+12b-t03-v2 0 ok   0.27s refuse-lights: say=decline 
+12b-t03-v2 0 BAD  0.39s refuse-weather: say=knowledge 
+12b-t03-v2 0 BAD  0.52s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false}
+12b-t03-v2 0 ok   0.51s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+12b-t03-v2 0 ok   0.51s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+12b-t03-v2 0 ok   0.40s local-capabilities: say=self 
+12b-t03-v2 0 ok   0.88s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-t03-v2 0 ok   0.97s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+12b-t03-v2 0 ok   1.07s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+12b-t03-v2 0 ok   0.56s cross-two-reads: say=result look:tasks:{} | look:music:{}
+12b-t03-v2 0 ok   0.74s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+12b-t03-v2 0 ok   0.89s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+12b-t03-v2 0 BAD  1.04s s15-same-again: say=result ask:music:{"request": "download their other album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-t03-v2 0 ok   0.68s s6-that-song: say=result ask:music:{"request": "put the song \"Odessa\" by Caribou in the house folder", "destructive": false}
+12b-t03-v2 0 ok   0.98s ref-task-from-song: say=result recall::{"query": "the Caribou song mentioned in recent things"} | ask:tasks:{"request": "add a task to make a party playlist with {s1}", "destructive": false}
+12b-t03-v2 0 ok   0.60s s7-dennis: say=result ask:tasks:{"request": "push the Dentist appointment to Friday", "destructive": false}
+12b-t03-v2 0 ok   1.57s ref-ambiguous: say=result ask_user::{"question": "Which dentist task should I move to Friday? \n1. Dentist appointment (due Wed)\n2. Call the dentist about the bill (due Thu)", "options": ["Dentist appointment", "Call the dentist about the bill"]} | ask:tasks:{"request": "push {s1} to Friday", "destructive": false}
+12b-t03-v2 0 ok   0.43s s9-yes: say=result confirm::{"answer": "yes"}
+12b-t03-v2 0 ok   0.40s s9-no: say=result confirm::{"answer": "no"}
+12b-t03-v2 0 ok   0.45s s10-stop: say=result cancel::{"target": "music:job:31"}
+12b-t03-v2 0 ok   0.63s amend-job: say=result amend::{"target": "music:job:17", "change": "only download the first ten songs"}
+12b-t03-v2 0 ok   0.49s s11-undo: say=result undo::{"target": "last"}
+12b-t03-v2 0 ok   0.54s s5-garage: say=result recall::{"query": "what did we decide about the garage shelves last week?"}
+12b-t03-v2 0 ok   0.52s memory-caribou: say=result recall::{"query": "when did I last download something by Caribou?"}
+12b-t03-v2 0 ok   0.39s knowledge-egg: say=knowledge 
+12b-t03-v2 0 ok   0.34s knowledge-capital: say=knowledge 
+12b-t03-v2 0 BAD  0.43s decline-news: say=knowledge 
+12b-t03-v2 0 BAD  1.39s s14-plan-week: say=result ask:tasks:{"request": "find the garage project and its tasks", "destructive": false} | think::{"problem": "plan my week around the garage project based on the tasks found in {s1}", "inputs": ["s1"]} | ask:tasks:{"request": "schedule the planned tasks for the upcoming week", "destructive": false}
+12b-t03-v2 0 ok   0.45s status-now: say=self 
+12b-t03-v2 0 BAD  0.47s status-last: say=chat 
+12b-t03-v2 0 ok   0.25s chat-thanks: say=chat 
+12b-t03-v2 0 ok   0.88s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} Monday", "destructive": false}
+12b-t03-v2 0 ok   1.13s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you' and download it", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b-t03-v2 0 ok   0.57s ho-two-reads: say=result look:music:{} | look:tasks:{}
+12b-t03-v2 0 ok   0.45s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b-t03-v2 0 ok   0.70s ho-amend: say=result amend::{"target": "music:job:17", "change": "change the download limit to the first twenty songs instead of the whole playlist"}
+12b-t03-v2 0 ok   0.53s ho-recall: say=result recall::{"query": "fence project"}
+12b-t03-v2 0 ok   0.39s ho-knowledge: say=knowledge 
+12b-t03-v2 0 ok   0.28s ho-decline-score: say=decline 
+12b-t03-v2 0 ok   0.50s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b-t03-v2 0 ok   0.40s ho-chess-last: say=result look:chess:{}
+12b-t03-v2 1 ok   0.38s tasks-due: say=result look:tasks:{}
+12b-t03-v2 1 ok   0.51s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+12b-t03-v2 1 ok   0.61s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+12b-t03-v2 1 ok   0.54s chess-play: say=result open:chess:{"intent": "let's play chess"}
+12b-t03-v2 1 ok   0.57s chess-move: say=result open:chess:{"intent": "move my pawn to e4"}
+12b-t03-v2 1 ok   0.38s chess-status: say=result look:chess:{}
+12b-t03-v2 1 BAD  0.38s chess-analysis: say=result look:chess:{}
+12b-t03-v2 1 ok   0.52s chess-reset: say=result open:chess:{"intent": "reset the chess game"}
+12b-t03-v2 1 ok   0.48s chess-resign: say=result open:chess:{"intent": "resign the game"}
+12b-t03-v2 1 ok   0.60s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+12b-t03-v2 1 ok   0.55s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+12b-t03-v2 1 ok   0.52s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+12b-t03-v2 1 ok   0.47s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+12b-t03-v2 1 ok   0.38s music-sort-ask: say=result look:music:{}
+12b-t03-v2 1 ok   0.51s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+12b-t03-v2 1 ok   0.31s refuse-lights: say=decline 
+12b-t03-v2 1 BAD  0.40s refuse-weather: say=knowledge 
+12b-t03-v2 1 BAD  0.52s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false}
+12b-t03-v2 1 ok   0.50s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+12b-t03-v2 1 ok   0.51s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+12b-t03-v2 1 ok   0.27s local-capabilities: say=self 
+12b-t03-v2 1 ok   0.88s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-t03-v2 1 ok   0.97s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+12b-t03-v2 1 ok   1.07s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+12b-t03-v2 1 ok   0.91s cross-two-reads: say=result look:tasks:{} | look:music:{}
+12b-t03-v2 1 ok   1.20s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+12b-t03-v2 1 ok   0.89s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+12b-t03-v2 1 BAD  1.04s s15-same-again: say=result ask:music:{"request": "download their other album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-t03-v2 1 ok   0.68s s6-that-song: say=result ask:music:{"request": "put the song \"Odessa\" by Caribou in the house folder", "destructive": false}
+12b-t03-v2 1 ok   0.94s ref-task-from-song: say=result recall::{"query": "the Caribou song from the recent things"} | ask:tasks:{"request": "add a task to make a party playlist with {s1}", "destructive": false}
+12b-t03-v2 1 ok   0.60s s7-dennis: say=result ask:tasks:{"request": "push the Dentist appointment to Friday", "destructive": false}
+12b-t03-v2 1 ok   1.57s ref-ambiguous: say=result ask_user::{"question": "Which dentist task should I move to Friday: 'Dentist appointment' (due Wed) or 'Call the dentist about the bill' (due Thu)?", "options": ["Dentist appointment", "Call the dentist about the bill"]} | ask:tasks:{"request": "push the {s1} to Friday", "destructive": false}
+12b-t03-v2 1 ok   0.43s s9-yes: say=result confirm::{"answer": "yes"}
+12b-t03-v2 1 ok   0.40s s9-no: say=result confirm::{"answer": "no"}
+12b-t03-v2 1 ok   0.45s s10-stop: say=result cancel::{"target": "music:job:31"}
+12b-t03-v2 1 ok   0.63s amend-job: say=result amend::{"target": "music:job:17", "change": "only download the first ten songs"}
+12b-t03-v2 1 ok   0.49s s11-undo: say=result undo::{"target": "last"}
+12b-t03-v2 1 ok   0.53s s5-garage: say=result recall::{"query": "what did we decide about the garage shelves last week?"}
+12b-t03-v2 1 ok   0.52s memory-caribou: say=result recall::{"query": "when did I last download something by Caribou?"}
+12b-t03-v2 1 ok   0.39s knowledge-egg: say=knowledge 
+12b-t03-v2 1 ok   0.34s knowledge-capital: say=knowledge 
+12b-t03-v2 1 BAD  0.43s decline-news: say=knowledge 
+12b-t03-v2 1 ok   1.03s s14-plan-week: say=result ask:tasks:{"request": "find the garage project and its tasks", "destructive": false} | think::{"problem": "plan my week around the garage project", "inputs": ["s1"]}
+12b-t03-v2 1 ok   0.45s status-now: say=self 
+12b-t03-v2 1 BAD  0.48s status-last: say=chat 
+12b-t03-v2 1 ok   0.25s chat-thanks: say=chat 
+12b-t03-v2 1 ok   0.88s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+12b-t03-v2 1 ok   1.07s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you' and download it", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b-t03-v2 1 ok   0.57s ho-two-reads: say=result look:music:{} | look:tasks:{}
+12b-t03-v2 1 ok   0.44s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b-t03-v2 1 ok   0.66s ho-amend: say=result amend::{"target": "music:job:17", "change": "change the playlist to only the first twenty songs"}
+12b-t03-v2 1 ok   0.50s ho-recall: say=result recall::{"query": "fence project"}
+12b-t03-v2 1 ok   0.39s ho-knowledge: say=knowledge 
+12b-t03-v2 1 ok   0.37s ho-decline-score: say=decline 
+12b-t03-v2 1 ok   0.51s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b-t03-v2 1 ok   0.40s ho-chess-last: say=result look:chess:{}
+12b-t03-v2 2 ok   0.38s tasks-due: say=result look:tasks:{}
+12b-t03-v2 2 ok   0.51s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+12b-t03-v2 2 ok   0.61s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+12b-t03-v2 2 ok   0.54s chess-play: say=result open:chess:{"intent": "let's play chess"}
+12b-t03-v2 2 ok   0.58s chess-move: say=result open:chess:{"intent": "move my pawn to e4"}
+12b-t03-v2 2 ok   0.39s chess-status: say=result look:chess:{}
+12b-t03-v2 2 BAD  0.39s chess-analysis: say=result look:chess:{}
+12b-t03-v2 2 ok   0.52s chess-reset: say=result open:chess:{"intent": "reset the chess game"}
+12b-t03-v2 2 ok   0.48s chess-resign: say=result open:chess:{"intent": "resign the game"}
+12b-t03-v2 2 ok   0.60s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+12b-t03-v2 2 ok   0.56s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+12b-t03-v2 2 ok   0.52s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+12b-t03-v2 2 ok   0.49s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+12b-t03-v2 2 ok   0.39s music-sort-ask: say=result look:music:{}
+12b-t03-v2 2 ok   0.51s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+12b-t03-v2 2 ok   0.31s refuse-lights: say=decline 
+12b-t03-v2 2 BAD  0.39s refuse-weather: say=knowledge 
+12b-t03-v2 2 BAD  0.52s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false}
+12b-t03-v2 2 ok   0.50s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+12b-t03-v2 2 ok   0.51s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+12b-t03-v2 2 BAD  0.37s local-capabilities: say=knowledge 
+12b-t03-v2 2 ok   0.88s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-t03-v2 2 ok   0.97s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+12b-t03-v2 2 ok   1.07s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+12b-t03-v2 2 ok   0.56s cross-two-reads: say=result look:tasks:{} | look:music:{}
+12b-t03-v2 2 ok   0.74s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+12b-t03-v2 2 ok   0.89s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+12b-t03-v2 2 BAD  1.04s s15-same-again: say=result ask:music:{"request": "download their other album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-t03-v2 2 ok   0.68s s6-that-song: say=result ask:music:{"request": "put the song \"Odessa\" by Caribou in the house folder", "destructive": false}
+12b-t03-v2 2 ok   0.98s ref-task-from-song: say=result recall::{"query": "the Caribou song from the recent music history"} | ask:tasks:{"request": "add a task to make a party playlist with {s1}", "destructive": false}
+12b-t03-v2 2 ok   0.60s s7-dennis: say=result ask:tasks:{"request": "push the Dentist appointment to Friday", "destructive": false}
+12b-t03-v2 2 ok   1.57s ref-ambiguous: say=result ask_user::{"question": "Which dentist task should I move to Friday? \n1. Dentist appointment (due Wed)\n2. Call the dentist about the bill (due Thu)", "options": ["Dentist appointment", "Call the dentist about the bill"]} | ask:tasks:{"request": "push {s1} to Friday", "destructive": false}
+12b-t03-v2 2 ok   0.43s s9-yes: say=result confirm::{"answer": "yes"}
+12b-t03-v2 2 ok   0.40s s9-no: say=result confirm::{"answer": "no"}
+12b-t03-v2 2 ok   0.45s s10-stop: say=result cancel::{"target": "music:job:31"}
+12b-t03-v2 2 ok   0.63s amend-job: say=result amend::{"target": "music:job:17", "change": "only download the first ten songs"}
+12b-t03-v2 2 ok   0.49s s11-undo: say=result undo::{"target": "last"}
+12b-t03-v2 2 ok   0.54s s5-garage: say=result recall::{"query": "what did we decide about the garage shelves last week?"}
+12b-t03-v2 2 ok   0.52s memory-caribou: say=result recall::{"query": "when did I last download something by Caribou?"}
+12b-t03-v2 2 ok   0.39s knowledge-egg: say=knowledge 
+12b-t03-v2 2 ok   0.35s knowledge-capital: say=knowledge 
+12b-t03-v2 2 BAD  0.43s decline-news: say=knowledge 
+12b-t03-v2 2 ok   0.98s s14-plan-week: say=result ask:tasks:{"request": "find the garage project and its tasks", "destructive": false} | think::{"problem": "plan my week around the garage project", "inputs": ["s1"]}
+12b-t03-v2 2 ok   0.45s status-now: say=self 
+12b-t03-v2 2 BAD  0.42s status-last: say=knowledge 
+12b-t03-v2 2 ok   0.25s chat-thanks: say=chat 
+12b-t03-v2 2 ok   0.88s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+12b-t03-v2 2 ok   1.07s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you' and download it", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b-t03-v2 2 ok   0.57s ho-two-reads: say=result look:music:{} | look:tasks:{}
+12b-t03-v2 2 ok   0.45s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b-t03-v2 2 ok   0.66s ho-amend: say=result amend::{"target": "music:job:17", "change": "change the playlist to only the first twenty songs"}
+12b-t03-v2 2 ok   0.51s ho-recall: say=result recall::{"query": "what do you remember about the fence project?"}
+12b-t03-v2 2 ok   0.39s ho-knowledge: say=knowledge 
+12b-t03-v2 2 ok   0.37s ho-decline-score: say=decline 
+12b-t03-v2 2 ok   0.51s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b-t03-v2 2 ok   0.39s ho-chess-last: say=result look:chess:{}
+12b-t03-v2 3 ok   0.39s tasks-due: say=result look:tasks:{}
+12b-t03-v2 3 ok   0.51s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+12b-t03-v2 3 ok   0.61s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+12b-t03-v2 3 ok   0.54s chess-play: say=result open:chess:{"intent": "let's play chess"}
+12b-t03-v2 3 ok   0.57s chess-move: say=result open:chess:{"intent": "move my pawn to e4"}
+12b-t03-v2 3 ok   0.38s chess-status: say=result look:chess:{}
+12b-t03-v2 3 BAD  0.38s chess-analysis: say=result look:chess:{}
+12b-t03-v2 3 ok   0.52s chess-reset: say=result open:chess:{"intent": "reset the chess game"}
+12b-t03-v2 3 ok   0.48s chess-resign: say=result open:chess:{"intent": "resign the game"}
+12b-t03-v2 3 ok   0.60s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+12b-t03-v2 3 ok   0.55s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+12b-t03-v2 3 ok   0.52s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+12b-t03-v2 3 ok   0.47s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+12b-t03-v2 3 ok   0.38s music-sort-ask: say=result look:music:{}
+12b-t03-v2 3 ok   0.51s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+12b-t03-v2 3 ok   0.31s refuse-lights: say=decline 
+12b-t03-v2 3 BAD  0.40s refuse-weather: say=knowledge 
+12b-t03-v2 3 BAD  0.52s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false}
+12b-t03-v2 3 ok   0.51s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+12b-t03-v2 3 ok   0.51s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+12b-t03-v2 3 BAD  0.39s local-capabilities: say=knowledge 
+12b-t03-v2 3 ok   0.88s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-t03-v2 3 ok   0.97s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+12b-t03-v2 3 ok   1.08s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+12b-t03-v2 3 ok   0.56s cross-two-reads: say=result look:tasks:{} | look:music:{}
+12b-t03-v2 3 ok   0.74s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+12b-t03-v2 3 ok   0.89s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+12b-t03-v2 3 BAD  1.04s s15-same-again: say=result ask:music:{"request": "download their other album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-t03-v2 3 ok   0.68s s6-that-song: say=result ask:music:{"request": "put the song \"Odessa\" by Caribou in the house folder", "destructive": false}
+12b-t03-v2 3 ok   0.98s ref-task-from-song: say=result recall::{"query": "the Caribou song mentioned in recent things"} | ask:tasks:{"request": "add a task to make a party playlist with {s1}", "destructive": false}
+12b-t03-v2 3 ok   0.62s s7-dennis: say=result ask:tasks:{"request": "push the Dentist appointment to Friday", "destructive": false}
+12b-t03-v2 3 ok   1.67s ref-ambiguous: say=result ask_user::{"question": "Which dentist task should I move to Friday? \n1. Dentist appointment (due Wed)\n2. Call the dentist about the bill (due Thu)", "options": ["Dentist appointment", "Call the dentist about the bill"]} | ask:tasks:{"request": "push {s1} to Friday", "destructive": false}
+12b-t03-v2 3 ok   0.41s s9-yes: say=result confirm::{"answer": "yes"}
+12b-t03-v2 3 ok   0.40s s9-no: say=result confirm::{"answer": "no"}
+12b-t03-v2 3 ok   0.46s s10-stop: say=result cancel::{"target": "music:job:31"}
+12b-t03-v2 3 ok   0.63s amend-job: say=result amend::{"target": "music:job:17", "change": "only download the first ten songs"}
+12b-t03-v2 3 ok   0.48s s11-undo: say=result undo::{"target": "last"}
+12b-t03-v2 3 ok   0.53s s5-garage: say=result recall::{"query": "what did we decide about the garage shelves last week?"}
+12b-t03-v2 3 ok   0.54s memory-caribou: say=result recall::{"query": "when did I last download something by Caribou?"}
+12b-t03-v2 3 ok   0.39s knowledge-egg: say=knowledge 
+12b-t03-v2 3 ok   0.34s knowledge-capital: say=knowledge 
+12b-t03-v2 3 BAD  0.43s decline-news: say=knowledge 
+12b-t03-v2 3 ok   1.02s s14-plan-week: say=result ask:tasks:{"request": "find the garage project and its tasks", "destructive": false} | think::{"problem": "plan my week around the garage project", "inputs": ["s1"]}
+12b-t03-v2 3 ok   0.45s status-now: say=self 
+12b-t03-v2 3 BAD  0.48s status-last: say=chat 
+12b-t03-v2 3 ok   0.26s chat-thanks: say=chat 
+12b-t03-v2 3 ok   0.88s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+12b-t03-v2 3 ok   1.02s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b-t03-v2 3 ok   0.57s ho-two-reads: say=result look:music:{} | look:tasks:{}
+12b-t03-v2 3 ok   0.45s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b-t03-v2 3 ok   0.66s ho-amend: say=result amend::{"target": "music:job:17", "change": "change the playlist to only the first twenty songs"}
+12b-t03-v2 3 ok   0.53s ho-recall: say=result recall::{"query": "fence project"}
+12b-t03-v2 3 ok   0.39s ho-knowledge: say=knowledge 
+12b-t03-v2 3 ok   0.39s ho-decline-score: say=decline 
+12b-t03-v2 3 ok   0.51s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b-t03-v2 3 ok   0.40s ho-chess-last: say=result look:chess:{}
+12b-t03-v2 4 ok   0.38s tasks-due: say=result look:tasks:{}
+12b-t03-v2 4 ok   0.51s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+12b-t03-v2 4 ok   0.61s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+12b-t03-v2 4 ok   0.54s chess-play: say=result open:chess:{"intent": "let's play chess"}
+12b-t03-v2 4 ok   0.57s chess-move: say=result open:chess:{"intent": "move my pawn to e4"}
+12b-t03-v2 4 ok   0.38s chess-status: say=result look:chess:{}
+12b-t03-v2 4 BAD  0.38s chess-analysis: say=result look:chess:{}
+12b-t03-v2 4 ok   0.52s chess-reset: say=result open:chess:{"intent": "reset the chess game"}
+12b-t03-v2 4 ok   0.50s chess-resign: say=result open:chess:{"intent": "resign the game"}
+12b-t03-v2 4 ok   0.60s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+12b-t03-v2 4 ok   0.55s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+12b-t03-v2 4 ok   0.52s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+12b-t03-v2 4 ok   0.49s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+12b-t03-v2 4 ok   0.39s music-sort-ask: say=result look:music:{}
+12b-t03-v2 4 ok   0.51s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+12b-t03-v2 4 ok   0.31s refuse-lights: say=decline 
+12b-t03-v2 4 ok   0.33s refuse-weather: say=decline 
+12b-t03-v2 4 BAD  0.52s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false}
+12b-t03-v2 4 ok   0.51s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+12b-t03-v2 4 ok   0.51s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+12b-t03-v2 4 BAD  0.39s local-capabilities: say=knowledge 
+12b-t03-v2 4 ok   0.88s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-t03-v2 4 ok   0.97s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+12b-t03-v2 4 ok   1.07s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+12b-t03-v2 4 ok   0.56s cross-two-reads: say=result look:tasks:{} | look:music:{}
+12b-t03-v2 4 ok   1.19s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+12b-t03-v2 4 ok   0.89s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+12b-t03-v2 4 BAD  1.04s s15-same-again: say=result ask:music:{"request": "download their other album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+12b-t03-v2 4 ok   0.68s s6-that-song: say=result ask:music:{"request": "put the song \"Odessa\" by Caribou in the house folder", "destructive": false}
+12b-t03-v2 4 ok   0.94s ref-task-from-song: say=result recall::{"query": "the Caribou song mentioned recently"} | ask:tasks:{"request": "add a task to make a party playlist with {s1}", "destructive": false}
+12b-t03-v2 4 ok   0.60s s7-dennis: say=result ask:tasks:{"request": "push the Dentist appointment to Friday", "destructive": false}
+12b-t03-v2 4 ok   1.57s ref-ambiguous: say=result ask_user::{"question": "Which dentist task should I move to Friday? \n1. Dentist appointment (due Wed)\n2. Call the dentist about the bill (due Thu)", "options": ["Dentist appointment", "Call the dentist about the bill"]} | ask:tasks:{"request": "push {s1} to Friday", "destructive": false}
+12b-t03-v2 4 ok   0.43s s9-yes: say=result confirm::{"answer": "yes"}
+12b-t03-v2 4 ok   0.40s s9-no: say=result confirm::{"answer": "no"}
+12b-t03-v2 4 ok   0.46s s10-stop: say=result cancel::{"target": "music:job:31"}
+12b-t03-v2 4 ok   0.63s amend-job: say=result amend::{"target": "music:job:17", "change": "only download the first ten songs"}
+12b-t03-v2 4 ok   0.49s s11-undo: say=result undo::{"target": "last"}
+12b-t03-v2 4 ok   0.62s s5-garage: say=result recall::{"query": "decisions about garage shelves last week"}
+12b-t03-v2 4 ok   0.54s memory-caribou: say=result recall::{"query": "when did I last download something by Caribou?"}
+12b-t03-v2 4 ok   0.39s knowledge-egg: say=knowledge 
+12b-t03-v2 4 ok   0.34s knowledge-capital: say=knowledge 
+12b-t03-v2 4 BAD  0.43s decline-news: say=knowledge 
+12b-t03-v2 4 ok   1.11s s14-plan-week: say=result ask:tasks:{"request": "find the garage project and its tasks", "destructive": false} | think::{"problem": "plan my week around the garage project based on the tasks found in {s1}", "inputs": ["s1"]}
+12b-t03-v2 4 ok   0.45s status-now: say=self 
+12b-t03-v2 4 BAD  0.48s status-last: say=chat 
+12b-t03-v2 4 ok   0.25s chat-thanks: say=chat 
+12b-t03-v2 4 ok   0.88s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} Monday", "destructive": false}
+12b-t03-v2 4 ok   1.07s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you' and download it", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+12b-t03-v2 4 ok   0.57s ho-two-reads: say=result look:music:{} | look:tasks:{}
+12b-t03-v2 4 ok   0.44s ho-cancel: say=result cancel::{"target": "music:job:17"}
+12b-t03-v2 4 ok   0.66s ho-amend: say=result amend::{"target": "music:job:17", "change": "change the playlist to only the first twenty songs"}
+12b-t03-v2 4 ok   0.52s ho-recall: say=result recall::{"query": "fence project"}
+12b-t03-v2 4 ok   0.39s ho-knowledge: say=knowledge 
+12b-t03-v2 4 ok   0.28s ho-decline-score: say=decline 
+12b-t03-v2 4 ok   0.51s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+12b-t03-v2 4 ok   0.40s ho-chess-last: say=result look:chess:{}
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today odessa drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+today real drop "bet. it's in the Unsorted folder now."
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder. The music app completed this action.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder. The music app successfully completed this act'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to the Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder. The music app successfully completed this ste'
+receipt odessa KEPT 'I saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'The song "Odessa" by Caribou was saved to the Unsorted folder in the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder. The music app completed this action.'
+receipt odessa KEPT 'I saved the song "Odessa" by Caribou to the Unsorted folder in the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder. This was completed via the music app.'
+receipt odessa KEPT 'The music app saved the song "Odessa" by Caribou to your Unsorted folder.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'I have saved the song "Odessa" by Caribou to the Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the Music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder. This was completed via the music app.'
+receipt odessa KEPT 'The music app saved the song "Odessa" by Caribou to the Unsorted folder.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'The music app successfully saved the song "Odessa" by Caribou to the Unsorted folder.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to the Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to the Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'The music app successfully saved the song "Odessa" by Caribou to the Unsorted folder.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder. The music app completed the save of music:tra'
+receipt odessa drop 'The music app saved one song. It touched music:track:812.'
+receipt odessa KEPT 'I saved the song "Odessa" by Caribou to the Unsorted folder using the music app.'
+receipt odessa KEPT 'The music app saved one song, "Odessa" by Caribou, into the Unsorted folder.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder in the music app.'
+receipt odessa KEPT 'I saved the song "Odessa" by Caribou to the "Unsorted" folder in the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'I\'ve saved the song "Odessa" by Caribou to your Unsorted folder. This was completed using the music app.'
+receipt odessa KEPT 'I saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'I saved the song "Odessa" by Caribou to your Unsorted folder using the music app.'
+receipt odessa KEPT 'The song "Odessa" by Caribou was saved to the Unsorted folder in the music app.'
+receipt real drop 'The music app saved one song to the Unsorted folder. The specific item touched was music:track:812.'
+receipt real drop 'The music app saved one song, which is now in the Unsorted folder. The specific item touched was music:track:8'
+receipt real KEPT 'The music app saved one song titled "Real Title" by "Real Artist" into the "Unsorted" folder.'
+receipt real drop "I've saved one song to the Unsorted folder. The music app touched music:track:812."
+receipt real KEPT 'I\'ve saved the song to your Unsorted folder. This action was completed by the music app on the track "Real Tit'
+receipt real drop "I've saved the song to your Unsorted folder. The music app finished the task for music:track:812."
+receipt real KEPT 'I\'ve saved one song to the Unsorted folder. The Music app processed the request for "Real Title" by "Real Arti'
+receipt real KEPT 'The music app saved one song to the Unsorted folder. The specific track touched was Real Title by Real Artist.'
+receipt real KEPT 'I have saved the song "Real Title" by Real Artist to your Unsorted folder using the music app.'
+receipt real KEPT 'I\'ve saved one song to your music collection. The music app added "Real Title" by "Real Artist" to the Unsorte'
+receipt real KEPT 'I\'ve saved the song "Real Title" by "Real Artist" to the "Unsorted" folder using the music app.'
+receipt real KEPT 'I saved one song to your music library. The music app added "Real Title" by "Real Artist" to the "Unsorted" fo'
+receipt real KEPT 'I\'ve saved the song "Real Title" by "Real Artist" to your Unsorted folder using the music app.'
+receipt real drop "I've saved one song to the Unsorted folder. This action was completed by the music app."
+receipt real drop 'The Music app successfully saved one song. The step touched music:track:812.'
+receipt real KEPT "I've saved one song to the Unsorted folder. The music app touched Real Title."
+receipt real KEPT 'I saved the song "Real Title" by "Real Artist" to your Unsorted folder using the music app.'
+receipt real KEPT 'I\'ve finished downloading the song for you. The Music app saved one song, "Real Title" by "Real Artist," to th'
+receipt real drop 'I saved the song to your Unsorted folder using music.'
+receipt real KEPT 'I saved the song "Real Title" by "Real Artist" to your Unsorted folder using the music app.'
+receipt real KEPT 'I saved one song to your Unsorted folder. The Music app processed the request for Real Title by Real Artist.'
+receipt real KEPT 'I have saved one song to your Unsorted folder. The music app successfully touched Real Title.'
+receipt real drop 'I saved one song to the Unsorted folder. The music app touched music:track:812.'
+receipt real KEPT 'The music app successfully saved one song, "Real Title" by "Real Artist," to the "Unsorted" folder.'
+receipt real drop 'I saved one song to the Unsorted folder using the music app. The specific item touched was music:track:812.'
+receipt real KEPT 'I saved one song to the Unsorted folder. The Music app processed this by touching Real Title.'
+receipt real drop "I've saved one song to the Unsorted folder. This action touched music:track:812."
+receipt real drop "I've saved the song to your Unsorted folder. The music app touched music:track:812."
+receipt real KEPT 'I saved one song to your Unsorted folder. The music app processed the track "Real Title" by "Real Artist".'
+receipt real drop "I've saved the song to your Unsorted folder. The music app successfully touched music:track:812."
+receipt real KEPT "I've saved the song to your Unsorted folder. This was completed by the music app touching the Real Title track"
+receipt real KEPT 'I\'ve saved the song "Real Title" by "Real Artist" to your Unsorted folder using the music app.'
+receipt real drop "I've saved the song to your Unsorted folder. The music app completed the action for music:track:812."
+receipt real KEPT 'I\'ve saved the song to your library. The Music app added "Real Title" by "Real Artist" to the Unsorted folder.'
+receipt real KEPT 'I have saved the song "Real Title" by "Real Artist" to the "Unsorted" folder using the music app.'
+receipt real KEPT "I've saved one song to your Unsorted folder. The music app touched Real Title."
+receipt real KEPT 'I saved one song to the Unsorted folder. The music app processed the request for "Real Title" by "Real Artist"'
+receipt real drop "I've saved the song to your Unsorted folder. The music app successfully saved music:track:812."
+receipt real KEPT 'I saved the song "Real Title" by "Real Artist" to the "Unsorted" folder in the "music" app.'
+receipt real drop 'The music app successfully saved one song to the Unsorted folder. The specific item touched was music:track:81'
+s4-queued 0  'I\'ve started the process to grab the playlist "Road Trip" using the Music app. The job is currently queued and has not started yet.'
+s4-queued 1  'I\'ve started the process for the playlist "Road Trip" under the music app. The job is currently queued.'
+s4-queued 2  'The "playlist \'Road Trip\'" job has been started in the music app. It is currently queued and has not begun processing any of the 40 items.'
+s4-queued 3  'I\'ve started the process for playlist "Road Trip" in the music app. The job is currently queued.'
+s4-queued 4  'The playlist "Road Trip" was submitted to the music app. The job is currently queued and has not started processing any of the 40 items.'
+s4-queued 5  'I\'ve started the job for the playlist "Road Trip" in the music app. The job is currently queued.'
+s4-queued 6  'I\'ve started the job for the playlist "Road Trip" using the music app. The job is currently queued.'
+s4-queued 7  'I\'ve started the process for the playlist "Road Trip" in the music app. The job is currently queued and has not started yet.'
+s4-queued 8  'I\'ve started the process for playlist "Road Trip" using the music app. The job is currently queued.'
+s4-queued 9  'The playlist "Road Trip" has been queued for processing. The "music" app started the job, but it is currently queued and hasn\'t begun running.'
+status-mixed 0 ['finished'] 'The album "Honey" by Caribou is finished, but the playlist "Road Trip" is still running with 12 of 40 tracks done. The download for "Kid A" by Radiohead failed after reaching 3 of 10 tracks due to a network error.'
+status-mixed 1 ['are in'] 'Your music downloads are in progress. The album "Honey" by Caribou is done, but the "playlist \'Road Trip\'" is still running. The download for the album "Kid A" by Radiohead failed due to a network error after reaching 3 out of 10 tracks.'
+status-mixed 2  'The music app has completed the album "Honey" by Caribou but failed to finish "Kid A" by Radiohead due to a network error. The playlist "Road Trip" is currently running and is 12 out of 40 songs complete.'
+status-mixed 3 ['finished'] 'The album "Honey" by Caribou is finished, but the "Kid A" by Radiohead download failed due to a network error after completing 3 tracks. The playlist "Road Trip" is currently running and is 12 out of 40 tracks done.'
+status-mixed 4 ['finished'] 'The music app has finished downloading the album "Honey" by Caribou, but the download for "Kid A" by Radiohead failed due to a network error after 3 tracks. The playlist "Road Trip" is currently running and is 12 out of 40 tracks complete.'
+status-mixed 5 ['finished'] 'The album "Honey" by Caribou is finished. The playlist "Road Trip" is still running, and the "Kid A" by Radiohead album failed due to a network error.'
+status-mixed 6 ['finished'] 'The music app successfully finished downloading the album "Honey" by Caribou. The playlist "Road Trip" is currently running, and the album "Kid A" by Radiohead failed due to a network error after downloading 3 tracks.'
+status-mixed 7  'The "album \\"Honey\\" by Caribou" job is done, while "playlist \\"Road Trip\\"" is currently running. The "album \\"Kid A\\" by Radiohead" job failed due to a network error after reaching 3 out of 10. These were all processed under the "looked_up" step in the music app.'
+status-mixed 8 ['finished'] 'The album "Honey" by Caribou is finished, but the playlist "Road Trip" is still running. The album "Kid A" by Radiohead failed to download due to a network error after completing 3 tracks.'
+status-mixed 9 ['finished'] 'The album "Honey" by Caribou is finished. The playlist "Road Trip" is currently running, and the album "Kid A" by Radiohead failed due to a network error after completing 3 of 10 tracks.'
+job-ended-note 0  'The job "playlist \\"Road Trip\\"" is done. It processed 38 out of 40 tracks, but "Song Twelve by Nobody" and "Untitled Demo by Somebody" were not matched.'
+job-ended-note 1  'The job for playlist "Road Trip" is done. It processed 38 out of 40 tracks, but "Song Twelve by Nobody" and "Untitled Demo by Somebody" were not matched.'
+job-ended-note 2  'The job "playlist \'Road Trip\'" is done. It processed 38 out of 40 items, with "Song Twelve by Nobody" and "Untitled Demo by Somebody" not matching.'
+job-ended-note 3  'The "playlist \\"Road Trip\\"" job is done. It processed 38 out of 40 items, with two songs failing to match.'
+job-ended-note 4  'The playlist "Road Trip" job is done. It processed 38 out of 40 tracks, with "Song Twelve by Nobody" and "Untitled Demo by Somebody" not matching.'
+job-ended-note 5  'The job playlist "Road Trip" is done. It processed 38 out of 40 total items, but "Song Twelve by Nobody" and "Untitled Demo by Somebody" were not matched.'
+job-ended-note 6  'The job for playlist "Road Trip" is done. It processed 38 out of 40 items, but "Song Twelve by Nobody" and "Untitled Demo by Somebody" were not matched.'
+job-ended-note 7  'The playlist "Road Trip" job is done. It processed 38 out of 40 tracks, but "Song Twelve by Nobody" and "Untitled Demo by Somebody" were not matched.'
+job-ended-note 8  'The job "playlist \\"Road Trip\\"" is done. It completed 38 out of 40 tracks, but "Song Twelve by Nobody" and "Untitled Demo by Somebody" were not matched.'
+job-ended-note 9 ['finished'] 'The job "playlist \\"Road Trip\\"" is finished. It processed 38 out of 40 tracks, but "Song Twelve by Nobody" and "Untitled Demo by Somebody" were not matched.'
+s10-cancelled 0  'I cancelled the job "sorting the whole library". It was stopped after 112 out of 400 songs were processed.'
+s10-cancelled 1  'I cancelled the job "sorting the whole library". It was stopped after 112 out of 400 songs were processed.'
+s10-cancelled 2  'I have cancelled the job "sorting the whole library." The process stopped after 112 out of 400 songs were processed.'
+s10-cancelled 3  'I cancelled the job "sorting the whole library". It stopped after 112 out of 400 songs were processed.'
+s10-cancelled 4  'I have cancelled the "sorting the whole library" job. It was halted after completing 112 out of 400 songs.'
+s10-cancelled 5  'I\'ve stopped the process. The job "sorting the whole library" was cancelled after 112 songs were processed.'
+s10-cancelled 6  'I have cancelled the "sorting the whole library" job. It stopped after 112 songs were completed.'
+s10-cancelled 7  'I have cancelled the job "sorting the whole library". It was stopped after completing 112 out of 400 items.'
+s10-cancelled 8  'I\'ve cancelled the task "sorting the whole library". The process stopped after completing 112 out of 400 songs.'
+s10-cancelled 9 ['finished'] 'I have cancelled the job "sorting the whole library". The process was stopped after 112 out of 400 songs were finished.'
+s3-mixed 0  'The album "Honey" by Caribou is currently queued in the music app. A task to sort it this weekend was successfully created in the tasks app.'
+s3-mixed 1  'I have queued the job to download the album "Honey" by Caribou in Music. I also successfully created the task "Sort Honey" for Saturday in Tasks.'
+s3-mixed 2  'I\'ve started the process for the album "Honey" by Caribou in the music app, but it is currently queued. I successfully created the task "Sort Honey" for Saturday in the tasks app.'
+s3-mixed 3  'The album "Honey" by Caribou is currently queued for download in the music app. A task to "Sort Honey" was successfully created in the tasks app for Saturday.'
+s3-mixed 4  'The "album \'Honey\' by Caribou" job is currently queued. I also successfully created a task to "Sort Honey" for Saturday.'
+s3-mixed 5  'I\'ve started the album "Honey" by Caribou in the music app, but it is currently queued. I also successfully created the task "Sort Honey" in the tasks app for Saturday.'
+s3-mixed 6  'I have queued the album "Honey" by Caribou in the music app. I also successfully created a task to sort it this Saturday in the tasks app.'
+s3-mixed 7  'The album "Honey" by Caribou is currently queued for download in the music app. I successfully created a task to "Sort Honey" this Saturday in the tasks app.'
+s3-mixed 8  'I\'ve queued the album "Honey" by Caribou in the music app. I also successfully created the task "Sort Honey" in the tasks app.'
+s3-mixed 9  'I\'ve queued the download for the album "Honey" by Caribou in the music app. I also successfully created a task to "Sort Honey" this Saturday in the tasks app.'
+nothing-ran 0  "I couldn't download the Caribou album because the music app was unavailable. Consequently, the task to sort it was not created."
+nothing-ran 1  "I couldn't download the album because the music app was unavailable. As a result, the task to sort it was not created because it needed the album from the first step."
+nothing-ran 2  "I couldn't download the Caribou album because the music app was unavailable. Since that step didn't run, I was unable to add the task to the tasks app."
+nothing-ran 3  "I couldn't download the album because the music app was unavailable. Since the download didn't happen, the task to sort it was not added."
+nothing-ran 4  "I couldn't download the album because the music app was unavailable. As a result, the task to sort it was not created."
+nothing-ran 5  "I couldn't download the album because the music app was unavailable. Consequently, the task to sort it was not created because it required the album from the first step."
+nothing-ran 6  "I couldn't download the album because the music app was unavailable. Since the music download didn't happen, I was unable to add the task to the tasks app."
+nothing-ran 7  "I couldn't download the album because the music app was unavailable. Consequently, the task to sort it was not created because it required the album from the first step."
+nothing-ran 8  "I couldn't download the album because the music app was unavailable. As a result, the task to sort it was not created."
+nothing-ran 9  "I couldn't download the album because the music app was unavailable. As a result, I was unable to add the task to the tasks app."
+26b-v2 0 ok   1.04s tasks-due: say=result look:tasks:{}
+26b-v2 0 ok   0.74s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+26b-v2 0 ok   0.55s tasks-week: say=result look:tasks:{}
+26b-v2 0 ok   0.77s chess-play: say=result open:chess:{"intent": "start a new chess game"}
+26b-v2 0 ok   0.77s chess-move: say=result open:chess:{"intent": "play e4"}
+26b-v2 0 ok   0.57s chess-status: say=result look:chess:{}
+26b-v2 0 ok   0.85s chess-analysis: say=result open:chess:{"intent": "analyze the current position on the board"}
+26b-v2 0 BAD  0.68s chess-reset: say=result cancel::{"target": "last"}
+26b-v2 0 BAD  1.21s chess-resign: say=result ask:music:{"request": "resign the game", "destructive": false} | open:chess:{"intent": "resign the game"}
+26b-v2 0 ok   0.89s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+26b-v2 0 ok   0.81s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+26b-v2 0 ok   0.73s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+26b-v2 0 ok   0.64s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+26b-v2 0 ok   0.56s music-sort-ask: say=result look:music:{}
+26b-v2 0 ok   0.73s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+26b-v2 0 ok   0.35s refuse-lights: say=decline 
+26b-v2 0 ok   0.41s refuse-weather: say=decline 
+26b-v2 0 ok   0.44s refuse-playback: say=decline 
+26b-v2 0 ok   0.75s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+26b-v2 0 ok   0.77s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+26b-v2 0 BAD  0.77s local-capabilities: say=knowledge 
+26b-v2 0 ok   1.27s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-v2 0 ok   1.40s cross-named-task: say=result ask:music:{"request": "download the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+26b-v2 0 ok   1.48s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+26b-v2 0 ok   1.08s cross-two-reads: say=result ask:tasks:{"request": "what's due today", "destructive": false} | look:music:{}
+26b-v2 0 ok   1.25s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+26b-v2 0 ok   1.26s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+26b-v2 0 ok   1.84s s15-same-again: say=result ask:music:{"request": "download the other album by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-v2 0 ok   1.22s s6-that-song: say=result ask:music:{"request": "put Odessa by Caribou in the house folder", "destructive": false}
+26b-v2 0 ok   1.11s ref-task-from-song: say=result ask:tasks:{"request": "add a task to make a party playlist with the song Odessa by Caribou", "destructive": false}
+26b-v2 0 ok   1.20s s7-dennis: say=result ask:tasks:{"request": "push the Dentist appointment to Friday", "destructive": false}
+26b-v2 0 BAD  1.88s ref-ambiguous: say=result ask:tasks:{"request": "push the dentist appointment to Friday", "destructive": false} | ask:tasks:{"request": "push the task Call the dentist about the bill to Friday", "destructive": false}
+26b-v2 0 BAD  1.53s s9-yes: say=result ask:tasks:{"request": "Trash the Kitchen project and its 12 tasks", "destructive": true}
+26b-v2 0 BAD  0.60s s9-no: say=self 
+26b-v2 0 BAD  0.86s s10-stop: say=self 
+26b-v2 0 BAD  0.95s amend-job: say=result cancel::{"target": "music:job:17"}
+26b-v2 0 ok   0.99s s11-undo: say=result undo::{"target": "last"}
+26b-v2 0 ok   0.93s s5-garage: say=result recall::{"query": "garage shelves decision from last week"}
+26b-v2 0 ok   0.66s memory-caribou: say=result recall::{"query": "last download by Caribou"}
+26b-v2 0 BAD  0.56s knowledge-egg: say=chat 
+26b-v2 0 ok   0.44s knowledge-capital: say=knowledge 
+26b-v2 0 ok   0.38s decline-news: say=decline 
+26b-v2 0 ok   1.68s s14-plan-week: say=result think::{"problem": "Plan the user's week (Thursday 2026-11-05 to Wednesday 2026-11-11) around the garage project. I need to check for existing tasks and the project's scope to create a balanced schedule.", "inputs": []}
+26b-v2 0 BAD  0.77s status-now: say=decline 
+26b-v2 0 BAD  1.05s status-last: say=decline 
+26b-v2 0 BAD  0.49s chat-thanks: say=decline 
+26b-v2 0 ok   1.23s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+26b-v2 0 ok   1.50s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes like 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+26b-v2 0 ok   0.88s ho-two-reads: say=result look:music:{} | look:tasks:{}
+26b-v2 0 ok   0.97s ho-cancel: say=result cancel::{"target": "music:job:17"}
+26b-v2 0 BAD  1.27s ho-amend: say=result cancel::{"target": "music:job:17"} | ask:music:{"request": "download the first twenty songs of the playlist 'Road Trip'", "destructive": false}
+26b-v2 0 ok   0.91s ho-recall: say=result recall::{"query": "fence project"}
+26b-v2 0 ok   0.42s ho-knowledge: say=knowledge 
+26b-v2 0 ok   0.38s ho-decline-score: say=decline 
+26b-v2 0 ok   0.71s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+26b-v2 0 ok   0.58s ho-chess-last: say=result look:chess:{}
+26b-v2 1 ok   0.53s tasks-due: say=result look:tasks:{}
+26b-v2 1 ok   0.75s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+26b-v2 1 ok   0.79s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+26b-v2 1 ok   0.75s chess-play: say=result open:chess:{"intent": "let's play chess"}
+26b-v2 1 ok   0.77s chess-move: say=result open:chess:{"intent": "play e4"}
+26b-v2 1 ok   0.61s chess-status: say=result look:chess:{}
+26b-v2 1 BAD  0.56s chess-analysis: say=result look:chess:{}
+26b-v2 1 BAD  0.84s chess-reset: say=result ask:tasks:{"request": "reset the chess game", "destructive": true}
+26b-v2 1 BAD  0.88s chess-resign: say=result ask:music:{"request": "resign the game", "destructive": true}
+26b-v2 1 ok   0.90s music-download-link: say=result ask:music:{"request": "download the song at https://example.com/watch?v=abc", "destructive": false}
+26b-v2 1 ok   0.81s music-download-named: say=result ask:music:{"request": "download Odessa by Caribou", "destructive": false}
+26b-v2 1 BAD  0.86s music-save: say=result ask_user::{"question": "Which track would you like to save?", "options": []}
+26b-v2 1 ok   0.64s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+26b-v2 1 ok   0.52s music-sort-ask: say=result look:music:{}
+26b-v2 1 ok   0.72s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+26b-v2 1 ok   0.37s refuse-lights: say=decline 
+26b-v2 1 ok   0.39s refuse-weather: say=decline 
+26b-v2 1 ok   0.44s refuse-playback: say=decline 
+26b-v2 1 ok   0.76s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+26b-v2 1 ok   0.73s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+26b-v2 1 BAD  0.43s local-capabilities: say=decline 
+26b-v2 1 ok   1.26s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-v2 1 ok   1.37s cross-named-task: say=result ask:music:{"request": "download the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+26b-v2 1 ok   1.60s cross-playlist-task: say=result ask:music:{"request": "download the playlist at https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+26b-v2 1 ok   0.86s cross-two-reads: say=result look:tasks:{} | look:music:{}
+26b-v2 1 ok   1.11s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+26b-v2 1 ok   1.27s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play chess"}
+26b-v2 1 ok   1.91s s15-same-again: say=result ask:music:{"request": "download the other Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-v2 1 ok   1.24s s6-that-song: say=result ask:music:{"request": "put the song Odessa by Caribou in the house folder", "destructive": false}
+26b-v2 1 ok   1.07s ref-task-from-song: say=result ask:tasks:{"request": "create a task to make a party playlist with the song Odessa by Caribou", "destructive": false}
+26b-v2 1 BAD  1.55s s7-dennis: say=result ask_user::{"question": "Which task do you mean by 'dennis thing'?", "options": ["Dentist appointment"]}
+26b-v2 1 BAD  1.17s ref-ambiguous: say=result ask:tasks:{"request": "push the dentist appointment to friday", "destructive": false}
+26b-v2 1 BAD  1.12s s9-yes: say=result ask:tasks:{"request": "Trash the Kitchen project and its 12 tasks", "destructive": true}
+26b-v2 1 BAD  0.43s s9-no: say=decline 
+26b-v2 1 BAD  0.70s s10-stop: say=decline 
+26b-v2 1 BAD  1.51s amend-job: say=result cancel::{"target": "music:job:17"} | ask:music:{"request": "download the first ten songs from the playlist \"Road Trip\"", "destructive": false}
+26b-v2 1 ok   0.99s s11-undo: say=result undo::{"target": "last"}
+26b-v2 1 ok   1.00s s5-garage: say=result recall::{"query": "decisions about garage shelves last week"}
+26b-v2 1 ok   0.87s memory-caribou: say=result recall::{"query": "When was the last time I downloaded a song or album by Caribou?"}
+26b-v2 1 BAD  0.55s knowledge-egg: say=self 
+26b-v2 1 ok   0.44s knowledge-capital: say=knowledge 
+26b-v2 1 ok   0.40s decline-news: say=decline 
+26b-v2 1 ok   1.09s s14-plan-week: say=result think::{"problem": "Plan my week around the garage project. I need to look at my existing tasks and incorporate the garage project into my schedule.", "inputs": []}
+26b-v2 1 BAD  0.92s status-now: say=decline 
+26b-v2 1 BAD  1.12s status-last: say=chat 
+26b-v2 1 ok   0.43s chat-thanks: say=chat 
+26b-v2 1 ok   1.24s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+26b-v2 1 ok   1.48s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes like 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+26b-v2 1 ok   0.85s ho-two-reads: say=result look:music:{} | look:tasks:{}
+26b-v2 1 ok   0.95s ho-cancel: say=result cancel::{"target": "music:job:17"}
+26b-v2 1 BAD  1.11s ho-amend: say=result cancel::{"target": "music:job:17"} | ask:music:{"request": "download the first twenty songs from the Road Trip playlist", "destructive": false}
+26b-v2 1 ok   0.92s ho-recall: say=result recall::{"query": "fence project"}
+26b-v2 1 ok   0.45s ho-knowledge: say=knowledge 
+26b-v2 1 ok   0.39s ho-decline-score: say=decline 
+26b-v2 1 ok   0.76s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+26b-v2 1 ok   0.57s ho-chess-last: say=result look:chess:{}
+26b-v2 2 ok   0.56s tasks-due: say=result look:tasks:{}
+26b-v2 2 ok   0.73s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+26b-v2 2 ok   0.80s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+26b-v2 2 ok   0.72s chess-play: say=result open:chess:{"intent": "let's play chess"}
+26b-v2 2 ok   0.71s chess-move: say=result open:chess:{"intent": "play e4"}
+26b-v2 2 ok   0.63s chess-status: say=result look:chess:{}
+26b-v2 2 BAD  0.54s chess-analysis: say=result look:chess:{}
+26b-v2 2 BAD  0.59s chess-reset: say=result cancel::{"target": "last"}
+26b-v2 2 BAD  0.87s chess-resign: say=result ask:music:{"request": "resign the game", "destructive": true}
+26b-v2 2 ok   0.93s music-download-link: say=result ask:music:{"request": "download this song https://example.com/watch?v=abc", "destructive": false}
+26b-v2 2 ok   0.83s music-download-named: say=result ask:music:{"request": "download Odessa by Caribou", "destructive": false}
+26b-v2 2 inv  1.53s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false} | ask_user::{"question": "Which track would you like to save?", "options": []}
+26b-v2 2 ok   0.65s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+26b-v2 2 ok   0.56s music-sort-ask: say=result look:music:{}
+26b-v2 2 ok   0.72s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+26b-v2 2 ok   0.36s refuse-lights: say=decline 
+26b-v2 2 ok   0.35s refuse-weather: say=decline 
+26b-v2 2 BAD  0.77s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false}
+26b-v2 2 ok   0.75s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+26b-v2 2 ok   0.74s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+26b-v2 2 BAD  0.58s local-capabilities: say=decline 
+26b-v2 2 ok   1.28s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-v2 2 ok   1.38s cross-named-task: say=result ask:music:{"request": "download the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+26b-v2 2 ok   1.52s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+26b-v2 2 BAD  0.60s cross-two-reads: say=result look:tasks:{}
+26b-v2 2 ok   1.12s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+26b-v2 2 ok   1.26s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+26b-v2 2 ok   1.82s s15-same-again: say=result ask:music:{"request": "download the other album by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-v2 2 ok   1.23s s6-that-song: say=result ask:music:{"request": "put the song Odessa by Caribou in the house folder", "destructive": false}
+26b-v2 2 ok   1.11s ref-task-from-song: say=result ask:tasks:{"request": "add a task to make a party playlist with the song Odessa by Caribou", "destructive": false}
+26b-v2 2 BAD  1.34s s7-dennis: say=result ask_user::{"question": "Which appointment do you mean?", "options": ["Dentist appointment"]}
+26b-v2 2 ok   1.58s ref-ambiguous: say=result ask_user::{"question": "Which dentist appointment should I reschedule?", "options": ["Dentist appointment (due Wed)", "Call the dentist about the bill (due Thu)"]}
+26b-v2 2 BAD  1.13s s9-yes: say=result ask:tasks:{"request": "Trash the Kitchen project and its 12 tasks", "destructive": true}
+26b-v2 2 BAD  0.42s s9-no: say=decline 
+26b-v2 2 BAD  0.70s s10-stop: say=decline 
+26b-v2 2 BAD  1.45s amend-job: say=result cancel::{"target": "music:job:17"} | ask:music:{"request": "download the first ten songs from the playlist 'Road Trip'", "destructive": false}
+26b-v2 2 ok   0.98s s11-undo: say=result undo::{"target": "last"}
+26b-v2 2 ok   0.88s s5-garage: say=result recall::{"query": "garage shelves"}
+26b-v2 2 ok   0.82s memory-caribou: say=result recall::{"query": "when was the last time I downloaded a song by Caribou?"}
+26b-v2 2 BAD  0.56s knowledge-egg: say=self 
+26b-v2 2 ok   0.44s knowledge-capital: say=knowledge 
+26b-v2 2 ok   0.39s decline-news: say=decline 
+26b-v2 2 ok   1.38s s14-plan-week: say=result think::{"problem": "Plan the user's week around the garage project. I need to identify the tasks related to the garage project and then schedule them alongside existing tasks.", "inputs": []}
+26b-v2 2 BAD  0.78s status-now: say=knowledge 
+26b-v2 2 BAD  1.07s status-last: say=decline 
+26b-v2 2 ok   0.42s chat-thanks: say=chat 
+26b-v2 2 ok   1.26s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+26b-v2 2 ok   1.45s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+26b-v2 2 ok   0.88s ho-two-reads: say=result look:music:{} | look:tasks:{}
+26b-v2 2 ok   0.93s ho-cancel: say=result cancel::{"target": "music:job:17"}
+26b-v2 2 BAD  1.24s ho-amend: say=result cancel::{"target": "music:job:17"} | ask:music:{"request": "download the first twenty songs of the Road Trip playlist", "destructive": false}
+26b-v2 2 ok   0.95s ho-recall: say=result recall::{"query": "fence project"}
+26b-v2 2 ok   0.45s ho-knowledge: say=knowledge 
+26b-v2 2 ok   0.39s ho-decline-score: say=decline 
+26b-v2 2 ok   0.74s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+26b-v2 2 ok   0.59s ho-chess-last: say=result look:chess:{}
+26b-v2 3 ok   0.55s tasks-due: say=result look:tasks:{}
+26b-v2 3 ok   0.75s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+26b-v2 3 ok   0.79s tasks-week: say=result ask:tasks:{"request": "what am I working on this week?", "destructive": false}
+26b-v2 3 ok   0.78s chess-play: say=result open:chess:{"intent": "start a new chess game"}
+26b-v2 3 ok   0.75s chess-move: say=result open:chess:{"intent": "play e4"}
+26b-v2 3 ok   0.63s chess-status: say=result look:chess:{}
+26b-v2 3 BAD  0.55s chess-analysis: say=result look:chess:{}
+26b-v2 3 BAD  0.65s chess-reset: say=result cancel::{"target": "last"}
+26b-v2 3 ok   0.66s chess-resign: say=result open:chess:{"intent": "resign the game"}
+26b-v2 3 ok   0.85s music-download-link: say=result ask:music:{"request": "download the song at this link: https://example.com/watch?v=abc", "destructive": false}
+26b-v2 3 ok   0.80s music-download-named: say=result ask:music:{"request": "download Odessa by Caribou", "destructive": false}
+26b-v2 3 ok   0.75s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false}
+26b-v2 3 ok   0.65s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+26b-v2 3 ok   0.54s music-sort-ask: say=result look:music:{}
+26b-v2 3 ok   0.73s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+26b-v2 3 ok   0.37s refuse-lights: say=decline 
+26b-v2 3 ok   0.40s refuse-weather: say=decline 
+26b-v2 3 BAD  1.26s refuse-playback: say=result ask:music:{"request": "play some jazz music", "destructive": false} | open:chess:{"intent": "play some jazz music"}
+26b-v2 3 ok   0.75s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+26b-v2 3 ok   0.70s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+26b-v2 3 BAD  0.60s local-capabilities: say=decline 
+26b-v2 3 ok   1.25s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-v2 3 ok   1.36s cross-named-task: say=result ask:music:{"request": "download the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+26b-v2 3 ok   1.56s cross-playlist-task: say=result ask:music:{"request": "download the playlist at https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+26b-v2 3 ok   0.86s cross-two-reads: say=result look:tasks:{} | look:music:{}
+26b-v2 3 ok   1.13s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+26b-v2 3 ok   1.28s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+26b-v2 3 BAD  1.29s s15-same-again: say=result ask:music:{"request": "download the other album by Caribou", "destructive": false}
+26b-v2 3 ok   1.21s s6-that-song: say=result ask:music:{"request": "put Odessa by Caribou in the house folder", "destructive": false}
+26b-v2 3 ok   0.89s ref-task-from-song: say=result ask:tasks:{"request": "add a task to make a party playlist with Odessa", "destructive": false}
+26b-v2 3 ok   1.12s s7-dennis: say=result ask:tasks:{"request": "push the dentist appointment to Friday", "destructive": false}
+26b-v2 3 ok   1.55s ref-ambiguous: say=result ask_user::{"question": "Which dentist appointment should I reschedule?", "options": ["Dentist appointment (due Wed)", "Call the dentist about the bill (due Thu)"]}
+26b-v2 3 BAD  0.88s s9-yes: say=decline 
+26b-v2 3 BAD  0.52s s9-no: say=self 
+26b-v2 3 BAD  0.88s s10-stop: say=self 
+26b-v2 3 BAD  2.03s amend-job: say=result cancel::{"target": "music:job:17"} | ask:music:{"request": "download the first ten songs from the 'Road Trip' playlist", "destructive": false}
+26b-v2 3 ok   0.97s s11-undo: say=result undo::{"target": "last"}
+26b-v2 3 ok   0.91s s5-garage: say=result recall::{"query": "garage shelves decision"}
+26b-v2 3 ok   0.68s memory-caribou: say=result recall::{"query": "when did I last download something by Caribou?"}
+26b-v2 3 BAD  0.51s knowledge-egg: say=chat 
+26b-v2 3 ok   0.42s knowledge-capital: say=knowledge 
+26b-v2 3 ok   0.39s decline-news: say=decline 
+26b-v2 3 ok   1.20s s14-plan-week: say=result think::{"problem": "Plan my week around the garage project. I need to look at my current tasks and schedule to integrate the garage project into my upcoming week.", "inputs": []}
+26b-v2 3 BAD  0.99s status-now: say=knowledge 
+26b-v2 3 BAD  1.17s status-last: say=decline 
+26b-v2 3 ok   0.43s chat-thanks: say=chat 
+26b-v2 3 ok   1.26s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+26b-v2 3 ok   1.55s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes like 'I can't do without you' and download it", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+26b-v2 3 ok   0.85s ho-two-reads: say=result look:music:{} | look:tasks:{}
+26b-v2 3 ok   0.94s ho-cancel: say=result cancel::{"target": "music:job:17"}
+26b-v2 3 BAD  1.18s ho-amend: say=result cancel::{"target": "music:job:17"} | ask:music:{"request": "download the first twenty songs from the playlist 'Road Trip'", "destructive": false}
+26b-v2 3 ok   0.93s ho-recall: say=result recall::{"query": "fence project"}
+26b-v2 3 ok   0.43s ho-knowledge: say=knowledge 
+26b-v2 3 ok   0.41s ho-decline-score: say=decline 
+26b-v2 3 ok   0.74s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+26b-v2 3 BAD  0.45s ho-chess-last: say=knowledge 
+26b-v2 4 ok   0.54s tasks-due: say=result look:tasks:{}
+26b-v2 4 ok   0.74s tasks-create: say=result ask:tasks:{"request": "add a task to water the plants tomorrow", "destructive": false}
+26b-v2 4 ok   0.58s tasks-week: say=result look:tasks:{}
+26b-v2 4 ok   0.75s chess-play: say=result open:chess:{"intent": "let's play chess"}
+26b-v2 4 ok   0.77s chess-move: say=result open:chess:{"intent": "play e4"}
+26b-v2 4 BAD  0.52s chess-status: say=self 
+26b-v2 4 BAD  0.55s chess-analysis: say=result look:chess:{}
+26b-v2 4 BAD  0.81s chess-reset: say=result ask:tasks:{"request": "reset the chess game", "destructive": true}
+26b-v2 4 BAD  0.87s chess-resign: say=result ask:music:{"request": "resign the game", "destructive": true}
+26b-v2 4 ok   0.86s music-download-link: say=result ask:music:{"request": "download the song at this link: https://example.com/watch?v=abc", "destructive": false}
+26b-v2 4 ok   0.72s music-download-named: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false}
+26b-v2 4 BAD  1.41s music-save: say=result ask:music:{"request": "save this track to the music folder", "destructive": false} | open:chess:{"intent": "save this track to the music folder"}
+26b-v2 4 ok   0.64s music-sort: say=result ask:music:{"request": "sort my music", "destructive": false}
+26b-v2 4 ok   0.54s music-sort-ask: say=result look:music:{}
+26b-v2 4 ok   0.73s music-organize: say=result ask:music:{"request": "organize my library into folders", "destructive": false}
+26b-v2 4 ok   0.37s refuse-lights: say=decline 
+26b-v2 4 ok   0.37s refuse-weather: say=decline 
+26b-v2 4 ok   0.43s refuse-playback: say=decline 
+26b-v2 4 ok   0.77s confirm-delete-task: say=result ask:tasks:{"request": "delete the groceries task", "destructive": true}
+26b-v2 4 ok   0.73s confirm-wipe-project: say=result ask:tasks:{"request": "wipe the whole kitchen project", "destructive": true}
+26b-v2 4 BAD  0.46s local-capabilities: say=knowledge 
+26b-v2 4 ok   1.25s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-v2 4 ok   1.34s cross-named-task: say=result ask:music:{"request": "download the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+26b-v2 4 ok   1.51s cross-playlist-task: say=result ask:music:{"request": "download the playlist at https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+26b-v2 4 ok   0.87s cross-two-reads: say=result look:tasks:{} | look:music:{}
+26b-v2 4 ok   1.08s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+26b-v2 4 ok   1.27s cross-task-then-chess: say=result ask:tasks:{"request": "add a task to study the Sicilian this weekend", "destructive": false} | open:chess:{"intent": "let's play"}
+26b-v2 4 ok   1.82s s15-same-again: say=result ask:music:{"request": "download the other album by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-v2 4 ok   1.23s s6-that-song: say=result ask:music:{"request": "put Odessa by Caribou in the house folder", "destructive": false}
+26b-v2 4 ok   1.11s ref-task-from-song: say=result ask:tasks:{"request": "add a task to make a party playlist with the song Odessa by Caribou", "destructive": false}
+26b-v2 4 BAD  1.34s s7-dennis: say=result ask_user::{"question": "Which 'dennis thing' should I reschedule?", "options": ["Dentist appointment"]}
+26b-v2 4 ok   1.45s ref-ambiguous: say=result ask_user::{"question": "Which dentist appointment should I reschedule?", "options": ["Dentist appointment", "Call the dentist about the bill"]}
+26b-v2 4 BAD  0.87s s9-yes: say=self 
+26b-v2 4 BAD  0.62s s9-no: say=self 
+26b-v2 4 BAD  0.85s s10-stop: say=self 
+26b-v2 4 BAD  1.54s amend-job: say=result cancel::{"target": "music:job:17"} | ask:music:{"request": "download the first ten songs from the Road Trip playlist", "destructive": false}
+26b-v2 4 ok   0.99s s11-undo: say=result undo::{"target": "last"}
+26b-v2 4 ok   1.01s s5-garage: say=result recall::{"query": "decisions about garage shelves from last week"}
+26b-v2 4 ok   0.70s memory-caribou: say=result recall::{"query": "when did I last download something by Caribou?"}
+26b-v2 4 BAD  0.52s knowledge-egg: say=self 
+26b-v2 4 ok   0.43s knowledge-capital: say=knowledge 
+26b-v2 4 ok   0.37s decline-news: say=decline 
+26b-v2 4 ok   1.45s s14-plan-week: say=result think::{"problem": "Plan the person's week (from Thursday 2026-11-05 to next Thursday) around the garage project, considering existing tasks and focus.", "inputs": []}
+26b-v2 4 BAD  0.98s status-now: say=knowledge 
+26b-v2 4 BAD  1.06s status-last: say=decline 
+26b-v2 4 ok   0.42s chat-thanks: say=chat 
+26b-v2 4 ok   1.24s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+26b-v2 4 ok   1.54s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes like 'I can't do without you' and download it", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+26b-v2 4 ok   0.85s ho-two-reads: say=result look:music:{} | look:tasks:{}
+26b-v2 4 ok   0.96s ho-cancel: say=result cancel::{"target": "music:job:17"}
+26b-v2 4 BAD  1.15s ho-amend: say=result cancel::{"target": "music:job:17"} | ask:music:{"request": "download only the first twenty songs from the 'Road Trip' playlist", "destructive": false}
+26b-v2 4 ok   0.91s ho-recall: say=result recall::{"query": "fence project"}
+26b-v2 4 ok   0.43s ho-knowledge: say=knowledge 
+26b-v2 4 ok   0.39s ho-decline-score: say=decline 
+26b-v2 4 ok   0.75s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+26b-v2 4 ok   0.57s ho-chess-last: say=result look:chess:{}
+26b-think-v2 0 ok   7.36s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-think-v2 0 ok   7.49s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+26b-think-v2 0 ok  11.36s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+26b-think-v2 0 ok   7.69s cross-two-reads: say=result look:tasks:{} | look:music:{}
+26b-think-v2 0 ok  11.54s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+26b-think-v2 0 inv  8.09s cross-task-then-chess: 2 validation errors for Plan2
+StepPlan.steps.1.open.intent
+  Field required [type=missing, input_value={'id': 's2', 'do'
+26b-think-v2 0 ok  39.95s s15-same-again: say=result ask:music:{"request": "download Caribou's other album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-think-v2 0 ok   9.54s s6-that-song: say=result ask:music:{"request": "put Odessa by Caribou in the house folder", "destructive": false}
+26b-think-v2 0 ok   5.94s ref-task-from-song: say=result ask:tasks:{"request": "make a party playlist with Odessa by Caribou", "destructive": false}
+26b-think-v2 0 BAD 31.66s s7-dennis: say=result ask:tasks:{"request": "push the dennis thing to friday", "destructive": false}
+26b-think-v2 0 inv 11.90s ref-ambiguous: 2 validation errors for Plan2
+StepPlan.steps.0.ask_user.question
+  Field required [type=missing, input_value={'id': 's1'
+26b-think-v2 0 inv 35.72s s9-yes: 2 validation errors for Plan2
+StepPlan.steps.0.confirm.answer
+  Field required [type=missing, input_value={'id': 's1', '
+26b-think-v2 0 inv  9.57s s9-no: 2 validation errors for Plan2
+StepPlan.steps.0.confirm.answer
+  Field required [type=missing, input_value={'id': 's1', '
+26b-think-v2 0 ok   4.59s s10-stop: say=result cancel::{"target": "music:job:31"}
+26b-think-v2 0 ok  13.91s amend-job: say=result amend::{"target": "music:job:17", "change": "just download the first ten songs of the 'Road Trip' playlist"}
+26b-think-v2 0 ok   7.98s s11-undo: say=result undo::{"target": "last"}
+26b-think-v2 0 inv  3.34s s5-garage: 2 validation errors for Plan2
+StepPlan.steps.0.recall.query
+  Field required [type=missing, input_value={'id': 's1', 'do
+26b-think-v2 0 inv  3.92s memory-caribou: 2 validation errors for Plan2
+StepPlan.steps.0.recall.query
+  Field required [type=missing, input_value={'id': 's1', 'do
+26b-think-v2 0 BAD 21.24s s14-plan-week: say=result look:tasks:{}
+26b-think-v2 0 inv  3.51s status-now: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': 'I am currentl...f 4
+26b-think-v2 0 inv  7.26s status-last: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': "I've queued t... so
+26b-think-v2 0 inv  2.81s chat-thanks: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': "You're very w...e I
+26b-think-v2 0 ok   6.77s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+26b-think-v2 0 ok  10.06s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+26b-think-v2 0 ok   8.82s ho-two-reads: say=result look:music:{} | look:tasks:{}
+26b-think-v2 0 ok   2.74s ho-cancel: say=result cancel::{"target": "music:job:17"}
+26b-think-v2 0 ok  15.97s ho-amend: say=result amend::{"target": "music:job:17", "change": "download only the first twenty songs of the 'Road Trip' playlist"}
+26b-think-v2 0 inv  1.91s ho-recall: 2 validation errors for Plan2
+StepPlan.steps.0.recall.query
+  Field required [type=missing, input_value={'id': 's1', 'do
+26b-think-v2 0 inv  2.08s ho-knowledge: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': 'There are 3 t...poo
+26b-think-v2 0 inv  3.74s ho-decline-score: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': "I can't check...res
+26b-think-v2 0 ok   4.89s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+26b-think-v2 0 ok   2.10s ho-chess-last: say=result look:chess:{}
+26b-think-v2 1 ok   6.07s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-think-v2 1 ok   5.90s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+26b-think-v2 1 ok   7.67s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+26b-think-v2 1 BAD  7.34s cross-two-reads: say=result look:tasks:{}
+26b-think-v2 1 ok   9.58s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+26b-think-v2 1 inv 10.04s cross-task-then-chess: 2 validation errors for Plan2
+StepPlan.steps.1.open.intent
+  Field required [type=missing, input_value={'id': 's2', 'do'
+26b-think-v2 1 inv 38.79s s15-same-again: 3 validation errors for Plan2
+StepPlan.steps.0.ask_user.question
+  Field required [type=missing, input_value={'id': 's1'
+26b-think-v2 1 ok  14.73s s6-that-song: say=result ask:music:{"request": "put 'Odessa' by Caribou in the house folder", "destructive": false}
+26b-think-v2 1 ok  13.59s ref-task-from-song: say=result ask:tasks:{"request": "make a party playlist with Odessa by Caribou", "destructive": false}
+26b-think-v2 1 ok   7.26s s7-dennis: say=result ask:tasks:{"request": "reschedule the dentist appointment to Friday", "destructive": false}
+26b-think-v2 1 inv 12.83s ref-ambiguous: 2 validation errors for Plan2
+StepPlan.steps.0.ask_user.question
+  Field required [type=missing, input_value={'id': 's1'
+26b-think-v2 1 inv 13.83s s9-yes: 2 validation errors for Plan2
+StepPlan.steps.0.confirm.answer
+  Field required [type=missing, input_value={'id': 's1', '
+26b-think-v2 1 inv 40.98s s9-no: 2 validation errors for Plan2
+StepPlan.steps.0.confirm.answer
+  Field required [type=missing, input_value={'id': 's1', '
+26b-think-v2 1 ok   3.34s s10-stop: say=result cancel::{"target": "music:job:31"}
+26b-think-v2 1 ok  44.63s amend-job: say=result amend::{"target": "music:job:17", "change": "only download the first ten songs of the 'Road Trip' playlist"}
+26b-think-v2 1 ok  10.96s s11-undo: say=result undo::{"target": "last"}
+26b-think-v2 1 inv  2.23s s5-garage: 2 validation errors for Plan2
+StepPlan.steps.0.recall.query
+  Field required [type=missing, input_value={'id': 's1', 'do
+26b-think-v2 1 BAD 23.53s memory-caribou: say=result look:music:{}
+26b-think-v2 1 inv 23.26s s14-plan-week: 3 validation errors for Plan2
+StepPlan.steps.1.think.problem
+  Field required [type=missing, input_value={'id': 's2', 'd
+26b-think-v2 1 inv  7.47s status-now: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': "I'm currently...lis
+26b-think-v2 1 inv  5.23s status-last: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': 'I queued the ... so
+26b-think-v2 1 inv 16.45s chat-thanks: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': "You're welcome!"}, 
+26b-think-v2 1 ok   4.61s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+26b-think-v2 1 inv 10.01s ho-lyrics-task: 3 validation errors for Plan2
+StepPlan.steps.0.ask.destructive
+  Field required [type=missing, input_value={'id': 's1', 
+26b-think-v2 1 ok   6.44s ho-two-reads: say=result look:music:{} | look:tasks:{}
+26b-think-v2 1 ok   2.55s ho-cancel: say=result cancel::{"target": "music:job:17"}
+26b-think-v2 1 ok   8.80s ho-amend: say=result amend::{"target": "music:job:17", "change": "only download the first 20 songs instead"}
+26b-think-v2 1 BAD 11.19s ho-recall: say=result ask:tasks:{"request": "what do you know about the fence project?", "destructive": false}
+26b-think-v2 1 inv  1.78s ho-knowledge: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': 'There are 3 t...poo
+26b-think-v2 1 inv  4.60s ho-decline-score: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': "I'm sorry, I ...to 
+26b-think-v2 1 ok   3.72s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+26b-think-v2 1 ok   7.11s ho-chess-last: say=result look:chess:{}
+26b-think-v2 2 ok   7.24s s3-album-task: say=result ask:music:{"request": "download the new Caribou album", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-think-v2 2 ok   9.24s cross-named-task: say=result ask:music:{"request": "grab the song Odessa by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist tomorrow", "destructive": false}
+26b-think-v2 2 ok   9.14s cross-playlist-task: say=result ask:music:{"request": "download this playlist https://www.youtube.com/playlist?list=PL9", "destructive": false} | ask:tasks:{"request": "remind me Sunday to sort {s1}", "destructive": false}
+26b-think-v2 2 ok   4.83s cross-two-reads: say=result look:tasks:{} | look:music:{}
+26b-think-v2 2 ok   5.88s cross-three-reads: say=result look:tasks:{} | look:chess:{} | look:music:{}
+26b-think-v2 2 inv  7.47s cross-task-then-chess: 2 validation errors for Plan2
+StepPlan.steps.1.open.intent
+  Field required [type=missing, input_value={'id': 's2', 'do'
+26b-think-v2 2 ok  24.73s s15-same-again: say=result ask:music:{"request": "download the other album by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} this weekend", "destructive": false}
+26b-think-v2 2 ok  14.71s s6-that-song: say=result ask:music:{"request": "put the song Odessa by Caribou in the house folder", "destructive": false}
+26b-think-v2 2 ok   9.15s ref-task-from-song: say=result ask:tasks:{"request": "add a task to make a party playlist with the song Odessa", "destructive": false}
+26b-think-v2 2 ok  10.30s s7-dennis: say=result ask:tasks:{"request": "reschedule the Dentist appointment to Friday", "destructive": false}
+26b-think-v2 2 inv  7.50s ref-ambiguous: 2 validation errors for Plan2
+StepPlan.steps.0.ask_user.question
+  Field required [type=missing, input_value={'id': 's1'
+26b-think-v2 2 inv  4.03s s9-yes: 2 validation errors for Plan2
+StepPlan.steps.0.confirm.answer
+  Field required [type=missing, input_value={'id': 's1', '
+26b-think-v2 2 BAD 94.24s s9-no: say=result cancel::{"target": "p7"}
+26b-think-v2 2 ok   4.71s s10-stop: say=result cancel::{"target": "music:job:31"}
+26b-think-v2 2 ok  18.07s amend-job: say=result amend::{"target": "music:job:17", "change": "download only the first ten songs of the 'Road Trip' playlist"}
+26b-think-v2 2 ok   4.82s s11-undo: say=result undo::{"target": "last"}
+26b-think-v2 2 inv  2.32s s5-garage: 2 validation errors for Plan2
+StepPlan.steps.0.recall.query
+  Field required [type=missing, input_value={'id': 's1', 'do
+26b-think-v2 2 inv  4.78s memory-caribou: 2 validation errors for Plan2
+StepPlan.steps.0.recall.query
+  Field required [type=missing, input_value={'id': 's1', 'do
+26b-think-v2 2 inv 16.55s s14-plan-week: 3 validation errors for Plan2
+StepPlan.steps.1.think.problem
+  Field required [type=missing, input_value={'id': 's2', 'd
+26b-think-v2 2 inv  5.62s status-now: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': 'I am currentl...40 
+26b-think-v2 2 inv  5.21s status-last: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': "I just downlo... so
+26b-think-v2 2 inv  1.98s chat-thanks: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': "You're welcome!"}, 
+26b-think-v2 2 ok   9.50s ho-swim-task: say=result ask:music:{"request": "download Swim by Caribou", "destructive": false} | ask:tasks:{"request": "add a task to sort {s1} on Monday", "destructive": false}
+26b-think-v2 2 ok   9.46s ho-lyrics-task: say=result ask:music:{"request": "find the song that goes 'I can't do without you'", "destructive": false} | ask:tasks:{"request": "add a task to put {s1} on the party playlist", "destructive": false}
+26b-think-v2 2 ok   9.62s ho-two-reads: say=result look:music:{} | look:tasks:{}
+26b-think-v2 2 ok   3.80s ho-cancel: say=result cancel::{"target": "music:job:17"}
+26b-think-v2 2 ok   5.73s ho-amend: say=result amend::{"target": "music:job:17", "change": "only download the first twenty songs instead of the whole playlist"}
+26b-think-v2 2 inv 14.44s ho-recall: 2 validation errors for Plan2
+StepPlan.steps.0.recall.query
+  Field required [type=missing, input_value={'id': 's1', 'do
+26b-think-v2 2 inv  1.91s ho-knowledge: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': 'There are 3 t...poo
+26b-think-v2 2 inv  3.13s ho-decline-score: 2 validation errors for Plan2
+StepPlan.steps
+  Field required [type=missing, input_value={'answer': "I'm sorry, bu...cor
+26b-think-v2 2 ok   3.65s ho-delete-project: say=result ask:tasks:{"request": "delete the fence project", "destructive": true}
+26b-think-v2 2 ok   9.14s ho-chess-last: say=result look:chess:{}
+ALL-DONE

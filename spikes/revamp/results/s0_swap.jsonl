@@ -1,0 +1,14 @@
+{"model": "gemma-4-12b", "kind": "swap", "seconds": 6.44, "mem": "Mem:              31           8           0           0          22          22", "at": "12:28:00"}
+{"model": "gemma-4-12b", "kind": "warm", "seconds": 0.11, "mem": "Mem:              31           8           0           0          22          22", "at": "12:28:00"}
+{"model": "gemma-4-26b-a4b", "kind": "swap", "seconds": 9.21, "mem": "Mem:              31           8           2           0          21          23", "at": "12:28:09"}
+{"model": "gemma-4-26b-a4b", "kind": "warm", "seconds": 0.18, "mem": "Mem:              31           8           2           0          21          23", "at": "12:28:09"}
+{"model": "gemma-4-12b", "kind": "swap", "seconds": 5.14, "mem": "Mem:              31           7           1           0          22          23", "at": "12:28:14"}
+{"model": "gemma-4-12b", "kind": "warm", "seconds": 0.13, "mem": "Mem:              31           8           1           0          22          23", "at": "12:28:14"}
+{"model": "gemma-4-26b-a4b", "kind": "swap", "seconds": 3.85, "mem": "Mem:              31           8           0           0          23          22", "at": "12:28:18"}
+{"model": "gemma-4-26b-a4b", "kind": "warm", "seconds": 0.18, "mem": "Mem:              31           8           0           0          23          22", "at": "12:28:19"}
+{"model": "gemma-4-12b", "kind": "swap", "seconds": 3.8, "mem": "Mem:              31           8           0           0          23          22", "at": "12:28:22"}
+{"model": "gemma-4-12b", "kind": "warm", "seconds": 0.11, "mem": "Mem:              31           8           0           0          23          22", "at": "12:28:22"}
+{"model": "gemma-4-26b-a4b", "kind": "swap", "seconds": 3.88, "mem": "Mem:              31           8           0           0          23          23", "at": "12:28:26"}
+{"model": "gemma-4-26b-a4b", "kind": "warm", "seconds": 0.17, "mem": "Mem:              31           8           0           0          23          23", "at": "12:28:26"}
+{"model": "gemma-4-12b", "kind": "swap", "seconds": 3.79, "mem": "Mem:              31           8           0           0          23          22", "at": "12:28:30"}
+{"model": "gemma-4-12b", "kind": "warm", "seconds": 0.11, "mem": "Mem:              31           8           0           0          23          22", "at": "12:28:30"}
