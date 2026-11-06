@@ -122,7 +122,10 @@ def test_over_budget_asks_never_reach_the_app(fleet: Path) -> None:
 def test_history_stays_text_after_tool_turns(fleet: Path) -> None:
     steps = [Step("add it", (calls(ADD), DONE)), Step("and sort", (calls(SORT), DONE))]
     log = run_steps(fleet, steps)
-    assert len(log[1].requests[0]) == 4  # system, user, assistant, user
+    # No chat turns replayed (#64): system, then one user message whose recall
+    # carries the earlier turn as data.
+    assert len(log[1].requests[0]) == 2  # system, user
+    assert "The record of earlier turns" in log[1].requests[0][1]["content"]
 
 
 def test_stop_mid_delegate(fleet: Path) -> None:
