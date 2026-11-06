@@ -56,7 +56,7 @@ from typing import Any, Literal
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.main as main_module
@@ -204,7 +204,9 @@ def next_step(rng: random.Random, tools: Sequence[str], faults: Sequence[FaultKi
         else:
             batch = tuple(_call(rng, tools) for _ in range(rng.choice((1, 1, 2))))
             turns.append(Turn("calls", calls=batch))
-    turns.append(Turn("text", text=rng.choice(("Done.", "Here you go.", "All set — nothing else."))))
+    turns.append(
+        Turn("text", text=rng.choice(("Done.", "Here you go.", "All set — nothing else.")))
+    )
     fault: Fault | None = None
     if faults and rng.random() < 0.35:
         kind = rng.choice(list(faults))
@@ -409,7 +411,11 @@ class Harness:
     @property
     def faults(self) -> list[FaultKind]:
         kinds: list[FaultKind] = [
-            "provider_dies", "provider_crashes", "app_down", "app_partial", "app_bug"
+            "provider_dies",
+            "provider_crashes",
+            "app_down",
+            "app_partial",
+            "app_bug",
         ]
         if self.cancel_path is not None:
             kinds.append("stop")
@@ -490,9 +496,7 @@ def check_every_call_has_one_answer(observed: Observed) -> None:
         if message.get("role") == "tool":
             answered.append(message["tool_call_id"])
     if sorted(asked) != sorted(answered):
-        raise InvariantBreach(
-            "every_call_has_one_answer", f"asked {asked}, answered {answered}"
-        )
+        raise InvariantBreach("every_call_has_one_answer", f"asked {asked}, answered {answered}")
 
 
 def check_saved_turn_is_what_ran(observed: Observed) -> None:
@@ -502,18 +506,14 @@ def check_saved_turn_is_what_ran(observed: Observed) -> None:
     roles = [m["role"] for m in new]
     if observed.status != 200:
         if roles != ["user"]:
-            raise InvariantBreach(
-                "saved_turn_is_what_ran", f"HTTP {observed.status} saved {roles}"
-            )
+            raise InvariantBreach("saved_turn_is_what_ran", f"HTTP {observed.status} saved {roles}")
         return
     if roles != ["user", "assistant"] or observed.run is None:
         raise InvariantBreach("saved_turn_is_what_ran", f"a 200 saved {roles}")
     saved = new[1]
     run = observed.run
     ran = [(r.tool, r.arguments, r.result, r.error) for r in run.tool_calls]
-    kept = [
-        (c["tool"], c["arguments"], c["result"], c["error"]) for c in saved["tool_calls"] or []
-    ]
+    kept = [(c["tool"], c["arguments"], c["result"], c["error"]) for c in saved["tool_calls"] or []]
     if kept != ran or saved["content"] != run.reply or saved["stop_reason"] != run.stop_reason:
         raise InvariantBreach("saved_turn_is_what_ran", f"saved {kept!r}, ran {ran!r}")
 
@@ -707,9 +707,7 @@ def walk(fleet_dir: Path, seed: int, length: int = CORPUS_LENGTH) -> list[Observ
     )
 
 
-def _report(
-    log: Sequence[Observed], breach: InvariantBreach, seed: int | None, length: int
-) -> str:
+def _report(log: Sequence[Observed], breach: InvariantBreach, seed: int | None, length: int) -> str:
     lines = [f"invariant breached at step {len(log)}: {breach}"]
     if seed is not None:
         lines.append(f"seed: {seed}")

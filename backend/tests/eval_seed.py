@@ -60,7 +60,10 @@ class SeedingTransport(httpx.BaseTransport):
             headers = httpx.Headers(request.headers)
             headers["content-length"] = str(len(content))
             request = httpx.Request(
-                request.method, request.url, headers=headers, content=content,
+                request.method,
+                request.url,
+                headers=headers,
+                content=content,
                 extensions=request.extensions,
             )
         return self._inner.handle_request(request)
