@@ -38,3 +38,8 @@ delegated_tools: ContextVar[tuple[str, ...] | None] = ContextVar("delegated_tool
 delegated_record: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
     "delegated_record", default=None
 )
+
+# The question the app armed instead of running a gated call (#68): its token,
+# thread and words (``app.ai.confirmation.AppConfirm`` as JSON). Same lifetime
+# rule; never on the model's message, which gets the question alone.
+delegated_confirm: ContextVar[dict[str, Any] | None] = ContextVar("delegated_confirm", default=None)

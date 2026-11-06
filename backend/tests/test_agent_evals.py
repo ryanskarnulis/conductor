@@ -15,8 +15,8 @@ Assertions are behavioral, never exact call sequences (the model samples at
 temp 1.0 — see ``../agent-standard/model-profile.md``): a routing golden pins
 "exactly this app was asked" (repeat asks to the same app are allowed;
 ``list_agents`` is always allowed), a refusal golden pins "no app was asked",
-and the destructive-op goldens pin conductor's own base-prompt rule — it must
-hold the request for user confirmation instead of delegating.
+and destructive ops on an app that confirms itself (``agent.confirms``) must
+route straight to it (#68).
 
 Opt-in like the app evals, so CI and default local runs never touch the GPU:
 
@@ -147,7 +147,9 @@ class FakeDelegateClient:
         self._next_thread_id += 1
         return thread_id
 
-    def send_message(self, conversation_id: int, message: str) -> MessageExchange:
+    def send_message(
+        self, conversation_id: int, message: str, *, confirm_token: str | None = None
+    ) -> MessageExchange:
         self._calls.append((self._app_name, message))
         now = datetime.now(UTC)
         return MessageExchange(
@@ -238,10 +240,10 @@ def _seeded_loop() -> Generator[AgentLoop, None, None]:
 #             is either an `ask_<app>` (delegate) or an `open_<app>` (hand the
 #             user over); a handoff must also carry the user's intent along.
 #   refuse  — out-of-fleet: no app may be acted on; conductor must answer itself
-#   confirm — destructive op on an app conductor DELEGATES to: it owns
-#             confirmation (base prompt rule) — no app may be acted on before
-#             the user confirms. Note this does NOT apply to open_ apps: chess
-#             confirms its own resets, so "resign the game" is a plain handoff.
+#   confirm — destructive op on an ask app WITHOUT agent.confirms: conductor
+#             is the safety stop (the fleet section's backstop) — no app may be
+#             acted on before the user confirms. No fleet app needs it today
+#             (#68: PCC and music confirm themselves); open_ apps never do.
 #   local   — answerable from the fleet layer / list_agents; no app acted on
 @dataclass(frozen=True)
 class Golden:
@@ -287,10 +289,10 @@ GOLDENS: tuple[Golden, ...] = (
     # until Phase 2, so asking to play something must still be refused rather
     # than routed to an app that cannot do it.
     Golden("refuse-playback", "play some jazz music", "refuse"),
-    # destructive ops on a DELEGATED app → conductor asks the user first, never
-    # delegates on a guess (it is the safety stop the app agents don't provide)
-    Golden("confirm-delete-task", "delete the groceries task", "confirm"),
-    Golden("confirm-wipe-project", "wipe the whole kitchen project", "confirm"),
+    # destructive ops on PCC go straight through: it declares agent.confirms
+    # and asks the person itself (#68). The ids keep their baseline history.
+    Golden("confirm-delete-task", "delete the groceries task", "route", "ask_tasks"),
+    Golden("confirm-wipe-project", "wipe the whole kitchen project", "route", "ask_tasks"),
     # capability question → answered locally (list_agents allowed), no delegation
     Golden("local-capabilities", "what can you do?", "local"),
 )

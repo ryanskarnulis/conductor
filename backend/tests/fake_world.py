@@ -42,7 +42,13 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from app.fleet.delegate import MessageExchange, MessageRead, ToolCallRead
+from app.fleet.delegate import (
+    ConfirmRequired,
+    DelegateConfirmRefused,
+    MessageExchange,
+    MessageRead,
+    ToolCallRead,
+)
 
 # --- dates -----------------------------------------------------------------------
 
@@ -397,6 +403,8 @@ class World:
 class AppReply:
     text: str
     tools: list[ToolCallRead] = field(default_factory=list)
+    stop_reason: str = "completed"
+    confirm: ConfirmRequired | None = None
 
 
 def _tool(tool_name: str, **arguments: Any) -> ToolCallRead:
@@ -404,15 +412,26 @@ def _tool(tool_name: str, **arguments: Any) -> ToolCallRead:
 
 
 class TasksApp:
-    """PCC's shape: read, create, move, complete and trash tasks and projects."""
+    """PCC's shape: read, create, move, complete and trash tasks and projects.
+
+    Trashing is gated as PCC gates it for a delegate (PCC#503): it arms a
+    single-use token and asks; only that thread's next message, carrying the
+    token, runs it. Any other message voids the question.
+    """
 
     name = "tasks"
 
     def __init__(self, world: World) -> None:
         self.world = world
         self._last_created: dict[int, list[int]] = {}  # thread → task ids it created
+        self._armed: dict[int, tuple[str, Callable[[], AppReply]]] = {}  # thread → (token, run)
 
-    def handle(self, thread: int, message: str) -> AppReply:
+    def handle(self, thread: int, message: str, confirm_token: str | None = None) -> AppReply:
+        armed = self._armed.pop(thread, None)  # the next message settles it
+        if confirm_token is not None:
+            if armed is None or armed[0] != confirm_token:
+                raise DelegateConfirmRefused("409: confirm token unknown", kind="unknown")
+            return armed[1]()
         text = message.lower()
         leads_with_create = re.match(
             r"\W*(?:please\s+|can you\s+|could you\s+)?(?:add|create|make|remind me)\b", text
@@ -422,7 +441,7 @@ class TasksApp:
         if re.search(r"\b(undo|revert|take (?:that|it) back)\b", text):
             return self._undo(thread)
         if re.search(r"\b(delete|trash|remove|wipe|bin|get rid of)\b", text):
-            return self._trash(message)
+            return self._trash(thread, message)
         if re.search(r"\b(push|move|reschedule|postpone|bump|shift|change the due)\b", text):
             return self._move(message)
         if re.search(r"\b(mark|complete|finish|tick off|check off)\b", text) and "done" in text:
@@ -574,30 +593,55 @@ class TasksApp:
             f'Marked "{task.title}" (#{task.id}) done.', [_tool("complete_task", task_id=task.id)]
         )
 
-    def _trash(self, message: str) -> AppReply:
+    def _gate(self, thread: int, tool: str, question: str, run: Callable[[], AppReply]) -> AppReply:
+        token = f"tok-{thread}-{len(self.world.receipts)}-{tool}"
+        self._armed[thread] = (token, run)
+        return AppReply(
+            question,
+            [ToolCallRead(tool=tool, arguments={}, error="not run: needs confirmation")],
+            stop_reason="confirm_required",
+            confirm=ConfirmRequired(token=token, tool=tool, question=question),
+        )
+
+    def _trash(self, thread: int, message: str) -> AppReply:
         project = self._project_in(message) if "project" in message.lower() else None
         if project is not None:
-            moved = [t for t in self.world.live_tasks() if t.project == project]
-            for task in moved:
-                task.trashed = True
-            self.world.projects[project] = True
-            self.world.record(
-                "tasks",
-                "trash",
-                f"project:{project}",
-                project,
-                tasks=[task.title for task in moved],
-            )
-            names = ", ".join(task.title for task in moved) or "no tasks"
-            return AppReply(
-                f"Moved the {project} project to the trash, with its {len(moved)} tasks "
-                f"({names}). Restore from the trash within 30 days.",
-                [_tool("delete_project", name=project)],
+            count = len([t for t in self.world.live_tasks() if t.project == project])
+            return self._gate(
+                thread,
+                "trash_project",
+                f"Trash {project} and its {count} tasks?",
+                lambda: self._trash_project(project),
             )
         target = best_match(message, {t.id: t.title for t in self.world.live_tasks()})
         if target is None:
             return AppReply("Which task do you mean? I couldn't tell from that.")
-        return AppReply(self._trash_task(target), [_tool("delete_task", task_id=target)])
+        title = self.world.tasks[target].title
+        return self._gate(
+            thread,
+            "trash_task",
+            f'Trash "{title}"?',
+            lambda: AppReply(self._trash_task(target), [_tool("delete_task", task_id=target)]),
+        )
+
+    def _trash_project(self, project: str) -> AppReply:
+        moved = [t for t in self.world.live_tasks() if t.project == project]
+        for task in moved:
+            task.trashed = True
+        self.world.projects[project] = True
+        self.world.record(
+            "tasks",
+            "trash",
+            f"project:{project}",
+            project,
+            tasks=[task.title for task in moved],
+        )
+        names = ", ".join(task.title for task in moved) or "no tasks"
+        return AppReply(
+            f"Moved the {project} project to the trash, with its {len(moved)} tasks "
+            f"({names}). Restore from the trash within 30 days.",
+            [_tool("delete_project", name=project)],
+        )
 
     def _trash_task(self, task_id: int) -> str:
         task = self.world.tasks[task_id]
@@ -609,9 +653,14 @@ class TasksApp:
         made = [i for i in self._last_created.get(thread, []) if not self.world.tasks[i].trashed]
         if not made:
             return AppReply("There's nothing I just did in this conversation to undo.")
-        lines = [self._trash_task(task_id) for task_id in made]
-        self._last_created[thread] = []
-        return AppReply(" ".join(lines), [_tool("delete_task", task_id=i) for i in made])
+
+        def run() -> AppReply:
+            lines = [self._trash_task(task_id) for task_id in made]
+            self._last_created[thread] = []
+            return AppReply(" ".join(lines), [_tool("delete_task", task_id=i) for i in made])
+
+        names = ", ".join(f'"{self.world.tasks[i].title}"' for i in made)
+        return self._gate(thread, "trash_task", f"Trash {names}?", run)
 
 
 class MusicApp:
@@ -812,10 +861,14 @@ class FakeDelegateClient:
         used.append(thread_id)
         return thread_id
 
-    def send_message(self, conversation_id: int, message: str) -> MessageExchange:
+    def send_message(
+        self, conversation_id: int, message: str, *, confirm_token: str | None = None
+    ) -> MessageExchange:
         self._world.threads.setdefault(self._app_name, []).append(conversation_id)
         if self._app is None:
             reply = AppReply("Done — nothing else to report.")
+        elif isinstance(self._app, TasksApp):
+            reply = self._app.handle(conversation_id, message, confirm_token)
         else:
             reply = self._app.handle(conversation_id, message)
         now = datetime.now(UTC)
@@ -833,8 +886,9 @@ class FakeDelegateClient:
                 role="assistant",
                 content=reply.text,
                 tool_calls=reply.tools or None,
-                stop_reason="completed",
+                stop_reason=reply.stop_reason,
                 created_at=now,
+                confirm_required=reply.confirm,
             ),
         )
 
@@ -872,6 +926,7 @@ FIXTURE_MANIFESTS = {
         agent:
           description: "Manages projects and tasks."
           api: /api/agent
+          confirms: true
           examples: ["what's due today"]
         """,
     "music": """\

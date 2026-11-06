@@ -52,6 +52,11 @@ class AgentSpec:
     # UI can act on the app without a model turn and without a cross-origin
     # request. ``None`` — the usual case — means the app has no such surface.
     actions: str | None = None
+    # ``confirms: true``: the app gates every write its user should confirm and
+    # asks itself (delegate-api "Confirmation"), or has none. Conductor then
+    # passes destructive asks straight through; without it, conductor asks
+    # first (#68).
+    confirms: bool = False
 
 
 @dataclass(frozen=True)
@@ -190,7 +195,14 @@ def _parse_agent(block: Any) -> AgentSpec | None:
         if isinstance(raw_actions, str) and raw_actions.startswith("/")
         else None
     )
-    return AgentSpec(description=description.strip(), api=api, examples=examples, actions=actions)
+    return AgentSpec(
+        description=description.strip(),
+        api=api,
+        examples=examples,
+        actions=actions,
+        # Only a literal true: anything else keeps conductor's own question.
+        confirms=block.get("confirms") is True,
+    )
 
 
 def _parse_open(block: Any) -> OpenSpec | None:

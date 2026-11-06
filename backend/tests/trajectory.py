@@ -341,7 +341,9 @@ class _FaultyClient:
     def create_conversation(self, *, title: str | None = None) -> int:
         return int(self._inner.create_conversation(title=title))
 
-    def send_message(self, conversation_id: int, message: str) -> MessageExchange:
+    def send_message(
+        self, conversation_id: int, message: str, *, confirm_token: str | None = None
+    ) -> MessageExchange:
         run = self._harness.current
         assert run is not None
         index = sum(run.sends.values())
