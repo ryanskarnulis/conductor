@@ -69,6 +69,11 @@ frontend on `8300`.
   `delegate_call` structlog event; replies relay as text plus a compact
   activity note — never raw transcripts into conductor's history, and history
   replays text turns only.
+- **Delegate v1.1** (#67): each `ask` mints one `Idempotency-Key`; only a
+  connection dropped after send is resent, under that key. The app's typed
+  record is stored per call (`app_record`, never sent to the model), and a 5xx
+  whose record lists `done` work is reported as partly happened, by name
+  (untrusted titles by kind and id). No record means unknown: never retry blind.
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
   depth stacks.
 - **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every

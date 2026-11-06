@@ -13,6 +13,7 @@ what the app reported doing while it answered.
 from __future__ import annotations
 
 from contextvars import ContextVar
+from typing import Any
 
 # Which agent identity the current tool call acts as. ``registry.call_tool``
 # always sets this per dispatch (the in-app loop passes ``agent:loop``); the
@@ -29,3 +30,11 @@ current_tool_actor: ContextVar[str] = ContextVar("current_tool_actor", default="
 # The dispatcher owns the lifetime — it sets ``None`` before each call and
 # resets after — so one call's answer can never be read as the next one's.
 delegated_tools: ContextVar[tuple[str, ...] | None] = ContextVar("delegated_tools", default=None)
+
+# The app's typed record of the same call (delegate-api v1.1, #67): one receipt
+# per tool it ran, as JSON. Set on success and on a failure that came with a
+# record, so a write that landed before the app died is still on the turn.
+# Same lifetime rule as ``delegated_tools``; kept off the model's message too.
+delegated_record: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
+    "delegated_record", default=None
+)
