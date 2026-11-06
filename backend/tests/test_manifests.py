@@ -93,6 +93,23 @@ def test_app_without_agent_or_open_block_is_a_member_but_inert(tmp_path: Path) -
     assert odysseus is not None and odysseus.agent is None
 
 
+def test_duplicate_app_name_keeps_first_in_sorted_order_and_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write(tmp_path, "chess-528", _OPEN_CHESS_MANIFEST)
+    _write(tmp_path, "chess", _CHESS_MANIFEST)
+
+    fleet = discover_fleet(tmp_path)
+    out = caplog.text
+
+    # `chess` sorts before `chess-528`, so its (agent) manifest wins.
+    assert [app.name for app in fleet.apps] == ["chess"]
+    chess = fleet.get("chess")
+    assert chess is not None and chess.has_agent and not chess.has_open
+    assert out.count("fleet_manifest_duplicate_name") == 1
+    assert str(tmp_path / "chess-528" / "app.yaml") in out
+
+
 def test_malformed_yaml_is_skipped_not_raised(tmp_path: Path) -> None:
     _write(tmp_path, "chess", _CHESS_MANIFEST)
     _write(tmp_path, "broken", "name: [unclosed\n  : : :")
