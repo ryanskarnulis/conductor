@@ -14,12 +14,14 @@ than landing in a table.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai.loop import AgentRunResult
+from app.ai.loop import AgentRunResult, ToolCallRecord
+from app.ai.recall import EarlierCall
 from app.db.models import Conversation, ConversationMessage, ConversationRole, utcnow
 from app.services.common import active, soft_delete
 
@@ -76,20 +78,70 @@ def list_messages(db: Session, conversation_id: int) -> Sequence[ConversationMes
     )
 
 
-def history_for_loop(db: Session, conversation_id: int) -> list[dict[str, str]]:
-    """Prior turns as provider messages for ``AgentLoop.run(history=…)``.
+def stored_turns(db: Session, conversation_id: int) -> list[dict[str, Any]]:
+    """A conversation's turns as :mod:`app.ai.recall` and the state block read
+    them: role, content and the stored tool calls, oldest first.
 
-    Text turns only: tool calls/results are persisted for display and audit
-    but deliberately not round-tripped into future model context — replaying
-    stale delegate transcripts bloats the local model's window, and the loop
-    re-asks the live apps through its tools instead. Assistant turns that
-    ended without a reply (iteration/correction limit) are skipped.
+    Never replayed as chat turns (#64): the model gets recall built from them,
+    as data, so a false reply of its own is never read back as fact.
     """
     return [
-        {"role": message.role.value, "content": message.content}
+        {
+            "role": message.role.value,
+            "content": message.content,
+            "tool_calls": message.tool_calls,
+        }
         for message in list_messages(db, conversation_id)
-        if message.content is not None
     ]
+
+
+# How far back recall looks across conversations: the newest assistant turns
+# that called an app. Bounded so recall's cost never grows with the database.
+EARLIER_TURNS_SCANNED = 200
+
+
+def earlier_calls(db: Session, conversation_id: int) -> list[EarlierCall]:
+    """Delegate calls from other live conversations, newest first, each with
+    what the person had asked — recall's candidates for "that song" days later."""
+    assistant_turns = (
+        db.execute(
+            select(ConversationMessage)
+            .join(Conversation, Conversation.id == ConversationMessage.conversation_id)
+            .where(
+                ConversationMessage.conversation_id != conversation_id,
+                ConversationMessage.role == ConversationRole.assistant,
+                ConversationMessage.tool_calls.is_not(None),
+                Conversation.deleted_at.is_(None),
+            )
+            .order_by(ConversationMessage.id.desc())
+            .limit(EARLIER_TURNS_SCANNED)
+        )
+        .scalars()
+        .all()
+    )
+    calls: list[EarlierCall] = []
+    for turn in assistant_turns:
+        asked = db.execute(
+            select(ConversationMessage.content)
+            .where(
+                ConversationMessage.conversation_id == turn.conversation_id,
+                ConversationMessage.role == ConversationRole.user,
+                ConversationMessage.id < turn.id,
+            )
+            .order_by(ConversationMessage.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        for stored in turn.tool_calls or []:
+            if not str(stored.get("tool", "")).startswith("ask_"):
+                continue
+            calls.append(
+                EarlierCall(
+                    when=turn.created_at,
+                    asked=asked or "",
+                    record=ToolCallRecord.model_validate(stored),
+                )
+            )
+    return calls
 
 
 def append_user_message(

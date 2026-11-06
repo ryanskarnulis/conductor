@@ -35,6 +35,10 @@ class ConversationRead(BaseModel):
 
 class MessageCreate(BaseModel):
     content: AgentMessageText
+    # Where the person is (#64), for the state block: the surface they are on
+    # and the app panel they have open. Optional; absent says nothing.
+    surface: Literal["desktop", "phone", "voice", "room_speaker"] | None = None
+    panel: Annotated[str, StringConstraints(strip_whitespace=True, max_length=60)] | None = None
 
 
 class ToolCallRead(BaseModel):

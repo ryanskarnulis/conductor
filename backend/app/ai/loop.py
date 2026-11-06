@@ -326,6 +326,7 @@ class AgentLoop:
         actor: str = LOOP_ACTOR,
         on_activity: OnActivity | None = None,
         conversation_id: str | None = None,
+        context: str | None = None,
     ) -> AgentRunResult:
         """Run the loop for one user message. Always returns; never spins.
 
@@ -335,6 +336,10 @@ class AgentLoop:
         in-app loop identity, :data:`LOOP_ACTOR`). ``on_activity`` receives one
         :class:`LoopActivity` per provider turn and per tool dispatch — the
         progress seam the HTTP layer surfaces while a run blocks.
+
+        ``context`` (:mod:`app.ai.turn_context`: the state block and recall)
+        opens the turn's user message, before the person's words; the route
+        passes it instead of ``history``, which stays for direct callers.
 
         A failure stop (``provider_error``, ``internal_error``) raises
         :class:`AgentRunFailed` with the partial run; every other stop returns.
@@ -357,11 +362,13 @@ class AgentLoop:
             conversation_id=conversation_id,
             model=getattr(self._provider, "model", None),
             history=[dict(message) for message in history or []],
+            context=context,
         )
         started = time.monotonic()
         with structlog.contextvars.bound_contextvars(**bindings), run_trace.tracing(trace):
             try:
-                result = self._run(user_message, history, actor, on_activity, trace)
+                opening = f"{context}\n\n{user_message}" if context else user_message
+                result = self._run(opening, history, actor, on_activity, trace)
             except AgentRunFailed as exc:
                 exc.result.run_id = run_id
                 self._write_trace(trace, exc.result, str(exc), started)

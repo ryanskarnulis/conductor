@@ -140,6 +140,11 @@ def _compact(arguments: dict[str, Any]) -> str:
     return json.dumps(arguments, separators=(",", ":"), sort_keys=True, default=str)
 
 
+def clip(text: str) -> str:
+    """One field cut to the record's line length, whitespace flattened."""
+    return _clip(text)
+
+
 def _clip(text: str) -> str:
     text = " ".join(text.split())
     if len(text) <= _MAX_FIELD_CHARS:

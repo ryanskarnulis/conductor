@@ -138,6 +138,8 @@ class RunTrace:
     conversation_id: str | None = None
     model: str | None = None
     history: list[dict[str, Any]] = field(default_factory=list)
+    # The state block and recall that opened the turn's user message (#64).
+    context: str | None = None
     system_prompt_sha256: str | None = None
     tool_schemas_sha256: str | None = None
     tools_offered: int = 0
@@ -159,6 +161,7 @@ class RunTrace:
             "actor": self.actor,
             "utterance": self.utterance,
             "history": self.history,
+            "context": self.context,
             "stop_reason": result.stop_reason,
             "error": error,
             "reply": result.reply,

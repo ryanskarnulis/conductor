@@ -16,6 +16,7 @@ binding and the activity endpoint, which PCC's local-tool agent doesn't need.
 from __future__ import annotations
 
 import time
+from datetime import date
 from collections.abc import Generator, Sequence
 from typing import Any
 
@@ -23,8 +24,10 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.ai import turn_context
 from app.ai.loop import AgentLoop, AgentRunFailed, LoopActivity, loop_from_settings
 from app.ai.providers.llamacpp import provider_from_settings
+from app.ai.state_block import Now
 from app.api import turn_activity
 from app.api.rate_limit import rate_limit
 from app.config import get_settings
@@ -197,13 +200,21 @@ def post_message(
     run (:class:`AgentRunFailed`: 502 for the provider, 500 for a crash) is
     stored as a truthful partial turn before the error goes out, so a write an
     app made before the failure stays in the transcript and the next turn's
-    history (#52). The
+    recall (#52). No chat turns are replayed (#64): the turn opens with the
+    state block and recall (:mod:`app.ai.turn_context`), built before the user
+    turn is stored, so it is "before this turn". The
     delegation context is bound for exactly the run: the DB-backed thread
     store keyed by this conversation, the per-turn per-app call budget, and
     the ``agent:loop`` audit driver.
     """
     conversation = _get_or_404(db, conversation_id)
-    history = conversations_service.history_for_loop(db, conversation.id)
+    turn_opening = turn_context.build(
+        date.today(),
+        Now(surface=data.surface, panel=data.panel),
+        data.content,
+        history=lambda: conversations_service.stored_turns(db, conversation.id),
+        earlier=lambda: conversations_service.earlier_calls(db, conversation.id),
+    )
     user_message = conversations_service.append_user_message(db, conversation, data.content)
     db.commit()
 
@@ -223,7 +234,7 @@ def post_message(
         with use_delegation_context(context):
             run = loop.run(
                 data.content,
-                history=history,
+                context=turn_opening,
                 on_activity=report,
                 conversation_id=str(conversation_id),
             )
