@@ -179,6 +179,7 @@ def replay(trace_path: Path, context_path: Path, run_id: str) -> ReplayReport:
         result: AgentRunResult = loop.run(
             str(record["utterance"]),
             history=record.get("history") or [],
+            context=record.get("context"),
             actor=str(record.get("actor") or "agent:loop"),
         )
     except AgentRunFailed as exc:

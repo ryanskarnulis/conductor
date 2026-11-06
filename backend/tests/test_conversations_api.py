@@ -111,7 +111,9 @@ def test_post_message_runs_loop_and_persists_exchange(client: TestClient) -> Non
     assert [message["role"] for message in detail["messages"]] == ["user", "assistant"]
 
 
-def test_history_replays_text_turns_only(client: TestClient) -> None:
+def test_no_chat_turn_is_replayed_the_turn_opens_with_state_and_recall(
+    client: TestClient,
+) -> None:
     @registry.tool
     def scratch_noop() -> str:
         """Scratch no-op tool."""
@@ -125,13 +127,17 @@ def test_history_replays_text_turns_only(client: TestClient) -> None:
     _use_loop(follow_up)
     client.post(f"/api/agent/conversations/{conversation_id}/messages", json={"content": "two"})
 
-    # The second run's context: system + prior text turns + new user turn —
-    # no role:tool messages, no replayed tool trajectory.
+    # The second run's context (#64): the system prompt, then one user message
+    # holding the state block, recall of the first exchange as data (the reply
+    # labelled as words, not a record), and the new words last. No replayed
+    # assistant turn, no role:tool messages.
     replayed = follow_up.requests[0]["messages"]
-    assert [message["role"] for message in replayed] == ["system", "user", "assistant", "user"]
-    assert replayed[1]["content"] == "one"
-    assert replayed[2]["content"] == "First reply"
-    assert replayed[3]["content"] == "two"
+    assert [message["role"] for message in replayed] == ["system", "user"]
+    opening = replayed[1]["content"]
+    assert opening.startswith("[State at the start of this turn")
+    assert 'The person said: "one"' in opening
+    assert 'What you said then (your words, not a record): "First reply"' in opening
+    assert opening.endswith("\n\ntwo")
 
 
 def test_provider_failure_is_502_and_keeps_user_message(client: TestClient) -> None:
@@ -393,6 +399,11 @@ def test_a_provider_death_after_a_delegate_write_keeps_the_write_in_the_thread(
         json={"content": "did that go through?"},
     )
     assert response.status_code == 200
+    # No chat turns replayed (#64): the write reaches the next turn as recall,
+    # the code-kept record of what the app did.
     replayed = follow_up.requests[0]["messages"]
-    assert [m["role"] for m in replayed] == ["system", "user", "assistant", "user"]
-    assert "Added task #41 pay rent." in replayed[2]["content"]
+    assert [m["role"] for m in replayed] == ["system", "user"]
+    opening = replayed[1]["content"]
+    assert "The record of earlier turns" in opening
+    assert "Added task #41 pay rent." in opening
+    assert opening.endswith("did that go through?")

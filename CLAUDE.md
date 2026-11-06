@@ -67,8 +67,14 @@ frontend on `8300`.
   `open_` apps confirm their own resets; "resign the game" is a plain handoff.
 - **Delegate calls are budgeted** (3 per app per turn) and every one emits a
   `delegate_call` structlog event; replies relay as text plus a compact
-  activity note — never raw transcripts into conductor's history, and history
-  replays text turns only.
+  activity note — never raw transcripts into conductor's history.
+- **No chat turns are replayed** (#64). Each turn's one user message opens
+  with the state block (`app/ai/state_block.py`: calendar, surface, panel,
+  running jobs, a pending question, recent entities from the apps' records)
+  and recall (`app/ai/recall.py`: this thread's record, requests and last
+  exchange as data, plus word-matched calls from earlier conversations), then
+  the person's words. System prompt and tool schemas stay byte-identical; the
+  opening is capped (`turn_context.MAX_CHARS`).
 - **Delegate v1.1** (#67): each `ask` mints one `Idempotency-Key`; only a
   connection dropped after send is resent, under that key. The app's typed
   record is stored per call (`app_record`, never sent to the model), and a 5xx
