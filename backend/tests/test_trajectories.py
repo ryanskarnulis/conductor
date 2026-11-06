@@ -91,10 +91,15 @@ ADD = ("ask_tasks", {"message": "add a task to water the plants tomorrow"})
 SORT = ("ask_music", {"message": "sort my whole library"})
 
 
-@pytest.mark.xfail(reason="a write before a provider death is in no saved turn (#69)", strict=True)
-def test_known_bug_write_lost_on_provider_death(fleet: Path) -> None:
-    step = Step("add it", (calls(ADD), DONE), Fault("provider_dies", 1))
-    run_steps(fleet, [step], tolerate_known_bugs=False)
+def test_a_write_before_a_provider_death_is_kept(fleet: Path) -> None:
+    # Found by the walks before #52: the route saved only the person's words,
+    # so the app's write was in no turn. Now the partial record is saved.
+    for kind in ("provider_dies", "provider_crashes"):
+        step = Step("add it", (calls(ADD), DONE), Fault(kind, 1))
+        log = run_steps(fleet, [step], tolerate_known_bugs=False)
+        saved = log[0].saved_assistant
+        assert log[0].receipts and saved is not None
+        assert saved["stop_reason"] in ("provider_error", "internal_error")
 
 
 def test_partial_write_is_reported_as_outcome_unknown(fleet: Path) -> None:

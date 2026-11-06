@@ -60,7 +60,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.main as main_module
-from app.ai.loop import AgentLoop, AgentRunResult
+from app.ai.loop import AgentLoop, AgentRunFailed, AgentRunResult
 from app.ai.provider import (
     ChatResult,
     ProviderRequestError,
@@ -313,8 +313,13 @@ class _CapturingLoop(AgentLoop):
         self._harness = harness
 
     def run(self, user_message: str, **kwargs: Any) -> AgentRunResult:
-        result = super().run(user_message, **kwargs)
         assert self._harness.current is not None
+        try:
+            result = super().run(user_message, **kwargs)
+        except AgentRunFailed as failed:
+            # A failure stop still carries what ran (#52): the route saves it.
+            self._harness.current.run = failed.result
+            raise
         self._harness.current.run = result
         return result
 
@@ -500,18 +505,21 @@ def check_every_call_has_one_answer(observed: Observed) -> None:
 
 
 def check_saved_turn_is_what_ran(observed: Observed) -> None:
-    """A 200 saves exactly the run's reply, stop and tool calls; a failed run
-    saves the user's words and no invented assistant turn."""
+    """The saved assistant turn is exactly what the run did. A failed run
+    (502/500) saves its partial record when anything ran (#52), and only the
+    person's words when nothing did; it never invents a turn."""
     new = observed.new_messages
     roles = [m["role"] for m in new]
-    if observed.status != 200:
-        if roles != ["user"]:
-            raise InvariantBreach("saved_turn_is_what_ran", f"HTTP {observed.status} saved {roles}")
-        return
-    if roles != ["user", "assistant"] or observed.run is None:
-        raise InvariantBreach("saved_turn_is_what_ran", f"a 200 saved {roles}")
-    saved = new[1]
     run = observed.run
+    if observed.status != 200 and (run is None or not run.tool_calls):
+        if roles != ["user"]:
+            raise InvariantBreach(
+                "saved_turn_is_what_ran", f"HTTP {observed.status}, nothing ran, saved {roles}"
+            )
+        return
+    if roles != ["user", "assistant"] or run is None:
+        raise InvariantBreach("saved_turn_is_what_ran", f"HTTP {observed.status} saved {roles}")
+    saved = new[1]
     ran = [(r.tool, r.arguments, r.result, r.error) for r in run.tool_calls]
     kept = [(c["tool"], c["arguments"], c["result"], c["error"]) for c in saved["tool_calls"] or []]
     if kept != ran or saved["content"] != run.reply or saved["stop_reason"] != run.stop_reason:
@@ -622,14 +630,11 @@ INVARIANTS: tuple[Callable[[Observed], None], ...] = (
     check_nothing_starts_after_stop,
 )
 
-# Breaches a walk reaches on main today, by invariant and the fault behind
-# them: tolerated in the corpus, pinned strictly in a named case, removed when
-# fixed (the named case XPASSes and fails until this entry goes).
-KNOWN_BUGS: dict[str, str] = {
-    # A write that landed before the provider died (or crashed) is in no saved
-    # turn: the route saves the user's words and nothing of the run (#69).
-    "every_app_write_is_recorded": "a write before a provider death is lost (#69)",
-}
+# Breaches a walk reaches on main, by invariant: tolerated in the corpus,
+# pinned strictly in a named case, removed when fixed. Empty since #52 saves a
+# failed run's partial record (the write-before-a-provider-death case the walks
+# first found is now ``test_a_write_before_a_provider_death_is_kept``).
+KNOWN_BUGS: dict[str, str] = {}
 
 
 def _known(observed: Observed, breach: InvariantBreach) -> bool:
