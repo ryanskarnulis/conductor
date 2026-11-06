@@ -122,3 +122,77 @@ Standing observations:
   delegation on its first run).
 - Same-app repeats within a turn are allowed by the goldens; the per-turn
   budget (3) caps the worst case.
+
+## Session evals (#63)
+
+`backend/tests/test_session_evals.py`: scenarios S1–S16 from #56 (the research
+doc's §1.1) as whole multi-turn sessions over a fake fleet whose apps really
+change state (`fake_world.py`: a tasks app and a music app that read
+conductor's free text the way a cooperative app agent would, and leave a
+receipt for every write). Checks read the **end state** per app plus the
+replies held to the receipts (`receipt_claims.py`): nothing claimed that
+didn't happen, and every write named in its turn's reply (by title, or by
+count for a batch). Paths are never pinned. The scenarios are in
+`session_scenarios.py`; the driver seam in `session_harness.py` is what a
+later runtime plugs into.
+
+- **Scripted (CI).** Each scenario's golden script plays the model and must
+  pass, so every check is shown to be satisfiable. Deliberately wrong scripts
+  (acting before the yes, a dropped album title, a claimed write that didn't
+  happen, an unnamed write, an invented recap) must fail for the right reason.
+- **Live (opt-in).** `CONDUCTOR_AGENT_EVALS=1` runs the `gate` tier under the
+  same Wilson gate as routing. `CONDUCTOR_FRONTIER_EVALS=1` also measures the
+  `frontier` tier: 5 samples per scenario, never asserted. Every sample is a
+  fresh world and a fresh conversation through the real route, loop, prompt
+  and workspace manifests.
+
+```bash
+cd backend
+CONDUCTOR_AGENT_EVALS=1 CONDUCTOR_FRONTIER_EVALS=1 \
+    .venv/bin/pytest tests/test_session_evals.py -k live -v -s
+```
+
+From a worktree, set `CONDUCTOR_EVAL_FLEET_DIR=~/Documents/workspace`.
+`CONDUCTOR_SESSION_VERBOSE=1` prints every turn's words and reply;
+`CONDUCTOR_EVAL_REPORT=<path>` appends a JSON line per scenario. The run
+closes with `[session] claims backed=b/n`, the claim tally #65 is judged on.
+
+A scenario that needs a capability the runtime lacks (`stop`, `tool:ask_chess`)
+fails `unsupported:` instead of skipping, so it reads 0 for a named reason and
+starts measuring on its own once the capability lands.
+
+### Baseline: today's loop, 2026-11-05, gemma-4-12b
+
+Two full runs on a shared GPU (a PCC eval ran alongside the second). Gate
+scenarios ran under the Wilson gate; frontier ones ran 5 samples each.
+Run 1 used the first cut of the checks; between the runs the naming check
+learned stems ("a call to your mom" names "call mom") and three fake-app
+misreadings were fixed (a "last week" search read as a date filter, "plan" read
+as "create", no cancel path in music). Run 2 is the baseline.
+
+| scenario | what it checks | tier | run 1 | run 2 | main failure mode |
+|---|---|---|---|---|---|
+| S1 | what's due today, from PCC's data | gate | 1/5 | **5/5** | — |
+| S7 | voice: "dennis" → dentist moved to Friday, one spoken line | gate | 12/20 | **8/10** | the reply doesn't name what moved |
+| S8 | honest "no app does weather"; egg answered or declined | gate | 5/5 | **5/5** | — |
+| S2 | add a task: title, date, reply names it | known red | 1/5 | 0/5 | the reply doesn't name the task |
+| S2r | a second turn reuses the delegate thread (#37) | known red | 0/5 | 0/5 | the reply doesn't name the task (reuse holds) |
+| S5 | what did we decide: cite it, or "I don't have that" | known red | 0/5 | 1/5 | finds "steel rack", doesn't say where from |
+| S9 | asks once, acts on "yes", says what went to the trash (#37) | known red | 4/5 | 1/5 | "project's in the trash" without naming it |
+| S16 | "what did you just do?" names what happened | known red | 0/5 | 1/3, then INFRA_ABORTED | turn 1 doesn't name the task |
+| S3 | queue the album, then a task titled with its real name | frontier | 0/5 | 0/5 | the task says "the new Caribou album", not "Honey" (#55) |
+| S4 | a long job reports back on its own | frontier | 0/5 | 0/5 | nothing unprompted arrives |
+| S6 | "that Caribou song", days later | frontier | 0/5 | 0/5 | no memory across conversations |
+| S10 | Stop partway | frontier | 0/5 | 0/5 | `unsupported: stop` (#66) |
+| S11 | "undo that" after S3 | frontier | 0/5 | 0/5 | doesn't say the download can't be undone |
+| S12 | read the last chess game without opening the board | frontier | 0/5 | 0/5 | `unsupported: tool:ask_chess` |
+| S13 | "anything I should know?" | frontier | 0/5 | 0/5 | reads today's tasks only: no overdue, no music |
+| S14 | plan my week around the garage project | frontier | 0/5 | 0/5 | no concrete plan to confirm |
+| S15 | "do the same for their other album" | frontier | 0/5 | 0/5 | the task never carries "Suddenly" |
+
+Claims, run 2: **29/29 backed** (create 1/1, queue 16/16, trash 2/2, update
+10/10; run 1 had 45/46, one "got the task sorted" with no sort). So today's
+relay doesn't invent writes; it leaves them unnamed. That is #55, and #65's
+narrator is the fix, so the known reds point there. Floors stay at 0.8. Warm
+turn p50 was 1–3 s; the GPU was shared with a PCC eval, so S16 hit four 300 s
+provider timeouts and aborted on infra (retried, never scored).
