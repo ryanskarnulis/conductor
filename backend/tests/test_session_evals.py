@@ -40,8 +40,9 @@ from sqlalchemy.orm import sessionmaker
 import app.main as main_module
 from app.ai.loop import AgentLoop, loop_from_settings
 from app.ai.provider import ProviderRequestError
-from app.api import rate_limit, routes_agent
+from app.api import rate_limit, routes_agent, turn_activity
 from app.config import get_settings
+from app.db.models import Base
 from app.db.session import get_db
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
@@ -85,6 +86,21 @@ def _tool_names() -> set[str]:
     return {tool.name for tool in registry.all_tools()}
 
 
+def _wiper(db_session: DbSession) -> Callable[[], None]:
+    """Empty every table (and the in-memory turn registry, keyed by the
+    conversation ids the wipe frees) so the next sample starts clean."""
+
+    def wipe() -> None:
+        db_session.rollback()
+        for table in reversed(Base.metadata.sorted_tables):
+            db_session.execute(table.delete())
+        db_session.commit()
+        db_session.expunge_all()
+        turn_activity._reset()
+
+    return wipe
+
+
 def _started(
     fleet_dir: Path,
     db_session: DbSession,
@@ -109,12 +125,19 @@ def _started(
 class _ScriptedRun:
     """A started app whose loop plays a fresh script per sample."""
 
-    def __init__(self, client: TestClient, holder: WorldHolder) -> None:
+    def __init__(self, client: TestClient, holder: WorldHolder, db_session: DbSession) -> None:
+        self.client = client
         self.provider = ScriptedProvider([])
         app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
             self.provider, fleet_section=getattr(app.state, "fleet_section", None)
         )
-        self.driver = LoopDriver(client, holder, tool_names=_tool_names, reset=rate_limit._reset)
+        self.driver = LoopDriver(
+            client,
+            holder,
+            tool_names=_tool_names,
+            reset=rate_limit._reset,
+            fresh_db=_wiper(db_session),
+        )
 
     def run(self, scenario: Scenario, turns: list[Any] | None = None) -> Sample:
         world = World()
@@ -134,7 +157,7 @@ def scripted(
 ) -> Generator[_ScriptedRun, None, None]:
     fleet_dir = write_fixture_fleet(tmp_path / "fleet")
     for client, holder in _started(fleet_dir, db_session, session_factory, monkeypatch):
-        yield _ScriptedRun(client, holder)
+        yield _ScriptedRun(client, holder, db_session)
 
 
 def _supported_today(scenario: Scenario) -> bool:
@@ -238,6 +261,20 @@ def test_samples_never_share_a_world(scripted: _ScriptedRun) -> None:
     assert len(second.session.world.receipts) == 1
 
 
+def test_samples_never_share_a_database(scripted: _ScriptedRun) -> None:
+    def conversations() -> list[int]:
+        listed = scripted.client.get("/api/agent/conversations")
+        assert listed.status_code == 200, listed.text
+        return sorted(c["id"] for c in listed.json())
+
+    scripted.run(S9)
+    first = conversations()
+    assert first
+    scripted.run(S9)
+    # The second sample sees only its own conversations, never the first's.
+    assert len(conversations()) == len(first)
+
+
 # --- the live run (opt-in) -------------------------------------------------------------------
 
 
@@ -264,7 +301,13 @@ def live(
                 f"fleet discovery registered {sorted(_tool_names())}; is "
                 f"{WORKSPACE_ROOT} the workspace root?"
             )
-        yield LoopDriver(client, holder, tool_names=_tool_names, reset=rate_limit._reset)
+        yield LoopDriver(
+            client,
+            holder,
+            tool_names=_tool_names,
+            reset=rate_limit._reset,
+            fresh_db=_wiper(db_session),
+        )
 
 
 def _seeded_loop() -> Generator[AgentLoop, None, None]:
