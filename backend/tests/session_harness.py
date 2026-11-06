@@ -56,6 +56,8 @@ class TurnRecord:
     detail: str | None = None
     seconds: float = 0.0
     label: str | None = None
+    # The person pressed Stop during this turn: it ends ``cancelled``.
+    stopped: bool = False
 
     @property
     def acted(self) -> list[str]:
@@ -181,9 +183,8 @@ class Scenario:
 
 def check_turns_completed(session: Session) -> None:
     for record in session.turns:
-        assert record.stop_reason == "completed", (
-            f"turn {record.index} stopped {record.stop_reason}"
-        )
+        want = "cancelled" if record.stopped else "completed"
+        assert record.stop_reason == want, f"turn {record.index} stopped {record.stop_reason}"
         assert record.reply and record.reply.strip(), f"turn {record.index}: empty reply"
 
 
@@ -319,7 +320,9 @@ def _run_step(step: Step, driver: Driver, session: Session) -> TurnRecord | None
 
         world.on_write = hook
         try:
-            return _say(driver, session, step.text, step.label, "desktop")
+            record = _say(driver, session, step.text, step.label, "desktop")
+            record.stopped = fired.is_set()
+            return record
         finally:
             world.on_write = None
     raise TypeError(f"unknown step {step!r}")
@@ -379,7 +382,8 @@ class LoopDriver:
         self._fresh_db = fresh_db
         self._conversation: int | None = None
         self._seen: int = 0
-        routes = {getattr(route, "path", "") for route in client.app.routes}
+        # The OpenAPI paths, not ``app.routes``: included routers nest there.
+        routes = set(client.app.openapi()["paths"])
         self._cancel_path = next((path for path in routes if _CANCEL_ROUTE.match(path)), None)
 
     def supports(self, capability: str) -> bool:

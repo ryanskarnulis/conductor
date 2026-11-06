@@ -87,6 +87,13 @@ class MessageExchange(BaseModel):
     assistant_message: MessageRead
 
 
+class RunCancelRead(BaseModel):
+    """Outcome of a Stop (#66): ``cancel_requested`` is True when a turn was in
+    flight and has been asked to stop; False means nothing was running."""
+
+    cancel_requested: bool
+
+
 class TurnActivityRead(BaseModel):
     """What conductor is doing right now for one conversation's in-flight turn.
 

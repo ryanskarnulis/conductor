@@ -368,8 +368,11 @@ class _FaultyClient:
         run.tool_events.append((self._app, "ok"))
         return exchange
 
-    def cancel(self, conversation_id: int) -> None:
-        self._inner.cancel(conversation_id)
+    def cancel(self, conversation_id: int) -> bool:
+        run = self._harness.current
+        if run is not None:
+            run.tool_events.append((self._app, "cancel"))
+        return bool(self._inner.cancel(conversation_id))
 
 
 _CANCEL_ROUTE = re.compile(r"^/api/agent/conversations/\{[^}]+\}/(?:cancel|stop)$")
@@ -406,7 +409,8 @@ class Harness:
         self._saved_registry = dict(registry._REGISTRY)
         self.client = TestClient(app, raise_server_exceptions=False)
         self.client.__enter__()
-        routes = {getattr(route, "path", "") for route in app.routes}
+        # The OpenAPI paths, not ``app.routes``: included routers nest there.
+        routes = set(app.openapi()["paths"])
         self.cancel_path = next((p for p in routes if _CANCEL_ROUTE.match(p)), None)
         created = self.client.post("/api/agent/conversations", json={})
         self.conversation = int(created.json()["id"])

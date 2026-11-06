@@ -61,7 +61,7 @@ from tests.fake_world import World, write_fixture_fleet
 from tests.receipt_claims import Tally
 from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
 from tests.session_harness import LoopDriver, Sample, Scenario, WorldHolder, run_sample, sample_line
-from tests.session_scenarios import S2, S3, S9, S10, S12, S16, SCENARIOS
+from tests.session_scenarios import S2, S3, S9, S12, S16, SCENARIOS
 
 _LIVE = os.environ.get("CONDUCTOR_AGENT_EVALS") == "1"
 _FRONTIER = os.environ.get("CONDUCTOR_FRONTIER_EVALS") == "1"
@@ -161,8 +161,8 @@ def scripted(
 
 
 def _supported_today(scenario: Scenario) -> bool:
-    # Today's loop has no cancel route and no way to read chess.
-    return scenario.id not in {S10.id, S12.id}
+    # Today's loop has no way to read chess.
+    return scenario.id != S12.id
 
 
 @pytest.mark.parametrize(
@@ -182,7 +182,7 @@ def test_golden_script_passes(scenario: Scenario, scripted: _ScriptedRun) -> Non
     assert scripted.provider._turns == [], "the golden script wasn't fully consumed"
 
 
-@pytest.mark.parametrize("scenario", [S10, S12], ids=lambda s: s.id)
+@pytest.mark.parametrize("scenario", [S12], ids=lambda s: s.id)
 def test_missing_capability_fails_unsupported(scenario: Scenario, scripted: _ScriptedRun) -> None:
     sample = scripted.run(scenario)
     assert sample.taken.outcome is Outcome.FAIL

@@ -5,7 +5,8 @@ it stores the user turn, binds the delegation context (DB-backed thread store,
 per-turn budget, audit driver), runs the master loop synchronously — v1 is
 non-streaming — then stores and returns the assistant turn. While it blocks,
 ``GET /agent/conversations/{id}/activity`` reports what the loop is doing
-(``app/api/turn_activity.py``) so the UI can show "asking chess…" progress.
+(``app/api/turn_activity.py``) so the UI can show "asking chess…" progress,
+and ``POST …/cancel`` stops it (#66, ``app/ai/stop.py``).
 
 Deltas from PCC's routes_agent: no ``X-Agent-Actor`` handling — conductor is
 the delegation root (STANDARD.md depth-1), so no other agent may drive this
@@ -43,6 +44,7 @@ from app.schemas.conversations import (
     MessageCreate,
     MessageExchange,
     MessageRead,
+    RunCancelRead,
     TurnActivityRead,
 )
 from app.services import conversations as conversations_service
@@ -157,6 +159,27 @@ def get_turn_activity(conversation_id: int, db: Session = Depends(get_db)) -> Tu
     )
 
 
+@router.post("/conversations/{conversation_id}/cancel", response_model=RunCancelRead)
+def cancel_turn(
+    conversation_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+) -> RunCancelRead:
+    """Stop the conversation's in-flight turn (#66); **404** for an unknown thread.
+
+    Idempotent and never blocks: it sets the turn's Stop and returns. The loop
+    stops at its next boundary (a provider call or tool dispatch) and the
+    turn's own ``POST …/messages`` answers 200 ``cancelled``, its reply the
+    code-kept record of what ran. A delegate call in flight gets the app's
+    cancel after the response, best-effort. With nothing running the answer
+    is ``cancel_requested: false`` and nothing is remembered.
+    """
+    _get_or_404(db, conversation_id)
+    stop = turn_activity.request_stop(conversation_id)
+    if stop is not None:
+        background_tasks.add_task(stop.pass_on)
+    logger.info("agent_turn_cancel", conversation_id=conversation_id, live=stop is not None)
+    return RunCancelRead(cancel_requested=stop is not None)
+
+
 @router.post(
     "/conversations/{conversation_id}/notes",
     response_model=MessageRead,
@@ -241,7 +264,7 @@ def post_message(
             conversation_id, kind=activity.kind, tool=activity.tool, iteration=activity.iteration
         )
 
-    turn_activity.begin(conversation_id)
+    stop = turn_activity.begin(conversation_id)
     try:
         with use_delegation_context(context):
             run = loop.run(
@@ -250,6 +273,7 @@ def post_message(
                 surface=data.surface,
                 on_activity=report,
                 conversation_id=str(conversation_id),
+                stop=stop,
             )
     except AgentRunFailed as exc:
         logger.error(
@@ -266,7 +290,7 @@ def post_message(
             db.commit()
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
     finally:
-        turn_activity.end(conversation_id)
+        turn_activity.end(conversation_id, stop)
 
     assistant_message = conversations_service.append_assistant_message(db, conversation, run)
     db.commit()

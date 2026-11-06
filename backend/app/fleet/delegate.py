@@ -91,6 +91,8 @@ CONFIRM_HEADER = "Confirm-Token"
 
 _DEFAULT_READ_TIMEOUT = 300.0
 _DEFAULT_CONNECT_TIMEOUT = 5.0
+# A cancel never blocks app-side, so it never waits like a message does.
+_CANCEL_TIMEOUT = 5.0
 
 
 class DelegateError(Exception):
@@ -318,6 +320,12 @@ class MessageExchange(BaseModel):
     assistant_message: MessageRead
 
 
+class RunCancelled(BaseModel):
+    """What ``POST …/cancel`` returns: whether a run was in flight to stop."""
+
+    cancel_requested: bool = False
+
+
 class ConversationCreated(BaseModel):
     """The created-thread response. Conductor needs only ``id``."""
 
@@ -406,6 +414,19 @@ class DelegateClient:
         )
         return self._parse(response, MessageExchange)
 
+    def cancel(self, conversation_id: int) -> bool:
+        """``POST /conversations/{id}/cancel`` → whether a run was in flight (#66).
+
+        Asks the thread's in-flight run to stop at its next boundary; its own
+        ``POST …/messages`` then answers ``cancelled`` with what it did. Not in
+        delegate-api v1.1 (PCC exposes it); an app without the route answers
+        404, raised as :class:`DelegateThreadGone`.
+        """
+        response = self._send(
+            "POST", f"/conversations/{conversation_id}/cancel", timeout=_CANCEL_TIMEOUT
+        )
+        return self._parse(response, RunCancelled).cancel_requested
+
     def get_conversation(self, conversation_id: int) -> ConversationDetail:
         """``GET /conversations/{id}`` → the thread with its history."""
         response = self._send("GET", f"/conversations/{conversation_id}")
@@ -423,6 +444,7 @@ class DelegateClient:
         json: Any = None,
         may_have_acted: bool = False,
         extra_headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> httpx.Response:
         """One request with the actor header, mapping every fault to a typed error.
 
@@ -440,7 +462,12 @@ class DelegateClient:
             headers[TURN_HEADER] = hop.run_id
             headers[HOP_HEADER] = hop.hop_id
         try:
-            response = self._client.request(method, url, json=json, headers=headers)
+            if timeout is None:
+                response = self._client.request(method, url, json=json, headers=headers)
+            else:
+                response = self._client.request(
+                    method, url, json=json, headers=headers, timeout=timeout
+                )
         except httpx.HTTPError as exc:
             logger.warning("delegate_request_failed", url=url, error=str(exc))
             if may_have_acted and not isinstance(exc, _NOT_SENT_ERRORS):

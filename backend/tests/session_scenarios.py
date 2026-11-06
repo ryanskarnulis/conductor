@@ -405,10 +405,8 @@ S10 = Scenario(
     (StopAfter("sort my whole library", app="music", writes=2),),
     (_s10,),
     needs=frozenset({"stop"}),
-    script=lambda w: [
-        _ask("music", "sort my whole library"),
-        _say("Stopped after filing 2 songs, Midnight City and Teardrop. Want me to undo those?"),
-    ],
+    # The Stop lands mid-delegate, so the loop ends there: no model turn after.
+    script=lambda w: [_ask("music", "sort my whole library")],
 )
 
 

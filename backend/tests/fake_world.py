@@ -851,6 +851,7 @@ class MusicApp:
                 f"Stopped after filing {len(filed)} songs ({names}); {left} left unsorted. "
                 "Each move can be undone.",
                 tools,
+                stop_reason="cancelled",
             )
         return AppReply(f"Sorted {len(filed)} songs: {names}.", tools)
 
@@ -976,8 +977,9 @@ class FakeDelegateClient:
             ),
         )
 
-    def cancel(self, conversation_id: int) -> None:
+    def cancel(self, conversation_id: int) -> bool:
         self._world.cancel_requested[self._app_name] = True
+        return True
 
     def delete_conversation(self, conversation_id: int) -> None:
         return None

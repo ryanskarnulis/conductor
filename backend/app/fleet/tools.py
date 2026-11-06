@@ -55,13 +55,15 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any, Protocol
 
 import structlog
 
 from app.ai import trace as run_trace
 from app.ai.confirmation import CONFIRM_TOOL, AppConfirm, PendingConfirm
+from app.ai.stop import STOPPED_ERROR, current_stop
 from app.fleet.context import DelegationContext, current_delegation_context
 from app.fleet.delegate import (
     CONDUCTOR_ACTOR,
@@ -97,7 +99,7 @@ MAX_INTENT_LENGTH = 500
 
 
 class DelegateClientLike(Protocol):
-    """The delegate-client surface the tools use (context manager + two calls).
+    """The delegate-client surface the tools use (context manager + three calls).
 
     :class:`app.fleet.delegate.DelegateClient` satisfies it structurally; tests
     supply a fake at the same shape, so no live call happens in pytest.
@@ -112,6 +114,8 @@ class DelegateClientLike(Protocol):
     def send_message(
         self, conversation_id: int, message: str, *, confirm_token: str | None = None
     ) -> MessageExchange: ...
+
+    def cancel(self, conversation_id: int) -> bool: ...
 
 
 # A factory yields a fresh client bound to one app.
@@ -278,6 +282,9 @@ def _delegate(
             f"The message to {app.name} is {len(message)} characters; the limit is "
             f"{MAX_DELEGATE_MESSAGE_LENGTH}. Shorten it and ask again."
         )
+    stop = current_stop()
+    if stop is not None and stop.is_set():
+        raise ToolError(STOPPED_ERROR)
     context = current_delegation_context()
     # Charge the budget before any network work; over-budget never leaves here.
     context.charge_call(app.name)
@@ -291,7 +298,7 @@ def _delegate(
         started = time.monotonic()
         subagent_id: int | None = None
         try:
-            with client_factory(app) as client:
+            with client_factory(app) as client, _passing_stop_on(client, lambda: subagent_id):
                 if confirm is not None:
                     subagent_id = confirm.thread_id
                     try:
@@ -331,6 +338,28 @@ def _delegate(
                 _report(hop, exc.record, [entry.tool for entry in exc.record])
             raise _to_tool_error(app, exc) from exc
         return _finish(app, context, hop, subagent_id, started, exchange)
+
+
+@contextmanager
+def _passing_stop_on(
+    client: DelegateClientLike, thread: Callable[[], int | None]
+) -> Iterator[None]:
+    """While the block's message is in flight, a Stop sends the app's cancel
+    for ``thread()`` (#66). A run already stopped never starts the call."""
+    stop = current_stop()
+    if stop is None:
+        yield
+        return
+
+    def cancel() -> None:
+        thread_id = thread()
+        if thread_id is not None:
+            client.cancel(thread_id)
+
+    with stop.delegating(cancel) as live:
+        if not live:
+            raise ToolError(STOPPED_ERROR)
+        yield
 
 
 def _finish(
@@ -526,6 +555,11 @@ def _format_reply(app: FleetApp, assistant: MessageRead) -> str:
             f"({app.name} finished without a text reply; stop reason: "
             f"{assistant.stop_reason or 'unknown'}.)"
         )
+        # A cancelled run replies with no text (delegate-api): its record
+        # still says what it did.
+        done = [entry for entry in assistant.record or [] if entry.outcome == "done"]
+        if done:
+            parts.append(f"Done: {_describe_done(done)}.")
     note = _activity_note(app.name, assistant.tool_calls)
     if note:
         parts.append(note)

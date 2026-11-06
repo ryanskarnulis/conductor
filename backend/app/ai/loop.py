@@ -40,8 +40,15 @@ tool-less call on the same provider speaks from the receipts of what ran, and
 code checks it. The planner's own text turn ends the loop and stays in the
 transcript; the narrator's words are the reply.
 
-``timed_out`` and ``cancelled`` are in the vocabulary for parity with the
-fleet; conductor has no run deadline yet, and Stop lands with #66.
+**Stop** (#66, :mod:`app.ai.stop`): ``run(stop=...)`` is checked before every
+provider call (the narrator's too) and every tool dispatch; a set Stop ends
+the run ``cancelled``, the rest of a batch answered "not run". A call already
+in flight finishes first, and a delegate call in flight gets the app's own
+cancel. A stopped run is never narrated: like every stop short of
+``completed`` it replies from the code-kept record of what ran.
+
+``timed_out`` is in the vocabulary for parity with the fleet; conductor has no
+run deadline yet.
 """
 
 from __future__ import annotations
@@ -59,6 +66,7 @@ import structlog
 from pydantic import BaseModel, ValidationError
 
 from app.ai import narrator, run_record
+from app.ai.stop import STOPPED_ERROR, Stop, use_stop
 from app.ai import trace as run_trace
 from app.ai.provider import (
     ChatProvider,
@@ -338,6 +346,7 @@ class AgentLoop:
         conversation_id: str | None = None,
         context: str | None = None,
         surface: str | None = None,
+        stop: Stop | None = None,
     ) -> AgentRunResult:
         """Run the loop for one user message. Always returns; never spins.
 
@@ -352,7 +361,9 @@ class AgentLoop:
         opens the turn's user message, before the person's words; the route
         passes it instead of ``history``, which stays for direct callers.
         ``surface`` (``Now.surface``) shapes the narrator's reply: on voice and
-        room_speaker, two sentences at most and no markdown.
+        room_speaker, two sentences at most and no markdown. ``stop`` is the
+        turn's Stop (#66): checked at every boundary, and bound for the tools
+        so a delegate call in flight can pass it on to its app.
 
         A failure stop (``provider_error``, ``internal_error``) raises
         :class:`AgentRunFailed` with the partial run; every other stop returns.
@@ -379,10 +390,16 @@ class AgentLoop:
             surface=surface,
         )
         started = time.monotonic()
-        with structlog.contextvars.bound_contextvars(**bindings), run_trace.tracing(trace):
+        with (
+            structlog.contextvars.bound_contextvars(**bindings),
+            run_trace.tracing(trace),
+            use_stop(stop),
+        ):
             try:
                 opening = f"{context}\n\n{user_message}" if context else user_message
-                result = self._run(opening, history, actor, on_activity, trace, words=user_message)
+                result = self._run(
+                    opening, history, actor, on_activity, trace, words=user_message, stop=stop
+                )
             except AgentRunFailed as exc:
                 exc.result.run_id = run_id
                 self._write_trace(trace, exc.result, str(exc), started)
@@ -443,6 +460,7 @@ class AgentLoop:
         trace: run_trace.RunTrace,
         *,
         words: str,
+        stop: Stop | None = None,
     ) -> AgentRunResult:
         specs = self._tool_specs()
         system_prompt = self._system_prompt()
@@ -469,6 +487,8 @@ class AgentLoop:
         logger.info("agent_run_started", tools=len(specs), history_messages=len(history or []))
         for iteration in range(1, self._max_iterations + 1):
             iterations = iteration
+            if _stopped(stop):
+                return self._stop("cancelled", records, iteration, messages)
             self._emit(on_activity, LoopActivity(kind="model", iteration=iteration))
             try:
                 result = self._chat(messages, specs, trace)
@@ -522,6 +542,9 @@ class AgentLoop:
                     return self._stop("truncated", records, iteration, messages)
                 # A text turn terminates the loop, even when content is empty.
                 messages.append(result.to_message())
+                if _stopped(stop):
+                    # Stopped before the narrator's call: the record speaks.
+                    return self._stop("cancelled", records, iteration, messages)
                 reply = self._reply(words, result.content, records, trace, on_activity, iteration)
                 return self._finish("completed", reply, records, iteration, messages)
             if truncated:
@@ -537,7 +560,13 @@ class AgentLoop:
             schema_error_this_turn = False
             progressed = False
             over_cap = False
+            cancelled = False
             for index, call in enumerate(result.tool_calls):
+                if _stopped(stop):
+                    # Stopped: this call and the rest of the turn never start.
+                    self._skip(result.tool_calls[index:], records, messages, STOPPED_ERROR)
+                    cancelled = True
+                    break
                 if dispatched >= self._max_tool_calls:
                     # Past the cap: this call and the rest of the turn are
                     # answered "not run" and never dispatched.
@@ -579,6 +608,8 @@ class AgentLoop:
                 exchange = _exchange_key(call.name, call.arguments, feedback)
                 progressed = progressed or exchange not in seen
                 seen.add(exchange)
+            if cancelled or _stopped(stop):
+                return self._stop("cancelled", records, iteration, messages)
             if over_cap:
                 return self._stop("tool_call_limit", records, iteration, messages)
             if schema_error_this_turn:
@@ -782,6 +813,10 @@ def loop_from_settings(provider: ChatProvider, *, fleet_section: str | None = No
         tracer=run_trace.tracer_from_settings(),
         narrate=settings.conductor_narrator,
     )
+
+
+def _stopped(stop: Stop | None) -> bool:
+    return stop is not None and stop.is_set()
 
 
 def _validation_summary(exc: ValidationError) -> str:
