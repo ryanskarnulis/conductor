@@ -76,7 +76,7 @@ from app.fleet.delegate import DelegateOutcomeUnknown, DelegateUnavailable, Mess
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
 from app.tools import registry
-from tests.fake_world import Receipt, World, client_factory
+from tests.fake_world import Receipt, World, client_factory, write_fixture_fleet
 
 # --- the step ----------------------------------------------------------------------
 
@@ -655,9 +655,7 @@ def replay_command(seed: int, length: int) -> str:
 
 
 def fixture_fleet(root: Path) -> Path:
-    from tests.test_session_evals import _write_fixture_fleet
-
-    return _write_fixture_fleet(root)
+    return write_fixture_fleet(root)
 
 
 @contextmanager
