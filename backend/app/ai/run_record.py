@@ -17,8 +17,9 @@ what the next turn's history replays, so a write that happened is never lost
 from the transcript (#52).
 
 Mirrors PCC's ``app/ai/run_record.py``, minus its narrator: conductor's limit
-replies are the rendered record itself until #65. Pure: no I/O, and nothing
-here reads the model's words.
+replies are the rendered record itself until #65. Pure: no I/O, no registry
+lookups (so a replayed record reads the same), and nothing here reads the
+model's words.
 """
 
 from __future__ import annotations
@@ -26,9 +27,6 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
-
-from app.tools import registry
-from app.tools.registry import UnknownToolError
 
 if TYPE_CHECKING:
     from app.ai.loop import ToolCallRecord
@@ -43,8 +41,10 @@ READ_TOOLS = frozenset({"list_agents"})
 # dispatched. The loop builds those texts from it, so a reworded one cannot
 # start reading as a refusal.
 NOT_RUN_PREFIX = "not run: "
-# The loop's prefix for schema-invalid arguments (``AgentLoop._dispatch``).
+# The loop's prefix for schema-invalid arguments (``AgentLoop._dispatch``),
+# and the registry's for a tool name it does not know (``UnknownToolError``).
 INVALID_ARGUMENTS_PREFIX = "Invalid arguments: "
+UNKNOWN_TOOL_PREFIX = "Unknown tool "
 
 # How much of one call's arguments or answer the record carries: enough to name
 # what was asked and answered, not a transcript.
@@ -72,11 +72,7 @@ def classify(record: ToolCallRecord) -> Outcome:
     if record.result is not None:
         return "looked_up" if record.tool in READ_TOOLS else "done"
     error = record.error or ""
-    if error.startswith(NOT_RUN_PREFIX) or error.startswith(INVALID_ARGUMENTS_PREFIX):
-        return "not_run"
-    try:
-        registry.get_tool(record.tool)
-    except UnknownToolError:
+    if error.startswith((NOT_RUN_PREFIX, INVALID_ARGUMENTS_PREFIX, UNKNOWN_TOOL_PREFIX)):
         return "not_run"
     return "failed"
 

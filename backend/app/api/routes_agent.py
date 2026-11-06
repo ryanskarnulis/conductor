@@ -221,7 +221,12 @@ def post_message(
     turn_activity.begin(conversation_id)
     try:
         with use_delegation_context(context):
-            run = loop.run(data.content, history=history, on_activity=report)
+            run = loop.run(
+                data.content,
+                history=history,
+                on_activity=report,
+                conversation_id=str(conversation_id),
+            )
     except AgentRunFailed as exc:
         logger.error(
             "agent_run_failed",
