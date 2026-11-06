@@ -282,19 +282,34 @@ def discover_fleet(
     """Scan ``{manifest_dir}/*/app.yaml`` and return the discovered :class:`Fleet`.
 
     Deterministic (apps sorted by directory name). Bad manifests are skipped
-    with a warning, never raised; ``self_name`` is skipped silently. When
+    with a warning, never raised; a second manifest with an already-seen app
+    name is skipped with a warning naming its path (first in sorted order wins); ``self_name`` is skipped silently. When
     ``upstream_host`` is set, every app's upstream host is rewritten to it
     (port preserved) — docker reaches host-bound apps via
     ``host.docker.internal``.
     """
     apps: list[FleetApp] = []
+    first_path: dict[str, Path] = {}
     if not manifest_dir.is_dir():
         logger.warning("fleet_manifest_dir_missing", path=str(manifest_dir))
         return Fleet(apps=())
     for path in sorted(manifest_dir.glob("*/app.yaml")):
         app = _load_manifest(path, upstream_host=upstream_host, self_name=self_name)
-        if app is not None:
-            apps.append(app)
+        if app is None:
+            continue
+        if app.name in first_path:
+            # A second checkout of the same app (`chess-528/`). Keep the first
+            # in sorted order; failing would take the whole backend down over a
+            # stray worktree, and the sort makes the winner deterministic.
+            logger.warning(
+                "fleet_manifest_duplicate_name",
+                name=app.name,
+                path=str(path),
+                kept=str(first_path[app.name]),
+            )
+            continue
+        first_path[app.name] = path
+        apps.append(app)
     logger.info(
         "fleet_discovered",
         manifest_dir=str(manifest_dir),

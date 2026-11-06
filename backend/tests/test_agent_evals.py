@@ -62,7 +62,7 @@ from app.api import rate_limit, routes_agent
 from app.config import get_settings
 from app.db.session import get_db
 from app.fleet.delegate import MessageExchange, MessageRead
-from app.fleet.manifests import FleetApp
+from app.fleet.manifests import FleetApp, fleet_from_settings
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
 from app.tools import registry
@@ -196,6 +196,8 @@ def eval_client(
     try:
         with TestClient(app) as client:
             registered = {tool.name for tool in registry.all_tools()}
+            names = [a.name for a in fleet_from_settings().apps]
+            assert len(names) == len(set(names)), f"duplicate fleet names: {names}"
             if not EXPECTED_AGENT_TOOLS <= registered:
                 pytest.skip(
                     f"fleet discovery registered {sorted(registered)}; goldens expect "
