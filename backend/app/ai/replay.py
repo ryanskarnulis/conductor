@@ -103,6 +103,8 @@ class _ReplayLoop(AgentLoop):
             max_corrections=int(limits.get("max_corrections", 3)),
             max_tokens=int(limits.get("max_tokens", 2048)),
             max_tool_calls=int(limits.get("max_tool_calls", 12)),
+            # A narrated turn (#65) captured the narrator's call too.
+            narrate=record.get("narration") is not None,
         )
         self._captured_prompt = system_prompt
         self._captured_specs = specs
@@ -180,6 +182,7 @@ def replay(trace_path: Path, context_path: Path, run_id: str) -> ReplayReport:
             str(record["utterance"]),
             history=record.get("history") or [],
             context=record.get("context"),
+            surface=record.get("surface"),
             actor=str(record.get("actor") or "agent:loop"),
         )
     except AgentRunFailed as exc:

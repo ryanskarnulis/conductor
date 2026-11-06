@@ -128,8 +128,9 @@ def delegation() -> Any:
         yield context
 
 
-def _traced_turn(tmp_path: Path) -> tuple[Path, Path, str, _TasksApp]:
-    """One traced and captured turn: ask_tasks, then a text reply."""
+def _traced_turn(tmp_path: Path, *, narrate: bool = False) -> tuple[Path, Path, str, _TasksApp]:
+    """One traced and captured turn: ask_tasks, then a text reply (and, with
+    ``narrate``, the narrator's)."""
     app = _TasksApp()
     _tasks_fleet(app)
     trace_path, context_path = tmp_path / "trace.jsonl", tmp_path / "context.jsonl"
@@ -137,14 +138,16 @@ def _traced_turn(tmp_path: Path) -> tuple[Path, Path, str, _TasksApp]:
         _completion(call=("ask_tasks", {"message": "add a task to pay rent"})),
         _completion(content="Done: pay rent is on your list."),
     ]
+    if narrate:
+        turns.append(_completion(content="Pay rent is on your list."))
     provider = LlamaCppProvider(
         _LLM,
         "gemma-4-12b",
         client=httpx.Client(transport=httpx.MockTransport(_model(turns))),
         capture=JsonlContextCapture(context_path),
     )
-    loop = AgentLoop(provider, tracer=run_trace.JsonlTracer(trace_path))
-    result = loop.run("add a task to pay rent", conversation_id="7")
+    loop = AgentLoop(provider, tracer=run_trace.JsonlTracer(trace_path), narrate=narrate)
+    result = loop.run("add a task to pay rent", conversation_id="7", surface="voice")
     return trace_path, context_path, result.run_id, app
 
 
@@ -278,6 +281,19 @@ def test_a_captured_turn_replays_offline(tmp_path: Path, delegation: DelegationC
     assert report.faithful, report
     assert report.calls_replayed == 2
     assert len(app.seen) == calls_to_app  # no app was called
+
+
+def test_a_narrated_turn_replays_its_narrator_too(
+    tmp_path: Path, delegation: DelegationContext
+) -> None:
+    trace_path, context_path, run_id, _ = _traced_turn(tmp_path, narrate=True)
+    [record] = _records(trace_path)
+    assert record["narration"]["path"] == "narrated" and record["surface"] == "voice"
+
+    report = replay(trace_path, context_path, run_id)
+
+    assert report.faithful, report
+    assert report.calls_replayed == 3
 
 
 def test_replay_names_the_first_request_that_drifted(

@@ -18,8 +18,10 @@ adds a note: whatever the record does not show as done was not done. It is
 what the next turn's history replays, so a write that happened is never lost
 from the transcript (#52).
 
-Mirrors PCC's ``app/ai/run_record.py``, minus its narrator: conductor's limit
-replies are the rendered record itself until #65. Pure: no I/O, no registry
+Mirrors PCC's ``app/ai/run_record.py``. A limit or failure stop replies with
+the rendered record itself; a completed run's reply is the narrator's
+(:mod:`app.ai.narrator`, #65), which sorts calls with :func:`classify` too.
+Pure: no I/O, no registry
 lookups (so a replayed record reads the same), and nothing here reads the
 model's words.
 """

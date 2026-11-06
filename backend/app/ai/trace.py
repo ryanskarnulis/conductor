@@ -57,6 +57,7 @@ KIND_RUN = "run"
 # ``bad_args`` (tool-call arguments that were not a JSON object), ``failed``
 # (no usable answer).
 CallStatus = Literal["ok", "truncated", "bad_args", "failed"]
+CallRole = Literal["planner", "narrator"]
 
 
 def new_run_id() -> str:
@@ -81,8 +82,10 @@ def tool_schemas_sha256(specs: Sequence[ToolSpec]) -> str:
 @dataclass
 class ModelCall:
     """One model round trip. Token counts are ``None`` when unknown, never a
-    zero that reads as measured."""
+    zero that reads as measured. ``role``: the planner's turn or the
+    narrator's (#65)."""
 
+    role: CallRole = "planner"
     status: CallStatus = "ok"
     ms: int = 0
     prompt_tokens: int | None = None
@@ -140,6 +143,9 @@ class RunTrace:
     history: list[dict[str, Any]] = field(default_factory=list)
     # The state block and recall that opened the turn's user message (#64).
     context: str | None = None
+    # Where the person is (``Now.surface``) and how the reply was made (#65).
+    surface: str | None = None
+    narration: dict[str, Any] | None = None
     system_prompt_sha256: str | None = None
     tool_schemas_sha256: str | None = None
     tools_offered: int = 0
@@ -162,6 +168,8 @@ class RunTrace:
             "utterance": self.utterance,
             "history": self.history,
             "context": self.context,
+            "surface": self.surface,
+            "narration": self.narration,
             "stop_reason": result.stop_reason,
             "error": error,
             "reply": result.reply,

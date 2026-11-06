@@ -34,6 +34,12 @@ The safety nets are STANDARD.md §3's, after PCC's loop (#52):
 - **A stop short of ``completed`` replies from what ran** (:mod:`app.ai.run_record`),
   never from the model's words. A stop where nothing ran has no reply.
 
+A completed run's reply is the narrator's (#65, :mod:`app.ai.narrator`) when the
+loop is built with ``narrate=True`` (:func:`loop_from_settings` does): a second,
+tool-less call on the same provider speaks from the receipts of what ran, and
+code checks it. The planner's own text turn ends the loop and stays in the
+transcript; the narrator's words are the reply.
+
 ``timed_out`` and ``cancelled`` are in the vocabulary for parity with the
 fleet; conductor has no run deadline yet, and Stop lands with #66.
 """
@@ -52,7 +58,7 @@ from typing import Any, Literal
 import structlog
 from pydantic import BaseModel, ValidationError
 
-from app.ai import run_record
+from app.ai import narrator, run_record
 from app.ai import trace as run_trace
 from app.ai.provider import (
     ChatProvider,
@@ -301,6 +307,7 @@ class AgentLoop:
         max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
         fleet_section: str | None = None,
         tracer: run_trace.Tracer | None = None,
+        narrate: bool = False,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be >= 1")
@@ -318,6 +325,8 @@ class AgentLoop:
         self._fleet_section = fleet_section
         # Where finished turns are recorded (#62); ``None`` keeps no record.
         self._tracer = tracer
+        # Whether a completed run's reply is the narrator's (#65).
+        self._narrate = narrate
 
     def run(
         self,
@@ -328,6 +337,7 @@ class AgentLoop:
         on_activity: OnActivity | None = None,
         conversation_id: str | None = None,
         context: str | None = None,
+        surface: str | None = None,
     ) -> AgentRunResult:
         """Run the loop for one user message. Always returns; never spins.
 
@@ -341,6 +351,8 @@ class AgentLoop:
         ``context`` (:mod:`app.ai.turn_context`: the state block and recall)
         opens the turn's user message, before the person's words; the route
         passes it instead of ``history``, which stays for direct callers.
+        ``surface`` (``Now.surface``) shapes the narrator's reply: on voice and
+        room_speaker, two sentences at most and no markdown.
 
         A failure stop (``provider_error``, ``internal_error``) raises
         :class:`AgentRunFailed` with the partial run; every other stop returns.
@@ -364,12 +376,13 @@ class AgentLoop:
             model=getattr(self._provider, "model", None),
             history=[dict(message) for message in history or []],
             context=context,
+            surface=surface,
         )
         started = time.monotonic()
         with structlog.contextvars.bound_contextvars(**bindings), run_trace.tracing(trace):
             try:
                 opening = f"{context}\n\n{user_message}" if context else user_message
-                result = self._run(opening, history, actor, on_activity, trace)
+                result = self._run(opening, history, actor, on_activity, trace, words=user_message)
             except AgentRunFailed as exc:
                 exc.result.run_id = run_id
                 self._write_trace(trace, exc.result, str(exc), started)
@@ -390,13 +403,21 @@ class AgentLoop:
             logger.warning("agent_trace_failed", error=str(exc), error_type=type(exc).__name__)
 
     def _chat(
-        self, messages: list[dict[str, Any]], specs: Sequence[Any], trace: run_trace.RunTrace
+        self,
+        messages: list[dict[str, Any]],
+        specs: Sequence[Any],
+        trace: run_trace.RunTrace,
+        *,
+        max_tokens: int | None = None,
+        role: run_trace.CallRole = "planner",
     ) -> ChatResult:
         """One metered provider call: its status, time and tokens go on the trace."""
-        call = run_trace.ModelCall()
+        call = run_trace.ModelCall(role=role)
         started = time.monotonic()
         try:
-            result = self._provider.chat(messages, tools=specs, max_tokens=self._max_tokens)
+            result = self._provider.chat(
+                messages, tools=specs or None, max_tokens=max_tokens or self._max_tokens
+            )
         except ToolCallArgumentsError as exc:
             call.status, call.failure = "bad_args", type(exc).__name__
             raise
@@ -420,6 +441,8 @@ class AgentLoop:
         actor: str,
         on_activity: OnActivity | None,
         trace: run_trace.RunTrace,
+        *,
+        words: str,
     ) -> AgentRunResult:
         specs = self._tool_specs()
         system_prompt = self._system_prompt()
@@ -499,7 +522,8 @@ class AgentLoop:
                     return self._stop("truncated", records, iteration, messages)
                 # A text turn terminates the loop, even when content is empty.
                 messages.append(result.to_message())
-                return self._finish("completed", result.content, records, iteration, messages)
+                reply = self._reply(words, result.content, records, trace, on_activity, iteration)
+                return self._finish("completed", reply, records, iteration, messages)
             if truncated:
                 # The calls arrived whole and run; only the cut-off text beside
                 # them is dropped from history.
@@ -568,6 +592,43 @@ class AgentLoop:
                 logger.warning("agent_run_no_progress", tool_calls=len(result.tool_calls))
                 return self._stop("no_progress", records, iteration, messages)
         return self._stop("max_iterations", records, iterations, messages)
+
+    def _reply(
+        self,
+        words: str,
+        planner_reply: str | None,
+        records: list[ToolCallRecord],
+        trace: run_trace.RunTrace,
+        on_activity: OnActivity | None,
+        iteration: int,
+    ) -> str | None:
+        """A completed run's reply: the narrator's, or the planner's words when
+        the loop doesn't narrate. Never raises: a narrator that fails falls
+        back to the code-built record reply inside :func:`narrator.narrate`."""
+        if not self._narrate:
+            return planner_reply
+        started = time.monotonic()
+
+        def chat(messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
+            self._emit(on_activity, LoopActivity(kind="model", iteration=iteration))
+            return self._chat(messages, [], trace, max_tokens=max_tokens, role="narrator")
+
+        try:
+            told = narrator.narrate(words, planner_reply, records, surface=trace.surface, chat=chat)
+        except Exception:
+            # A bug in the narrator's code, not the model: the turn still stands.
+            logger.exception("agent_narrator_crashed")
+            told = narrator.Narration(
+                narrator.fallback_reply(records, trace.surface) or planner_reply, "fallback"
+            )
+        trace.narration = {
+            "path": told.path,
+            "appended": told.appended,
+            "model_calls": told.model_calls,
+            "ms": round((time.monotonic() - started) * 1000),
+        }
+        logger.info("agent_narrated", path=told.path, appended=len(told.appended))
+        return told.reply
 
     def _tool_specs(self) -> list[ToolSpec]:
         """The tools offered this turn. A seam for :mod:`app.ai.replay`."""
@@ -719,6 +780,7 @@ def loop_from_settings(provider: ChatProvider, *, fleet_section: str | None = No
         max_tool_calls=settings.conductor_max_tool_calls,
         fleet_section=fleet_section,
         tracer=run_trace.tracer_from_settings(),
+        narrate=settings.conductor_narrator,
     )
 
 

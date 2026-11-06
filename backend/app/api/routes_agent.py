@@ -247,6 +247,7 @@ def post_message(
             run = loop.run(
                 data.content,
                 context=turn_opening,
+                surface=data.surface,
                 on_activity=report,
                 conversation_id=str(conversation_id),
             )
