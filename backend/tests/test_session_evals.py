@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import json
 import os
-import textwrap
 import time
 from collections.abc import Callable, Generator
 from pathlib import Path
@@ -56,7 +55,7 @@ from tests.evalstats import (
     run_gate,
     scenario_record,
 )
-from tests.fake_world import World
+from tests.fake_world import World, write_fixture_fleet
 from tests.receipt_claims import Tally
 from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
 from tests.session_harness import LoopDriver, Sample, Scenario, WorldHolder, run_sample, sample_line
@@ -77,46 +76,6 @@ _INFRA = InfraBudget(
     budget=int(os.environ.get("CONDUCTOR_EVAL_INFRA_BUDGET", "12")),
 )
 _CLAIMS = Tally()
-
-# The fleet the scripted run discovers: the three apps the scenarios use, in
-# the shapes the real manifests have (tasks and music delegate, chess opens).
-_FIXTURE_MANIFESTS = {
-    "project-command-center": """\
-        name: tasks
-        title: Project Command Center
-        upstream: 127.0.0.1:8100
-        agent:
-          description: "Manages projects and tasks."
-          api: /api/agent
-          examples: ["what's due today"]
-        """,
-    "music": """\
-        name: music
-        title: Music
-        upstream: 127.0.0.1:8500
-        agent:
-          description: "Downloads songs and sorts the library."
-          api: /api/agent
-          examples: ["download this song"]
-        """,
-    "chess": """\
-        name: chess
-        title: Chess
-        upstream: 127.0.0.1:8000
-        open:
-          description: "Opens the chess board."
-          path: /
-          intent_param: intent
-          examples: ["let's play chess"]
-        """,
-}
-
-
-def _write_fixture_fleet(root: Path) -> Path:
-    for directory, manifest in _FIXTURE_MANIFESTS.items():
-        (root / directory).mkdir(parents=True, exist_ok=True)
-        (root / directory / "app.yaml").write_text(textwrap.dedent(manifest), encoding="utf-8")
-    return root
 
 
 def _tool_names() -> set[str]:
@@ -170,7 +129,7 @@ def scripted(
     session_factory: sessionmaker[DbSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[_ScriptedRun, None, None]:
-    fleet_dir = _write_fixture_fleet(tmp_path / "fleet")
+    fleet_dir = write_fixture_fleet(tmp_path / "fleet")
     for client, holder in _started(fleet_dir, db_session, session_factory, monkeypatch):
         yield _ScriptedRun(client, holder)
 

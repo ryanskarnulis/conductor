@@ -34,10 +34,12 @@ from __future__ import annotations
 
 import difflib
 import re
+import textwrap
 import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from app.fleet.delegate import MessageExchange, MessageRead, ToolCallRead
@@ -856,3 +858,46 @@ def client_factory(world: World) -> Callable[[Any], FakeDelegateClient]:
 
 def titles(receipts: Iterable[Receipt]) -> list[str]:
     return [receipt.title for receipt in receipts]
+
+
+# --- a fleet to discover ---------------------------------------------------------
+
+# The fleet the scripted run discovers: the three apps the scenarios use, in
+# the shapes the real manifests have (tasks and music delegate, chess opens).
+FIXTURE_MANIFESTS = {
+    "project-command-center": """\
+        name: tasks
+        title: Project Command Center
+        upstream: 127.0.0.1:8100
+        agent:
+          description: "Manages projects and tasks."
+          api: /api/agent
+          examples: ["what's due today"]
+        """,
+    "music": """\
+        name: music
+        title: Music
+        upstream: 127.0.0.1:8500
+        agent:
+          description: "Downloads songs and sorts the library."
+          api: /api/agent
+          examples: ["download this song"]
+        """,
+    "chess": """\
+        name: chess
+        title: Chess
+        upstream: 127.0.0.1:8000
+        open:
+          description: "Opens the chess board."
+          path: /
+          intent_param: intent
+          examples: ["let's play chess"]
+        """,
+}
+
+
+def write_fixture_fleet(root: Path) -> Path:
+    for directory, manifest in FIXTURE_MANIFESTS.items():
+        (root / directory).mkdir(parents=True, exist_ok=True)
+        (root / directory / "app.yaml").write_text(textwrap.dedent(manifest), encoding="utf-8")
+    return root

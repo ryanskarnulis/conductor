@@ -122,3 +122,46 @@ Standing observations:
   delegation on its first run).
 - Same-app repeats within a turn are allowed by the goldens; the per-turn
   budget (3) caps the worst case.
+
+## Session evals (#63)
+
+`backend/tests/test_session_evals.py`: scenarios S1–S16 from #56 (the research
+doc's §1.1) as whole multi-turn sessions over a fake fleet whose apps really
+change state (`fake_world.py`: a tasks app and a music app that read
+conductor's free text the way a cooperative app agent would, and leave a
+receipt for every write). Checks read the **end state** per app plus the
+replies held to the receipts (`receipt_claims.py`): nothing claimed that
+didn't happen, and every write named in its turn's reply (by title, or by
+count for a batch). Paths are never pinned. The scenarios are in
+`session_scenarios.py`; the driver seam in `session_harness.py` is what a
+later runtime plugs into.
+
+- **Scripted (CI).** Each scenario's golden script plays the model and must
+  pass, so every check is shown to be satisfiable. Deliberately wrong scripts
+  (acting before the yes, a dropped album title, a claimed write that didn't
+  happen, an unnamed write, an invented recap) must fail for the right reason.
+- **Live (opt-in).** `CONDUCTOR_AGENT_EVALS=1` runs the `gate` tier under the
+  same Wilson gate as routing. `CONDUCTOR_FRONTIER_EVALS=1` also measures the
+  `frontier` tier: 5 samples per scenario, never asserted. Every sample is a
+  fresh world and a fresh conversation through the real route, loop, prompt
+  and workspace manifests.
+
+```bash
+cd backend
+CONDUCTOR_AGENT_EVALS=1 CONDUCTOR_FRONTIER_EVALS=1 \
+    .venv/bin/pytest tests/test_session_evals.py -k live -v -s
+```
+
+From a worktree, set `CONDUCTOR_EVAL_FLEET_DIR=~/Documents/workspace`.
+`CONDUCTOR_SESSION_VERBOSE=1` prints every turn's words and reply;
+`CONDUCTOR_EVAL_REPORT=<path>` appends a JSON line per scenario. The run
+closes with `[session] claims backed=b/n`, the claim tally #65 is judged on.
+
+A scenario that needs a capability the runtime lacks (`stop`, `tool:ask_chess`)
+fails `unsupported:` instead of skipping, so it reads 0 for a named reason and
+starts measuring on its own once the capability lands.
+
+### Baseline: today's loop, 2026-11-05, gemma-4-12b
+
+Two full runs on a shared GPU (a PCC eval ran alongside the second). Gate
+scenarios ran under the Wilson gate; frontier ones ran 5 samples each.
