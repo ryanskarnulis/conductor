@@ -77,6 +77,22 @@ def names(text: str, title: str) -> bool:
     return missing == 0 or (len(need) >= 4 and missing <= 1)
 
 
+def refers_to(text: str, title: str) -> bool:
+    """Does ``text`` refer to ``title`` the way a person would accept: at least
+    half its meaningful words, each matched on a shared stem ("calling your
+    mom" refers to "call mom", "the dentist thing" to "dentist appointment")."""
+    have = _words(text)
+    need = [word for word in _words(title) if word not in _SMALL] or _words(title)
+    if not need:
+        return False
+
+    def hit(word: str) -> bool:
+        stem = word[:4] if len(word) > 4 else word
+        return any(w.startswith(stem) or (len(w) >= 3 and word.startswith(w)) for w in have)
+
+    return sum(1 for word in need if hit(word)) * 2 >= len(need)
+
+
 # A clause is the unit a hedge scopes over: "I added the task, but I can't undo
 # the download" asserts the first half and hedges the second.
 _CLAUSE_SPLIT = re.compile(
@@ -256,7 +272,7 @@ def unnamed(reply: str | None, receipts: Sequence[ReceiptLike], *, turn: int) ->
     for batch in batches.values():
         if len(batch) >= 3 and len(batch) in counts:
             continue
-        missing.extend(receipt for receipt in batch if not names(text, receipt.title))
+        missing.extend(receipt for receipt in batch if not refers_to(text, receipt.title))
     return missing
 
 

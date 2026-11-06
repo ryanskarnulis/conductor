@@ -425,7 +425,7 @@ class TasksApp:
             return self._move(message)
         if re.search(r"\b(mark|complete|finish|tick off|check off)\b", text) and "done" in text:
             return self._complete(message)
-        if re.search(r"\b(add|create|make|new task|remind me|schedule|plan)\b", text) and not (
+        if re.search(r"\b(add|create|make|new task|remind me)\b", text) and not (
             re.search(r"\?\s*$", text) or text.startswith(("what", "which", "how", "is ", "are "))
         ):
             return self._create(thread, message)
@@ -433,10 +433,24 @@ class TasksApp:
 
     # reads
 
+    _NOT_SEARCH = frozenset(
+        """today tomorrow week weekend last overdue late search find show any anything
+        regarding related about notes note decide decided decision what whats plan
+        planning around list everything""".split()
+    )
+
     def _read(self, message: str) -> AppReply:
         text = message.lower()
         world = self.world
-        if "overdue" in text or "late" in text:
+        terms = [k for k in keywords(message) if k not in self._NOT_SEARCH]
+        hits = [
+            task
+            for task in world.live_tasks()
+            if any(_token_score(k, f"{task.title} {task.project} {task.notes}") for k in terms)
+        ]
+        if hits:
+            found, what = hits, "matching"
+        elif "overdue" in text or "late" in text:
             found, what = world.overdue(), "overdue"
         elif "today" in text:
             found, what = world.due_today(), "due today"
@@ -445,19 +459,8 @@ class TasksApp:
             found = world.find_tasks(lambda t: t.due is not None and world.today <= t.due <= end)
             what = "due this week"
         else:
-            hits = [
-                task
-                for task in world.live_tasks()
-                if any(
-                    _token_score(k, f"{task.title} {task.project} {task.notes}")
-                    for k in keywords(message)
-                )
-            ]
-            if hits:
-                found, what = hits, "matching"
-            else:
-                found = world.due_today() + world.overdue()
-                what = "due today or overdue"
+            found = world.due_today() + world.overdue()
+            what = "due today or overdue"
         world.read("tasks", what)
         if not found:
             return AppReply(f"No tasks {what}.", [_tool("list_tasks", filter=what)])
@@ -630,7 +633,16 @@ class MusicApp:
             return self._file_one(message)
         if re.search(r"\b(sort|organi[sz]e)\b", text):
             return self._sort_all()
-        if re.search(r"\b(download|grab|get|queue|fetch|save|rip|pull)\b", text):
+        if re.search(r"\b(cancel|stop|scrap|undo|remove|delete|pull)\b", text) and re.search(
+            r"\b(download|album|playlist|queue)", text
+        ):
+            # Downloads land in seconds: by the time anyone asks, it's on disk.
+            self.world.read("music", "jobs")
+            return AppReply(
+                "That download already finished — I can't un-download it. "
+                "The files are in the library if you want to delete them yourself."
+            )
+        if re.search(r"\b(download|grab|get|queue|fetch|save|rip)\b", text):
             return self._download(message)
         self.world.read("music", "library")
         return AppReply(

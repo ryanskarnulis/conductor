@@ -26,6 +26,7 @@ measurement the day the runtime grows the capability, with no harness change:
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -454,6 +455,10 @@ def sample_line(scenario: Scenario, sample: Sample) -> str:
         f"[session]   {scenario.id} {sample.taken.outcome} turns={turns} writes={writes} "
         f"{sample.seconds:.1f}s"
     )
+    if os.environ.get("CONDUCTOR_SESSION_VERBOSE") == "1":
+        for t in session.turns:
+            sent = [str(c["arguments"])[:120] for c in t.tools]
+            line += f"\n[session]     {t.index}> {t.text!r} sent={sent}\n[session]     {t.index}< {t.reply!r}"
     if sample.taken.failure and sample.taken.outcome is not Outcome.PASS:
         line += f"\n[session]     ✗ {sample.taken.failure[:300]}"
     return line

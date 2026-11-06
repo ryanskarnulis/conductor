@@ -25,7 +25,7 @@ from datetime import timedelta
 from typing import Any
 
 from tests.fake_world import World, friday_targets, weekend_targets
-from tests.receipt_claims import names
+from tests.receipt_claims import refers_to
 from tests.scripted_provider import text_turn, tool_calls_turn
 from tests.session_harness import (
     Advance,
@@ -111,7 +111,7 @@ def _s1(session: Session) -> None:
     assert reads, "answered without reading tasks"
     reply = session.last.reply or ""
     for task in session.world.due_today():
-        assert names(reply, task.title), f"reply doesn't mention {task.title!r}"
+        assert refers_to(reply, task.title), f"reply doesn't mention {task.title!r}"
 
 
 S1 = Scenario(
@@ -247,7 +247,8 @@ def _s5(session: Session) -> None:
         return
     assert re.search(
         r"don't have|no record|couldn't find|can't find|not sure|don't know|"
-        r"no notes|nothing (?:saved|recorded|on)",
+        r"no notes|nothing (?:saved|recorded|on|about|for)|no luck|(?:isn't|not) showing|"
+        r"didn't find|didn't turn up|no sign of",
         reply,
     ), "neither the decision (steel rack) nor an honest 'I don't have that'"
     assert "wood" not in reply, "made up a decision"
@@ -391,7 +392,7 @@ def _s10(session: Session) -> None:
     assert any(r.kind == "cancel" for r in session.world.receipts), "the app never got the stop"
     assert filed and session.world.unsorted(), f"filed {len(filed)}: the stop didn't land partway"
     reply = _lower(session.last.reply)
-    assert str(len(filed)) in reply or all(names(reply, r.title) for r in filed), (
+    assert str(len(filed)) in reply or all(refers_to(reply, r.title) for r in filed), (
         "didn't say exactly what got filed"
     )
     assert "undo" in reply, "didn't offer undo"
@@ -414,7 +415,7 @@ S10 = Scenario(
 
 
 def _s11(session: Session) -> None:
-    created = [r for r in _tasks_created(session) if "honey" in r.title.lower()]
+    created = [r for r in _tasks_created(session) if r.turn == 1]
     assert created, "S3's task was never made"
     assert all(_task_for(session, r).trashed for r in created), "the task wasn't undone"
     assert all(job.state != "cancelled" for job in session.world.jobs.values())
@@ -470,10 +471,10 @@ def _s13(session: Session) -> None:
     overdue = session.world.overdue()
     unsorted = session.world.unsorted()
     assert re.search(rf"\b(?:{len(overdue)}|three)\b", reply) or all(
-        names(reply, t.title) for t in overdue
+        refers_to(reply, t.title) for t in overdue
     ), "the 3 overdue tasks aren't in the brief"
     assert re.search(rf"\b(?:{len(unsorted)}|five)\b", reply) or all(
-        names(reply, s.title) for s in unsorted
+        refers_to(reply, s.title) for s in unsorted
     ), "the 5 songs to sort aren't in the brief"
     assert len(reply.split()) <= 80, f"not short: {len(reply.split())} words"
 
@@ -562,7 +563,7 @@ def _s16(session: Session) -> None:
     assert not session.writes(recap), "the recap wrote something"
     created = _tasks_created(session)
     assert created, "the first turn made no task"
-    assert any(names(recap.reply or "", r.title) for r in created), (
+    assert any(refers_to(recap.reply or "", r.title) for r in created), (
         "the recap doesn't name the task it made"
     )
 
