@@ -71,6 +71,11 @@ frontend on `8300`.
   replays text turns only.
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
   depth stacks.
+- **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every
+  call, the stall rule, a 12-call per-run cap, and the full stop vocabulary. A
+  stop short of `completed` replies from the code-kept run record, and a
+  failed run is stored before the route answers 502/500, so a write never
+  vanishes from the thread.
 - **The fleet action proxy** (`/api/fleet/{app}/actions/{path}`) forwards only
   to declared `agent.actions` prefixes: no path escapes, no forwarded browser
   headers, short timeouts (5s/30s), the app's status passes through. It is the

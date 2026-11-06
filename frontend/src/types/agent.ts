@@ -20,7 +20,18 @@ export interface ToolCallRecord {
   app_tools?: string[] | null
 }
 
-export type AgentStopReason = 'completed' | 'max_iterations' | 'correction_limit'
+/** STANDARD.md §3's stop vocabulary, the same strings in every app. */
+export type AgentStopReason =
+  | 'completed'
+  | 'max_iterations'
+  | 'correction_limit'
+  | 'truncated'
+  | 'no_progress'
+  | 'tool_call_limit'
+  | 'cancelled'
+  | 'provider_error'
+  | 'timed_out'
+  | 'internal_error'
 
 export interface AgentMessage {
   id: number

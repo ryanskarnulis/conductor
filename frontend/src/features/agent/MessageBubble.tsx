@@ -18,6 +18,13 @@ const STOP_FALLBACK: Record<Exclude<AgentStopReason, 'completed'>, string> = {
     'Conductor hit its step limit before finishing — the delegate calls above still ran.',
   correction_limit:
     'Conductor kept producing invalid tool calls and gave up on this request.',
+  truncated: 'Conductor’s reply ran past its length limit, so it was dropped.',
+  no_progress: 'Conductor kept repeating the same calls and stopped.',
+  tool_call_limit: 'Conductor reached its limit of tool calls for one request.',
+  cancelled: 'Stopped.',
+  provider_error: 'Conductor’s model stopped answering partway through.',
+  timed_out: 'Conductor ran out of time partway through.',
+  internal_error: 'Something broke inside conductor partway through.',
 }
 
 export function MessageBubble({ message }: { message: AgentMessage }) {

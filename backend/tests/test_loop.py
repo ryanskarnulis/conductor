@@ -173,12 +173,16 @@ def test_unparseable_tool_call_corrected_via_user_message(notes: list[str]) -> N
 
 
 def test_max_iterations_terminates_the_loop(notes: list[str]) -> None:
-    provider = ScriptedProvider([_calls(("add_note", {"text": "x"}))] * 3)
+    # Each turn does new work (a different note), so only the turn cap stops it.
+    provider = ScriptedProvider([_calls(("add_note", {"text": str(n)})) for n in range(3)])
     result = AgentLoop(provider, max_iterations=3).run("loop forever")
 
     assert result.stop_reason == "max_iterations"
     assert result.iterations == 3
     assert len(provider.requests) == 3
+    # A limit stop replies from the record of what ran, never the model's words.
+    assert result.reply is not None
+    assert "Done:" in result.reply and "add_note" in result.reply
 
 
 def test_history_is_passed_through_verbatim_without_fabricated_transcripts() -> None:

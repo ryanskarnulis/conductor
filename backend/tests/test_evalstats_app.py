@@ -3,22 +3,63 @@
 ``tests/evalstats.py`` and its spec ``test_evalstats.py`` are vendored from
 agent-standard and import nothing of the app. Conductor's harness classifies
 on the HTTP response alone (a failed turn carries no stop reason), so what is
-pinned here is the route's status for a provider death and the provider's
-error text that ``provider_failure_kind`` reads.
+pinned here is the route's status for a provider death, the provider's
+error text that ``provider_failure_kind`` reads, and the loop's stop
+vocabulary against the gate's infra stops (#52).
 """
 
 from __future__ import annotations
 
+from typing import get_args
+
 import httpx
 import pytest
 
+from app.ai.loop import FAILURE_STATUS, _StopReason
 from app.ai.provider import ProviderError
 from app.ai.providers.llamacpp import LlamaCppProvider
-from tests.evalstats import INFRA_STATUSES, Outcome, classify, provider_failure_kind
+from tests.evalstats import (
+    INFRA_STATUSES,
+    INFRA_STOPS,
+    Outcome,
+    classify,
+    provider_failure_kind,
+)
+
+# STANDARD.md §3's vocabulary, the same strings in every app.
+_STANDARD_STOPS = {
+    "completed",
+    "max_iterations",
+    "correction_limit",
+    "truncated",
+    "no_progress",
+    "tool_call_limit",
+    "cancelled",
+    "provider_error",
+    "timed_out",
+    "internal_error",
+}
+
+
+def test_the_loop_speaks_the_standard_stop_vocabulary() -> None:
+    assert set(get_args(_StopReason)) == _STANDARD_STOPS
+
+
+def test_every_infra_stop_is_a_loop_stop_answered_with_an_infra_status() -> None:
+    assert INFRA_STOPS <= set(get_args(_StopReason))
+    for stop in INFRA_STOPS:
+        assert FAILURE_STATUS[stop] in INFRA_STATUSES
+
+
+def test_internal_error_is_not_infrastructure() -> None:
+    # A tool that raised is a real miss, never retried away.
+    assert "internal_error" not in INFRA_STOPS
+    assert FAILURE_STATUS["internal_error"] not in INFRA_STATUSES
 
 
 def test_the_routes_provider_failure_status_is_an_infra_status() -> None:
-    # routes_agent.post_message maps every ProviderError to 502.
+    # The loop's provider_error stop, which routes_agent.post_message answers with.
+    assert FAILURE_STATUS["provider_error"] == 502
     assert 502 in INFRA_STATUSES
 
 

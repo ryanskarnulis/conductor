@@ -15,6 +15,27 @@ provider), arguments that fail the tool's argument model, or a tool name the
 registry doesn't know. Domain rejections from a tool ("no app handles that",
 "conversation gone") are not corrections: they are fed back as ordinary tool
 results for the model to react to within the iteration budget.
+
+The safety nets are STANDARD.md §3's, after PCC's loop (#52):
+
+- **Every model call is capped.** ``max_tokens`` goes out on every request. A
+  text turn cut off at the cap (``finish_reason == "length"``) is dropped and
+  the run stops ``truncated``; the tool calls of a cut-off turn arrived whole
+  and still run.
+- **Stall rule.** A turn whose every call repeats an exchange this run already
+  saw (tool + canonicalised arguments + answer) stops ``no_progress``.
+- **Per-run tool-call cap** (``max_tool_calls``). A call past it is answered
+  "not run" and never dispatched; the run stops ``tool_call_limit``.
+- **Failures are stops, not exceptions.** A provider failure stops
+  ``provider_error`` and a tool or provider that raised unexpectedly stops
+  ``internal_error``. Either raises :class:`AgentRunFailed` carrying the run so
+  far, and the route stores it before answering 502/500, so a write an app made
+  before the failure is never lost from the transcript.
+- **A stop short of ``completed`` replies from what ran** (:mod:`app.ai.run_record`),
+  never from the model's words. A stop where nothing ran has no reply.
+
+``timed_out`` and ``cancelled`` are in the vocabulary for parity with the
+fleet; conductor has no run deadline yet, and Stop lands with #66.
 """
 
 from __future__ import annotations
@@ -30,8 +51,11 @@ from typing import Any, Literal
 import structlog
 from pydantic import BaseModel, ValidationError
 
+from app.ai import run_record
 from app.ai.provider import (
     ChatProvider,
+    ChatResult,
+    ProviderError,
     ToolCall,
     ToolCallArgumentsError,
     tool_result_message,
@@ -147,7 +171,46 @@ def build_system_prompt(today: date, *, fleet_section: str | None = None) -> str
     return "\n\n".join(layers)
 
 
-_StopReason = Literal["completed", "max_iterations", "correction_limit"]
+# STANDARD.md §3's stop vocabulary, the same strings in every app.
+_StopReason = Literal[
+    "completed",
+    "max_iterations",
+    "correction_limit",
+    "truncated",
+    "no_progress",
+    "tool_call_limit",
+    "cancelled",
+    "provider_error",
+    "timed_out",
+    "internal_error",
+]
+
+# The HTTP status the route answers each failure stop with. Every other stop
+# is the agent's doing, not a fault, and answers 200.
+FAILURE_STATUS: dict[str, int] = {
+    "provider_error": 502,
+    "timed_out": 504,
+    "internal_error": 500,
+}
+
+# Default per-call completion cap: model-profile's turn cap (PCC's
+# ``COMPLETION_RESERVE_TOKENS``). llama-server's own default is unbounded.
+DEFAULT_MAX_TOKENS = 2048
+
+# Default per-run tool-call cap. Shallower than PCC's 24 because each conductor
+# call can wrap an app's full loop: 6 iterations x 2 calls covers every real turn.
+DEFAULT_MAX_TOOL_CALLS = 12
+
+# ``finish_reason`` of a call the ``max_tokens`` cap cut off.
+_FINISH_LENGTH = "length"
+
+_TOOL_CALL_LIMIT_ERROR = (
+    f"{run_record.NOT_RUN_PREFIX}the run reached its limit of tool calls before this call"
+)
+_INTERNAL_ERROR = "internal error: the tool call failed unexpectedly"
+_CRASHED_BATCH_ERROR = (
+    f"{run_record.NOT_RUN_PREFIX}an earlier tool call in this turn failed unexpectedly"
+)
 
 
 @dataclass(frozen=True)
@@ -199,6 +262,20 @@ class AgentRunResult(BaseModel):
     messages: list[dict[str, Any]]
 
 
+class AgentRunFailed(Exception):
+    """A run that ended in a failure stop, carrying everything that ran first.
+
+    The route stores ``result`` (a truthful partial turn, its reply built from
+    the record) before answering ``http_status``, so the next turn's history
+    knows what the apps did.
+    """
+
+    def __init__(self, result: AgentRunResult, *, message: str) -> None:
+        super().__init__(message)
+        self.result = result
+        self.http_status = FAILURE_STATUS[result.stop_reason]
+
+
 class AgentLoop:
     """Bounded tool-calling loop over one provider and the shared registry."""
 
@@ -208,13 +285,21 @@ class AgentLoop:
         *,
         max_iterations: int = 6,
         max_corrections: int = 3,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
         fleet_section: str | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be >= 1")
+        if max_tokens < 1:
+            raise ValueError("max_tokens must be >= 1")
+        if max_tool_calls < 1:
+            raise ValueError("max_tool_calls must be >= 1")
         self._provider = provider
         self._max_iterations = max_iterations
         self._max_corrections = max_corrections
+        self._max_tokens = max_tokens
+        self._max_tool_calls = max_tool_calls
         # The prompt's fleet layer (built once from the discovered manifests).
         # None keeps the prompt to base → Glitch → date (Slice 2 behavior).
         self._fleet_section = fleet_section
@@ -235,6 +320,9 @@ class AgentLoop:
         in-app loop identity, :data:`LOOP_ACTOR`). ``on_activity`` receives one
         :class:`LoopActivity` per provider turn and per tool dispatch — the
         progress seam the HTTP layer surfaces while a run blocks.
+
+        A failure stop (``provider_error``, ``internal_error``) raises
+        :class:`AgentRunFailed` with the partial run; every other stop returns.
         """
         bindings: dict[str, str] = {}
         if "request_id" not in structlog.contextvars.get_contextvars():
@@ -261,12 +349,15 @@ class AgentLoop:
         records: list[ToolCallRecord] = []
         corrections = 0
         iterations = 0
+        dispatched = 0
+        # Every exchange this run has seen: tool + canonical arguments + answer.
+        seen: set[tuple[str, str, str]] = set()
         logger.info("agent_run_started", tools=len(specs), history_messages=len(history or []))
         for iteration in range(1, self._max_iterations + 1):
             iterations = iteration
             self._emit(on_activity, LoopActivity(kind="model", iteration=iteration))
             try:
-                result = self._provider.chat(messages, tools=specs)
+                result = self._provider.chat(messages, tools=specs, max_tokens=self._max_tokens)
             except ToolCallArgumentsError as exc:
                 # The turn is unusable — its tool calls can't round-trip into
                 # history — so the correction goes back as a user-role message
@@ -279,7 +370,7 @@ class AgentLoop:
                     corrections=corrections,
                 )
                 if corrections > self._max_corrections:
-                    return self._finish("correction_limit", None, records, iteration, messages)
+                    return self._stop("correction_limit", records, iteration, messages)
                 messages.append(
                     {
                         "role": "user",
@@ -290,25 +381,100 @@ class AgentLoop:
                     }
                 )
                 continue
+            except ProviderError as exc:
+                # Conductor's own model died. Whatever the apps already did
+                # stands; the route stores it before answering 502.
+                logger.error("agent_provider_failed", error=str(exc))
+                raise self._failed(
+                    "provider_error", f"agent run failed: {exc}", records, iteration, messages
+                ) from exc
+            except Exception as exc:
+                logger.exception("agent_provider_crashed", error_type=type(exc).__name__)
+                raise self._failed(
+                    "internal_error", f"agent run crashed: {exc}", records, iteration, messages
+                ) from exc
+            truncated = result.finish_reason == _FINISH_LENGTH
+            if truncated:
+                logger.warning(
+                    "agent_turn_truncated",
+                    max_tokens=self._max_tokens,
+                    tool_calls=len(result.tool_calls),
+                )
             if not result.tool_calls:
+                if truncated:
+                    # Cut off by the cap: the fragment is not a reply. Drop it
+                    # (never returned, never in the transcript).
+                    return self._stop("truncated", records, iteration, messages)
                 # A text turn terminates the loop, even when content is empty.
                 messages.append(result.to_message())
                 return self._finish("completed", result.content, records, iteration, messages)
+            if truncated:
+                # The calls arrived whole and run; only the cut-off text beside
+                # them is dropped from history.
+                result = ChatResult(
+                    content=None,
+                    tool_calls=result.tool_calls,
+                    finish_reason=result.finish_reason,
+                    usage=result.usage,
+                )
             messages.append(result.to_message())
             schema_error_this_turn = False
-            for call in result.tool_calls:
+            progressed = False
+            over_cap = False
+            for index, call in enumerate(result.tool_calls):
+                if dispatched >= self._max_tool_calls:
+                    # Past the cap: this call and the rest of the turn are
+                    # answered "not run" and never dispatched.
+                    self._skip(result.tool_calls[index:], records, messages, _TOOL_CALL_LIMIT_ERROR)
+                    over_cap = True
+                    break
+                dispatched += 1
                 self._emit(
                     on_activity, LoopActivity(kind="tool", iteration=iteration, tool=call.name)
                 )
-                record, feedback, schema_error = self._dispatch(call, actor)
+                try:
+                    record, feedback, schema_error = self._dispatch(call, actor)
+                except Exception as exc:
+                    # A bug, not something the model can correct. The call may
+                    # or may not have reached an app, so its record claims
+                    # neither; the rest of the batch never starts.
+                    logger.exception("agent_tool_crashed", tool=call.name)
+                    records.append(
+                        ToolCallRecord(
+                            tool=call.name, arguments=call.arguments, error=_INTERNAL_ERROR
+                        )
+                    )
+                    messages.append(tool_result_message(call.id, f"Error: {_INTERNAL_ERROR}"))
+                    self._skip(
+                        result.tool_calls[index + 1 :], records, messages, _CRASHED_BATCH_ERROR
+                    )
+                    raise self._failed(
+                        "internal_error",
+                        f"agent run crashed in {call.name}: {exc}",
+                        records,
+                        iteration,
+                        messages,
+                    ) from exc
                 records.append(record)
                 messages.append(tool_result_message(call.id, feedback))
                 schema_error_this_turn = schema_error_this_turn or schema_error
+                # Judged on what came back, not the call alone: a repeat that
+                # answers differently (a list after a write) is new work.
+                exchange = _exchange_key(call.name, call.arguments, feedback)
+                progressed = progressed or exchange not in seen
+                seen.add(exchange)
+            if over_cap:
+                return self._stop("tool_call_limit", records, iteration, messages)
             if schema_error_this_turn:
                 corrections += 1
                 if corrections > self._max_corrections:
-                    return self._finish("correction_limit", None, records, iteration, messages)
-        return self._finish("max_iterations", None, records, iterations, messages)
+                    return self._stop("correction_limit", records, iteration, messages)
+                # A malformed call is what the correction budget is for, so a
+                # turn with one is never judged a stall.
+            elif not progressed:
+                logger.warning("agent_run_no_progress", tool_calls=len(result.tool_calls))
+                return self._stop("no_progress", records, iteration, messages)
+        return self._stop("max_iterations", records, iterations, messages)
 
     def _dispatch(self, call: ToolCall, actor: str) -> tuple[ToolCallRecord, str, bool]:
         """Run one tool call as ``actor``.
@@ -351,6 +517,45 @@ class AgentLoop:
         return record, f"Error: {record.error}", schema_error
 
     @staticmethod
+    def _skip(
+        calls: Sequence[ToolCall],
+        records: list[ToolCallRecord],
+        messages: list[dict[str, Any]],
+        error: str,
+    ) -> None:
+        """Record and answer calls that were never dispatched, so every call
+        in the transcript has exactly one answer."""
+        for call in calls:
+            records.append(ToolCallRecord(tool=call.name, arguments=call.arguments, error=error))
+            messages.append(tool_result_message(call.id, f"Error: {error}"))
+        if calls:
+            logger.warning("agent_tool_calls_skipped", count=len(calls), error=error)
+
+    def _stop(
+        self,
+        stop_reason: _StopReason,
+        records: list[ToolCallRecord],
+        iterations: int,
+        messages: list[dict[str, Any]],
+    ) -> AgentRunResult:
+        """End at a limit, replying from the code-kept record of what ran."""
+        reply = run_record.stop_reply(stop_reason, records)
+        return self._finish(stop_reason, reply, records, iterations, messages)
+
+    def _failed(
+        self,
+        stop_reason: _StopReason,
+        message: str,
+        records: list[ToolCallRecord],
+        iterations: int,
+        messages: list[dict[str, Any]],
+    ) -> AgentRunFailed:
+        """A failure stop as an exception carrying the partial run."""
+        return AgentRunFailed(
+            self._stop(stop_reason, records, iterations, messages), message=message
+        )
+
+    @staticmethod
     def _emit(on_activity: OnActivity | None, activity: LoopActivity) -> None:
         """Report one progress beat; a broken callback must never sink the run."""
         if on_activity is None:
@@ -391,9 +596,12 @@ def loop_from_settings(provider: ChatProvider, *, fleet_section: str | None = No
     field is never an orphan. ``fleet_section`` is threaded through to the
     prompt's fleet layer (the HTTP app passes the one its lifespan rendered).
     """
+    settings = get_settings()
     return AgentLoop(
         provider,
-        max_iterations=get_settings().conductor_max_iterations,
+        max_iterations=settings.conductor_max_iterations,
+        max_tokens=settings.conductor_max_tokens,
+        max_tool_calls=settings.conductor_max_tool_calls,
         fleet_section=fleet_section,
     )
 
@@ -403,6 +611,15 @@ def _validation_summary(exc: ValidationError) -> str:
     return "; ".join(
         f"{'.'.join(str(loc) for loc in error['loc'])}: {error['msg']}" for error in exc.errors()
     )
+
+
+def _exchange_key(name: str, arguments: dict[str, Any], answer: str) -> tuple[str, str, str]:
+    """Identity of one exchange: the tool, its arguments (sorted keys) and its answer.
+
+    The answer is part of the key: the same lookup after a write comes back
+    different, and that is progress.
+    """
+    return name, json.dumps(arguments, sort_keys=True, default=str), answer
 
 
 def _result_text(value: Any) -> str:
