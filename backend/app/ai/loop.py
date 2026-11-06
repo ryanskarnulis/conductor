@@ -86,9 +86,9 @@ LOOP_ACTOR = "agent:loop"
 # Layer 1 — app base prompt (app-owned behavioral contract). Seeded from
 # ../agent-standard/conductor-prompt-material.md and kept tool-agnostic: it
 # upholds the standard's invariants (tools-only action, no invented results,
-# faithful relay, clarify-on-ambiguity) and adds the rule that is conductor's
-# alone — it owns destructive-op confirmation, because app agents don't
-# reliably confirm before irreversible actions.
+# faithful relay, clarify-on-ambiguity). Destructive-op confirmation is per
+# app (#68): an app with `agent.confirms` asks itself, and conductor's own
+# question is the backstop for the rest; the fleet section renders both.
 _APP_BASE_PROMPT = """\
 You are the household's local AI conductor, the master agent for the whole \
 fleet, running entirely on our own hardware. You get things done ONLY by \
@@ -116,14 +116,11 @@ it from there. Then STOP — one `open_*` call is the whole turn. Don't call \
 another tool after it; just say one short line telling them you're sending them \
 over. Example — user: "let's play chess" → open_chess(intent="let's play \
 chess") → you: "board's up — go."
-- Destructive requests to an app you DELEGATE to (an `ask_*` app) get confirmed \
-FIRST, before any tool call. If the user asks to delete, overwrite, reset, or \
-abandon something there, do NOT call a tool this turn: reply with one short \
-question asking them to confirm, and delegate only after they've said yes. \
-App agents don't reliably confirm irreversible actions themselves, so you are \
-the one safety stop. This does not apply to `open_*` apps — you aren't doing \
-anything to those, you're just opening the door, and their agent does its own \
-confirming.
+- Destructive requests to an `ask_*` app follow the fleet section's \
+"Destructive requests" rules: some apps ask the person themselves, and for the \
+rest you are the one safety stop. None of it applies to `open_*` apps — you \
+aren't doing anything to those, you're just opening the door, and their agent \
+does its own confirming.
 - If no app in the fleet can do something, say so plainly: no invented \
 capabilities, no fake confidence.
 - Prefer reversible actions and each app's safety rails; never work around them, \
@@ -258,6 +255,10 @@ class ToolCallRecord(BaseModel):
     # persisted and shown, never sent to the model. The narrator speaks from
     # it (#65).
     app_record: list[dict[str, Any]] | None = None
+    # For a delegate call the app answered ``confirm_required`` (#68): the
+    # token, thread and question kept for the person's yes
+    # (``app.ai.confirmation.AppConfirm``). Persisted, never sent to the model.
+    app_confirm: dict[str, Any] | None = None
 
 
 class AgentRunResult(BaseModel):
@@ -590,6 +591,7 @@ class AgentLoop:
         # reported can never be read as the next call's.
         delegated = runtime.delegated_tools.set(None)
         delegated_record = runtime.delegated_record.set(None)
+        delegated_confirm = runtime.delegated_confirm.set(None)
         try:
             outcome = registry.call_tool(call.name, call.arguments, actor=actor)
         except UnknownToolError as exc:
@@ -611,6 +613,7 @@ class AgentLoop:
         finally:
             runtime.delegated_tools.reset(delegated)
             runtime.delegated_record.reset(delegated_record)
+            runtime.delegated_confirm.reset(delegated_confirm)
         logger.warning(
             "agent_tool_call",
             tool=call.name,
@@ -626,6 +629,7 @@ class AgentLoop:
         record.app_tools = list(runtime.delegated_tools.get() or []) or None
         app_record = runtime.delegated_record.get()
         record.app_record = list(app_record) if app_record is not None else None
+        record.app_confirm = runtime.delegated_confirm.get()
 
     @staticmethod
     def _skip(

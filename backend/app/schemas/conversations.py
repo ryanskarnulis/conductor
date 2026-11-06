@@ -57,6 +57,8 @@ class ToolCallRead(BaseModel):
     app_tools: list[str] | None = None
     # For a delegate call to a v1.1 app, its typed record of what it did (#67).
     app_record: list[dict[str, Any]] | None = None
+    # The app's armed question and its token, kept for the person's yes (#68).
+    app_confirm: dict[str, Any] | None = None
 
 
 class MessageRead(BaseModel):

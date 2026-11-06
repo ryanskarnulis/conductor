@@ -62,9 +62,15 @@ frontend on `8300`.
 - **Routing hints live in the system prompt** (`render_fleet_section`), not
   tool docstrings. If routing degrades, tighten manifest `examples` first — a
   bigger model is the last resort.
-- **Destructive requests to `ask_` apps get confirmed first** — operational
-  voice with a worked example (descriptive safety rules don't bind a 12B).
-  `open_` apps confirm their own resets; "resign the game" is a plain handoff.
+- **Destructive requests: the app that owns the write asks** (#68). An `ask_`
+  app with `agent.confirms: true` gets the request straight through; its
+  `confirm_required` question goes to the person and the token stays on the
+  turn's record (`app_confirm`, never sent to the model). Only a question from
+  the last turn can take a yes (`confirm(app)`, which sends `Confirm-Token` on
+  the asking thread); anything else lapses it. For an `ask_` app without the
+  flag, conductor asks first — operational voice with a worked example
+  (descriptive safety rules don't bind a 12B). `open_` apps confirm their own
+  resets; "resign the game" is a plain handoff.
 - **Delegate calls are budgeted** (3 per app per turn) and every one emits a
   `delegate_call` structlog event; replies relay as text plus a compact
   activity note — never raw transcripts into conductor's history.

@@ -8,6 +8,7 @@ from datetime import date, timedelta
 import pytest
 
 from tests.fake_world import MusicApp, TasksApp, World, friday_targets, parse_date, weekend_targets
+from app.fleet.delegate import DelegateConfirmRefused
 
 THURSDAY = date(2026, 11, 5)
 
@@ -73,12 +74,18 @@ def test_tasks_undo_is_scoped_to_the_thread(world: World) -> None:
     app = TasksApp(world)
     app.handle(1, "add a task to water the plants tomorrow")
     assert "nothing" in app.handle(2, "undo that").text.lower()
-    app.handle(1, "undo that")
+    asked = app.handle(1, "undo that")
+    assert asked.stop_reason == "confirm_required" and asked.confirm is not None
+    app.handle(1, "yes", asked.confirm.token)
     assert [r.kind for r in world.receipts] == ["create", "trash"]
 
 
-def test_tasks_wipe_project(world: World) -> None:
-    TasksApp(world).handle(1, "delete the Kitchen project")
+def test_tasks_wipe_project_asks_then_runs_on_the_token(world: World) -> None:
+    app = TasksApp(world)
+    asked = app.handle(1, "delete the Kitchen project")
+    assert asked.confirm is not None and asked.text == asked.confirm.question
+    assert world.receipts == [] and world.projects["Kitchen"] is False
+    app.handle(1, "yes", asked.confirm.token)
     assert world.projects["Kitchen"] is True
     assert all(t.trashed for t in world.tasks.values() if t.project == "Kitchen")
     assert [(r.kind, r.title) for r in world.receipts] == [("trash", "Kitchen")]
@@ -126,3 +133,13 @@ def test_seeded_brief_counts(world: World) -> None:
     assert {t.title for t in world.due_today()} == {"groceries", "call mom"}
     assert world.tasks[3].due not in friday_targets(THURSDAY)
     assert world.today - timedelta(days=7) < world.today
+
+
+def test_tasks_another_message_voids_the_question(world: World) -> None:
+    app = TasksApp(world)
+    asked = app.handle(1, "delete the Kitchen project")
+    assert asked.confirm is not None
+    app.handle(1, "what's due today?")
+    with pytest.raises(DelegateConfirmRefused):
+        app.handle(1, "yes", asked.confirm.token)
+    assert world.receipts == [] or all(r.kind != "trash" for r in world.receipts)

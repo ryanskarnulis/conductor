@@ -20,6 +20,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai import confirmation
 from app.ai.loop import AgentRunResult, ToolCallRecord
 from app.ai.recall import EarlierCall
 from app.db.models import Conversation, ConversationMessage, ConversationRole, utcnow
@@ -132,7 +133,10 @@ def earlier_calls(db: Session, conversation_id: int) -> list[EarlierCall]:
             .limit(1)
         ).scalar_one_or_none()
         for stored in turn.tool_calls or []:
-            if not str(stored.get("tool", "")).startswith("ask_"):
+            if (
+                confirmation.record_app(str(stored.get("tool", "")), stored.get("arguments") or {})
+                is None
+            ):
                 continue
             calls.append(
                 EarlierCall(

@@ -30,6 +30,7 @@ from typing import Protocol
 
 import structlog
 
+from app.ai.confirmation import PendingConfirm
 from app.tools.registry import ToolError
 
 logger = structlog.get_logger(__name__)
@@ -89,6 +90,10 @@ class DelegationContext:
     calls_per_turn_per_app: int
     # Conductor's own audit tag for this run's driver.
     driver: str = LOOP_DRIVER
+    # The question the last turn left waiting (#68), read from the stored turns
+    # before this one, so a yes can only answer a question the person has
+    # seen. A question asked during this run is never here.
+    pending_confirm: PendingConfirm | None = None
     _calls_this_turn: dict[str, int] = field(default_factory=dict)
 
     def thread_for(self, app_name: str) -> int | None:
@@ -117,6 +122,14 @@ class DelegationContext:
                 f"tell the user what you found so far."
             )
         self._calls_this_turn[app_name] = used + 1
+
+    def take_pending_confirm(self, app_name: str) -> PendingConfirm | None:
+        """The waiting question if it is ``app_name``'s; used at most once."""
+        pending = self.pending_confirm
+        if pending is None or pending.app != app_name:
+            return None
+        self.pending_confirm = None
+        return pending
 
     def reset_turn(self) -> None:
         """Clear the per-turn call counters (a fresh master loop run)."""

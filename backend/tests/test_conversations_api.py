@@ -101,6 +101,7 @@ def test_post_message_runs_loop_and_persists_exchange(client: TestClient) -> Non
             # A local tool, not a delegate call — nothing else ran.
             "app_tools": None,
             "app_record": None,
+            "app_confirm": None,
         }
     ]
 

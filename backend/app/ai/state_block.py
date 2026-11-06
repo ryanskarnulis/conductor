@@ -14,13 +14,14 @@ It holds, each line only when there is something to say:
 - the surface and device the person is on (``voice`` → one or two short
   spoken sentences, no markdown) and the app panel they have open;
 - the jobs an app reported as still running, as of their last report;
-- what is waiting on the person: a question the last reply asked;
+- what is waiting on the person: a question the last reply asked, or an
+  app's question that a yes answers with ``confirm`` (#68);
 - recent entities: what this conversation's calls touched, from the apps'
   own records (delegate-api v1.1), newest first. Outside text is quoted and
   marked, never an instruction.
 
 Conductor has no plans yet; "the last plan" joins the block when compiled
-plans do (#68). Pure: no session, no I/O.
+plans do (#70). Pure: no session, no I/O.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Literal
 
+from app.ai import confirmation
 from app.ai.loop import ToolCallRecord
 
 Surface = Literal["desktop", "phone", "voice", "room_speaker"]
@@ -104,8 +106,15 @@ def render(today: date, now: Now, history: Sequence[dict[str, Any]]) -> str:
     if jobs:
         lines.append("Running jobs (as of each one's last report):")
         lines += [f"- {job}" for job in jobs]
+    asked = confirmation.pending(history)
     question = _waiting(history)
-    if question:
+    if asked is not None:
+        lines.append(
+            f'Waiting on the person: {asked.app} asked "{_clip_question(asked.question)}" '
+            f'If their message says yes to it, call confirm(app="{asked.app}"); '
+            "if not, don't — the question lapses."
+        )
+    elif question:
         lines.append(f'Waiting on the person: your last reply asked "{question}"')
     entities = _entities(records)
     if entities:
@@ -128,7 +137,7 @@ def _running_jobs(records: Sequence[ToolCallRecord]) -> list[str]:
     """Each job's latest report, if it hadn't finished."""
     latest: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
     for record in records:
-        app = record.tool.removeprefix("ask_")
+        app = confirmation.record_app(record.tool, record.arguments) or record.tool
         for entry in record.app_record or []:
             job = entry.get("job")
             if isinstance(job, dict) and job.get("ref") is not None:
@@ -156,7 +165,11 @@ def _waiting(history: Sequence[dict[str, Any]]) -> str | None:
     reply = " ".join(str(history[-1].get("content") or "").split())
     if "?" not in reply:
         return None
-    question = reply[: reply.rfind("?") + 1]
+    return _clip_question(reply[: reply.rfind("?") + 1])
+
+
+def _clip_question(question: str) -> str:
+    question = " ".join(question.split())
     return question if len(question) <= MAX_QUESTION_CHARS else "…" + question[-MAX_QUESTION_CHARS:]
 
 

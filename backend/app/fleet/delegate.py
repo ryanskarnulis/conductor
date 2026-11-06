@@ -28,6 +28,9 @@ can react precisely and no bare ``httpx`` exception ever escapes:
 - :class:`DelegateRunFailed` — a v1.1 failure body (#67): the run failed and
   the app said what it did. Any ``done`` entry means it partly happened; none
   means nothing changed.
+- :class:`DelegateConfirmRefused` — a ``Confirm-Token`` the app can't honour
+  (a 409 naming ``unknown`` / ``expired`` / ``used`` / ``stale``): nothing
+  ran, and the question is asked again, never assumed (#68).
 - :class:`DelegateRequestRejected` — any other 4xx (e.g. a 422 for a message
   the app's schema refuses): the request itself is invalid, so retrying the
   same input can never succeed.
@@ -80,6 +83,11 @@ APP_REQUEST_ID_HEADER = "X-Request-ID"
 # delegate-api v1.1 (#67): the client's name for one exchange, so a retry of it
 # never runs the app's loop twice. Minted per ``ask`` step, carried on the hop.
 IDEMPOTENCY_HEADER = "Idempotency-Key"
+
+# delegate-api "Confirmation" (#68): the app's single-use token for one armed
+# call. A message carrying it is the person's yes; the app runs exactly that
+# call, once, with no model turn.
+CONFIRM_HEADER = "Confirm-Token"
 
 _DEFAULT_READ_TIMEOUT = 300.0
 _DEFAULT_CONNECT_TIMEOUT = 5.0
@@ -146,6 +154,19 @@ class DelegateRunFailed(DelegateError):
     @property
     def done(self) -> list[RecordEntry]:
         return [entry for entry in self.record if entry.outcome == "done"]
+
+
+class DelegateConfirmRefused(DelegateError):
+    """A ``Confirm-Token`` the app refused (409): nothing ran.
+
+    ``kind`` is the app's word for why: ``unknown`` (not this thread's, or the
+    app restarted), ``expired``, ``used`` or ``stale`` (what it previewed has
+    changed).
+    """
+
+    def __init__(self, message: str, *, kind: str) -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 class DelegateRequestRejected(DelegateError):
@@ -234,6 +255,37 @@ def _lenient_record(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
 Record = Annotated[list[RecordEntry] | None, WrapValidator(_lenient_record)]
 
 
+class ConfirmPreview(BaseModel):
+    """What a gated call would change: entity refs (at most 20) and the total."""
+
+    count: int | None = None
+    touched: list[EntityRef] = []
+
+
+class ConfirmRequired(BaseModel):
+    """A gated call the app armed instead of running (delegate-api
+    "Confirmation"): its token, and the question and preview its code built."""
+
+    token: str
+    tool: str
+    question: str
+    preview: ConfirmPreview | None = None
+    expires_at: datetime | None = None
+
+
+def _lenient_confirm(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+    """A confirmation conductor can't read is one it can't answer: the app's
+    question still reaches the person, and a yes then goes back as words."""
+    try:
+        return handler(value)
+    except ValidationError:
+        logger.warning("delegate_confirm_unreadable")
+        return None
+
+
+Confirm = Annotated[ConfirmRequired | None, WrapValidator(_lenient_confirm)]
+
+
 class MessageRead(BaseModel):
     id: int
     conversation_id: int
@@ -245,6 +297,8 @@ class MessageRead(BaseModel):
     created_at: datetime
     # v1.1: one receipt per tool call.
     record: Record = None
+    # Set on a ``confirm_required`` stop: the armed call's token and question.
+    confirm_required: Confirm = None
 
 
 class FailureBody(BaseModel):
@@ -322,22 +376,33 @@ class DelegateClient:
         return self._parse(response, ConversationCreated).id
 
     def send_message(
-        self, conversation_id: int, message: str, *, idempotency_key: str | None = None
+        self,
+        conversation_id: int,
+        message: str,
+        *,
+        idempotency_key: str | None = None,
+        confirm_token: str | None = None,
     ) -> MessageExchange:
         """``POST /conversations/{id}/messages`` → the user + assistant turns.
 
         The delegate contract's request field is ``content``. The
         ``Idempotency-Key`` is ``idempotency_key``, else the current hop's
-        (the tool layer mints one per ``ask`` step), else none (v1).
+        (the tool layer mints one per ``ask`` step), else none (v1). A
+        ``confirm_token`` answers the app's question yes (#68).
         """
         hop = run_trace.current_hop()
         key = idempotency_key or (hop.idempotency_key if hop is not None else None)
+        headers: dict[str, str] = {}
+        if key:
+            headers[IDEMPOTENCY_HEADER] = key
+        if confirm_token:
+            headers[CONFIRM_HEADER] = confirm_token
         response = self._send(
             "POST",
             f"/conversations/{conversation_id}/messages",
             json={"content": message},
             may_have_acted=True,
-            extra_headers={IDEMPOTENCY_HEADER: key} if key else None,
+            extra_headers=headers or None,
         )
         return self._parse(response, MessageExchange)
 
@@ -413,6 +478,12 @@ class DelegateClient:
                     )
                 raise DelegateOutcomeUnknown(detail)
             raise DelegateUnavailable(detail)
+        if status == httpx.codes.CONFLICT:
+            refusal = _confirm_refusal(response)
+            if refusal is not None:
+                raise DelegateConfirmRefused(
+                    f"{method} {path} → 409: confirm token {refusal}", kind=refusal
+                )
         if status >= 400:
             # A client error that isn't 404/429 (e.g. a 422 schema rejection).
             # The request is at fault, not the app — retrying it can't succeed.
@@ -438,6 +509,16 @@ def _failure_body(response: httpx.Response) -> FailureBody | None:
         return FailureBody.model_validate_json(response.text)
     except ValidationError:
         return None
+
+
+def _confirm_refusal(response: httpx.Response) -> str | None:
+    """A 409's ``confirm`` word, when it is a refused ``Confirm-Token``."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    kind = body.get("confirm") if isinstance(body, dict) else None
+    return kind if isinstance(kind, str) and kind else None
 
 
 def _parse_retry_after(raw: str | None) -> int | None:

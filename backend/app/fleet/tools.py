@@ -37,6 +37,13 @@ Contract behaviors live here, not in the client:
   answers from its store instead of running again. The app's typed record
   rides out beside the reply (``runtime.delegated_record``), and a failure
   body that lists ``done`` work is reported as partly happened, by name.
+- **Structural confirmation (#68).** An app that answers ``confirm_required``
+  armed a gated call instead of running it. The model gets the app's question
+  to put to the person, word for word; the token stays on the turn's record
+  (``runtime.delegated_confirm``). Next turn, a yes is ``confirm(app)``, which
+  sends the token back on the same thread, so the app runs exactly that call.
+  Only a question from an earlier turn can be answered: one asked during this
+  run is never on the context (``DelegationContext.pending_confirm``).
 
 ``list_agents`` is a local tool (no network) reporting the fleet from the
 manifests. Routing *hints* live in the system prompt, not tool docstrings —
@@ -54,10 +61,12 @@ from typing import Any, Protocol
 import structlog
 
 from app.ai import trace as run_trace
-from app.fleet.context import current_delegation_context
+from app.ai.confirmation import CONFIRM_TOOL, AppConfirm, PendingConfirm
+from app.fleet.context import DelegationContext, current_delegation_context
 from app.fleet.delegate import (
     CONDUCTOR_ACTOR,
     DelegateClient,
+    DelegateConfirmRefused,
     DelegateConnectionLost,
     DelegateError,
     DelegateOutcomeUnknown,
@@ -100,7 +109,9 @@ class DelegateClientLike(Protocol):
 
     def create_conversation(self, *, title: str | None = None) -> int: ...
 
-    def send_message(self, conversation_id: int, message: str) -> MessageExchange: ...
+    def send_message(
+        self, conversation_id: int, message: str, *, confirm_token: str | None = None
+    ) -> MessageExchange: ...
 
 
 # A factory yields a fresh client bound to one app.
@@ -144,6 +155,10 @@ def build_delegate_tools(fleet: Fleet, client_factory: ClientFactory) -> list[st
         open_fn = _make_open_tool(app)
         registry.tool(open_fn)
         names.append(open_fn.__name__)
+    if _confirming_apps(fleet):
+        confirm_fn = _make_confirm_tool(fleet, client_factory)
+        registry.tool(confirm_fn)
+        names.append(confirm_fn.__name__)
     list_fn = _make_list_agents(fleet)
     registry.tool(list_fn)
     names.append(list_fn.__name__)
@@ -207,8 +222,52 @@ def _make_open_tool(app: FleetApp) -> Callable[..., str]:
     return open_tool
 
 
-def _delegate(app: FleetApp, client_factory: ClientFactory, message: str) -> str:
-    """Send ``message`` to ``app``'s agent, applying every contract behavior."""
+def _confirming_apps(fleet: Fleet) -> list[FleetApp]:
+    """The delegate apps that ask the person themselves (``agent.confirms``)."""
+    return [app for app in fleet.agent_apps() if app.agent is not None and app.agent.confirms]
+
+
+def _make_confirm_tool(fleet: Fleet, client_factory: ClientFactory) -> Callable[[str], str]:
+    """Build ``confirm(app)``: the person's yes to the question an app asked."""
+    apps = {app.name: app for app in _confirming_apps(fleet)}
+
+    def confirm(app: str) -> str:
+        """Say yes to the question an app asked the person in your LAST reply, and
+        the app does exactly what it asked about. Call it only when the person's
+        newest message says yes to that question; `app` is the app that asked
+        (e.g. "tasks"). If they said no, or anything else, don't call it: the
+        question lapses on its own."""
+        target = apps.get(app.strip().lower())
+        pending = (
+            current_delegation_context().take_pending_confirm(target.name)
+            if target is not None
+            else None
+        )
+        if target is None or pending is None:
+            raise ToolError(
+                f"Nothing from {app} is waiting on a yes, so nothing was done. Don't "
+                f"call confirm again this turn: if the person wants it done, ask the app."
+            )
+        return _delegate(target, client_factory, "yes", confirm=pending)
+
+    confirm.__name__ = CONFIRM_TOOL
+    confirm.__qualname__ = CONFIRM_TOOL
+    return confirm
+
+
+def _delegate(
+    app: FleetApp,
+    client_factory: ClientFactory,
+    message: str,
+    *,
+    confirm: PendingConfirm | None = None,
+) -> str:
+    """Send ``message`` to ``app``'s agent, applying every contract behavior.
+
+    With ``confirm``, the message is the person's yes: it goes to the thread
+    that asked, with that question's token, and is never recreated on a 404
+    (a fresh thread never asked it).
+    """
     message = message.strip()
     if not message:
         raise ToolError(
@@ -233,6 +292,15 @@ def _delegate(app: FleetApp, client_factory: ClientFactory, message: str) -> str
         subagent_id: int | None = None
         try:
             with client_factory(app) as client:
+                if confirm is not None:
+                    subagent_id = confirm.thread_id
+                    try:
+                        exchange = _send_once_more_if_dropped(
+                            client, subagent_id, message, confirm_token=confirm.token
+                        )
+                    except DelegateThreadGone as gone:
+                        raise DelegateConfirmRefused(str(gone), kind="unknown") from gone
+                    return _finish(app, context, hop, subagent_id, started, exchange)
                 subagent_id = context.thread_for(app.name)
                 if subagent_id is None:
                     subagent_id = client.create_conversation()
@@ -262,28 +330,66 @@ def _delegate(app: FleetApp, client_factory: ClientFactory, message: str) -> str
                 hop.app_stop_reason = exc.stop_reason
                 _report(hop, exc.record, [entry.tool for entry in exc.record])
             raise _to_tool_error(app, exc) from exc
+        return _finish(app, context, hop, subagent_id, started, exchange)
 
-        assistant = exchange.assistant_message
-        latency_ms = _elapsed_ms(started)
-        context.audit_delegate_call(
-            app=app.name,
-            subagent_conversation_id=subagent_id,
-            latency_ms=latency_ms,
-            stop_reason=assistant.stop_reason,
-            hop_id=hop.hop_id,
-            app_request_id=hop.app_request_id,
+
+def _finish(
+    app: FleetApp,
+    context: DelegationContext,
+    hop: run_trace.Hop,
+    subagent_id: int,
+    started: float,
+    exchange: MessageExchange,
+) -> str:
+    """Audit and trace a delegate call that answered, and relay its reply."""
+    assistant = exchange.assistant_message
+    latency_ms = _elapsed_ms(started)
+    context.audit_delegate_call(
+        app=app.name,
+        subagent_conversation_id=subagent_id,
+        latency_ms=latency_ms,
+        stop_reason=assistant.stop_reason,
+        hop_id=hop.hop_id,
+        app_request_id=hop.app_request_id,
+    )
+    hop.thread_id, hop.ms, hop.app_stop_reason = subagent_id, latency_ms, assistant.stop_reason
+    # Which of the app's own tools ran, recorded structurally as well as in the
+    # `[app did: …]` note. The note is prose for the model; this is for the UI,
+    # which has to know what a turn actually did rather than infer it from a
+    # 12B's paraphrase of it.
+    _report(hop, assistant.record, [call.tool for call in assistant.tool_calls or []])
+    asked = assistant.confirm_required
+    if assistant.stop_reason == "confirm_required" and asked is not None:
+        runtime.delegated_confirm.set(
+            AppConfirm(
+                app=app.name,
+                thread_id=subagent_id,
+                token=asked.token,
+                tool=asked.tool,
+                question=asked.question,
+                expires_at=asked.expires_at.isoformat() if asked.expires_at else None,
+            ).model_dump()
         )
-        hop.thread_id, hop.ms, hop.app_stop_reason = subagent_id, latency_ms, assistant.stop_reason
-        # Which of the app's own tools ran, recorded structurally as well as in the
-        # `[app did: …]` note. The note is prose for the model; this is for the UI,
-        # which has to know what a turn actually did rather than infer it from a
-        # 12B's paraphrase of it.
-        _report(hop, assistant.record, [call.tool for call in assistant.tool_calls or []])
-        return _format_reply(app, assistant)
+        return _confirm_reply(app, asked.question)
+    return _format_reply(app, assistant)
+
+
+def _confirm_reply(app: FleetApp, question: str) -> str:
+    """What the model hears when an app armed a call instead of running it."""
+    return (
+        f"{app.name} has done nothing yet: it needs the person's yes first. Ask the "
+        f'person its question, word for word, and stop: "{question}" Do NOT call a '
+        f"tool for this again this turn. If their next message says yes, call "
+        f'confirm(app="{app.name}").'
+    )
 
 
 def _send_once_more_if_dropped(
-    client: DelegateClientLike, conversation_id: int, message: str
+    client: DelegateClientLike,
+    conversation_id: int,
+    message: str,
+    *,
+    confirm_token: str | None = None,
 ) -> MessageExchange:
     """Send, and resend once if the connection dropped after the message went out.
 
@@ -293,14 +399,20 @@ def _send_once_more_if_dropped(
     whatever it did has happened; a resend that can't reach the app leaves it
     unknown. Either way it is the first send's unknown outcome, never a retry.
     """
+
+    def send() -> MessageExchange:
+        if confirm_token is None:
+            return client.send_message(conversation_id, message)
+        return client.send_message(conversation_id, message, confirm_token=confirm_token)
+
     try:
-        return client.send_message(conversation_id, message)
+        return send()
     except DelegateConnectionLost as lost:
         hop = run_trace.current_hop()
         if hop is None or not hop.idempotency_key:
             raise  # without a key a resend could run it twice
         try:
-            return client.send_message(conversation_id, message)
+            return send()
         except (DelegateRequestRejected, DelegateUnavailable, DelegateOutcomeUnknown) as again:
             if isinstance(again, DelegateRequestRejected) and again.status != 409:
                 raise
@@ -329,6 +441,20 @@ def _to_tool_error(app: FleetApp, exc: DelegateError) -> ToolError:
         return ToolError(
             f"{app.name} is rate-limiting requests right now.{hint} Do not retry "
             f"automatically — tell the user to try again shortly."
+        )
+    if isinstance(exc, DelegateConfirmRefused):
+        if exc.kind == "used":
+            return ToolError(
+                f"{app.name} already used that yes; nothing more was done. Don't confirm "
+                f"again. If the person wants to know, ask {app.name} what it did."
+            )
+        why = {
+            "expired": "it waited too long",
+            "stale": "what it would change has changed since",
+        }.get(exc.kind, "it no longer has that question open")
+        return ToolError(
+            f"{app.name} didn't take the yes ({why}), so nothing was done. Ask "
+            f"{app.name} again with the person's original request, so it asks them afresh."
         )
     if isinstance(exc, DelegateRequestRejected):
         return ToolError(
@@ -416,6 +542,49 @@ def _activity_note(app_name: str, tool_calls: list[Any] | None) -> str:
     return f"[{app_name} did: {names}]"
 
 
+def _confirmation_rules(fleet: Fleet) -> list[str]:
+    """Who asks the person before anything destructive (#68).
+
+    An app that declares ``agent.confirms`` asks itself, in code, so conductor
+    passes the request straight through and answers its question with
+    ``confirm``. For any other ask app conductor is the one safety stop: the
+    operational-voice backstop, scoped to those apps only.
+    """
+    confirming = [ask_tool_name(app.name) for app in _confirming_apps(fleet)]
+    unguarded = [
+        ask_tool_name(app.name)
+        for app in fleet.agent_apps()
+        if app.agent is not None and not app.agent.confirms
+    ]
+    lines: list[str] = []
+    if confirming:
+        first = _confirming_apps(fleet)[0].name
+        lines.append(
+            f"- {', '.join(confirming)} ask the person themselves before anything "
+            "destructive. Pass a delete, wipe, reset or overwrite request to the app "
+            "straight away, without asking first. If the app answers that it needs a "
+            "yes, put its question to the person word for word and stop. When the "
+            f"person's next message says yes to it, call confirm(app=...) — nothing "
+            "else; if they say no or anything else, don't call it. Example — user: "
+            f'"wipe the kitchen project" → {ask_tool_name(first)}(message="wipe the '
+            f'kitchen project") → {first}: needs a yes, "Trash Kitchen and its 12 '
+            'tasks?" → you: "Trash Kitchen and its 12 tasks?" — user: "yes" → '
+            f'confirm(app="{first}") → you say what it did.'
+        )
+    if unguarded:
+        lines.append(
+            f"- Destructive requests to {', '.join(unguarded)} get confirmed FIRST, "
+            "before any tool call. If the user asks to delete, overwrite, reset, or "
+            "abandon something there, do NOT call a tool this turn: reply with one short "
+            "question asking them to confirm, and delegate only after they've said yes. "
+            "Those apps don't confirm irreversible actions themselves, so you are the "
+            "one safety stop."
+        )
+    if lines:
+        lines.insert(0, "Destructive requests:")
+    return lines
+
+
 def _make_list_agents(fleet: Fleet) -> Callable[[], dict[str, Any]]:
     """Build the local ``list_agents`` tool over the discovered fleet."""
 
@@ -488,6 +657,7 @@ def render_fleet_section(fleet: Fleet) -> str:
             if app.open.examples:
                 examples = "; ".join(f'"{example}"' for example in app.open.examples)
                 lines.append(f"  routes here: {examples}")
+    lines += _confirmation_rules(fleet)
     inert = fleet.inert_apps()
     if inert:
         names = ", ".join(app.name for app in inert)

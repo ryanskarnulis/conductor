@@ -106,7 +106,7 @@ Phase 6 makes the route correct.
 | chess-play / -move / -status / -analysis / -reset / -resign | route | open_chess (+intent) |
 | music-download-link / -download-named / -save | route | ask_music |
 | refuse-lights / refuse-weather / refuse-playback | refuse | no app call |
-| confirm-delete-task / confirm-wipe-project | confirm | no call, asks first |
+| confirm-delete-task / confirm-wipe-project | route (#68; was confirm) | ask_tasks: PCC asks itself |
 | local-capabilities | local | list_agents only |
 
 Warm routing turns are sub-second to ~2 s; real latency is the subagent's own
@@ -189,6 +189,12 @@ as "create", no cancel path in music). Run 2 is the baseline.
 | S13 | "anything I should know?" | frontier | 0/5 | 0/5 | reads today's tasks only: no overdue, no music |
 | S14 | plan my week around the garage project | frontier | 0/5 | 0/5 | no concrete plan to confirm |
 | S15 | "do the same for their other album" | frontier | 0/5 | 0/5 | the task never carries "Suddenly" |
+
+**#68 (2026-11-06), PCC asks and conductor answers with its token:** routing
+19/19 plus both relabelled destructive goldens at 5/5. S9 2/5, and every
+miss is narration ("didn't say where it went", #65): it asked once and
+trashed on the yes in all 5. S7 read 2/5 in one block, then 17/20 on a
+20-sample rerun, so it stays green.
 
 Claims, run 2: **29/29 backed** (create 1/1, queue 16/16, trash 2/2, update
 10/10; run 1 had 45/46, one "got the task sorted" with no sort). So today's

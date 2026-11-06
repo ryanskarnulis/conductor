@@ -50,12 +50,11 @@ def test_base_prompt_covers_conductor_behavioral_contract() -> None:
     assert "faithfully" in prompt
     # Clarify-on-ambiguity.
     assert "clarifying question" in prompt
-    # Conductor owns destructive-op confirmation — but only for the apps it
-    # DELEGATES to. An `open_*` app does its own confirming (conductor isn't
-    # acting on it, just opening the door), so the rule is scoped to `ask_*`.
-    assert "Destructive requests to an app you DELEGATE to" in prompt
-    assert "do NOT call a tool this turn" in prompt
-    assert "does not apply to `open_*` apps" in prompt
+    # Destructive-op confirmation is per app (#68): the fleet section says
+    # which ask apps ask themselves and which need conductor's own question.
+    # An `open_*` app does its own confirming either way.
+    assert 'the fleet section\'s "Destructive requests" rules' in prompt
+    assert "None of it applies to `open_*` apps" in prompt
     # The handoff rule: one open_* call ends the turn, intent rides along.
     assert "hands the USER over to an app" in prompt
     assert "one `open_*` call is the whole turn" in prompt

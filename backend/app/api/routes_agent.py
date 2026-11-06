@@ -24,7 +24,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.ai import turn_context
+from app.ai import confirmation, turn_context
 from app.ai.loop import AgentLoop, AgentRunFailed, LoopActivity, loop_from_settings
 from app.ai.providers.llamacpp import provider_from_settings
 from app.ai.state_block import Now
@@ -76,6 +76,15 @@ def get_thread_cleanup(request: Request) -> SubagentThreadCleanup | None:
     if fleet is None:
         return None
     return SubagentThreadCleanup(fleet, SessionLocal)
+
+
+def _stored_turns(db: Session, conversation_id: int) -> list[dict[str, Any]]:
+    """The turns before this one; a failed read is no history, never no turn."""
+    try:
+        return conversations_service.stored_turns(db, conversation_id)
+    except Exception as exc:
+        logger.warning("stored_turns_failed", error=str(exc), error_type=type(exc).__name__)
+        return []
 
 
 def _get_or_404(db: Session, conversation_id: int) -> Conversation:
@@ -208,11 +217,12 @@ def post_message(
     the ``agent:loop`` audit driver.
     """
     conversation = _get_or_404(db, conversation_id)
+    turns = _stored_turns(db, conversation.id)
     turn_opening = turn_context.build(
         date.today(),
         Now(surface=data.surface, panel=data.panel),
         data.content,
-        history=lambda: conversations_service.stored_turns(db, conversation.id),
+        history=lambda: turns,
         earlier=lambda: conversations_service.earlier_calls(db, conversation.id),
     )
     user_message = conversations_service.append_user_message(db, conversation, data.content)
@@ -222,6 +232,8 @@ def post_message(
         master_conversation_id=str(conversation_id),
         thread_store=thread_store,
         calls_per_turn_per_app=get_settings().conductor_delegate_calls_per_turn_per_app,
+        # Only a question the person saw last turn can take a yes (#68).
+        pending_confirm=confirmation.pending(turns),
     )
 
     def report(activity: LoopActivity) -> None:

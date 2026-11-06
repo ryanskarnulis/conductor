@@ -139,7 +139,9 @@ class FakeClient:
         self._log.append(("create", cid))
         return cid
 
-    def send_message(self, conversation_id: int, message: str) -> MessageExchange:
+    def send_message(
+        self, conversation_id: int, message: str, *, confirm_token: str | None = None
+    ) -> MessageExchange:
         self._log.append(("send", conversation_id, message))
         effect: object = self._send_effects.pop(0) if self._send_effects else _exchange()
         if isinstance(effect, Exception):
