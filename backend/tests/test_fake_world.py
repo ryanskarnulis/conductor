@@ -7,7 +7,15 @@ from datetime import date, timedelta
 
 import pytest
 
-from tests.fake_world import MusicApp, TasksApp, World, friday_targets, parse_date, weekend_targets
+from tests.fake_world import (
+    MusicApp,
+    TasksApp,
+    World,
+    client_factory,
+    friday_targets,
+    parse_date,
+    weekend_targets,
+)
 from app.fleet.delegate import DelegateConfirmRefused
 
 THURSDAY = date(2026, 11, 5)
@@ -143,3 +151,28 @@ def test_tasks_another_message_voids_the_question(world: World) -> None:
     with pytest.raises(DelegateConfirmRefused):
         app.handle(1, "yes", asked.confirm.token)
     assert world.receipts == [] or all(r.kind != "trash" for r in world.receipts)
+
+
+def test_replies_carry_v1_1_records_like_the_real_apps(world: World) -> None:
+    # The narrator (#65) speaks from these, so they must say what was touched.
+    tasks = client_factory(world)(_App("tasks"))
+    made = tasks.send_message(1, "add a task to water the plants tomorrow").assistant_message
+    assert made.record is not None
+    [entry] = made.record
+    assert (entry.tool, entry.outcome) == ("create_task", "done")
+    assert [ref.title for ref in entry.touched] == ["water the plants"]
+    assert entry.undo is not None and entry.undo.how == "move it to the trash"
+
+    asked = tasks.send_message(1, "delete the Kitchen project").assistant_message
+    assert asked.record is not None and [e.outcome for e in asked.record] == ["not_run"]
+
+    music = client_factory(world)(_App("music"))
+    saved = music.send_message(1, "download https://example.com/watch?v=1").assistant_message
+    assert saved.record is not None
+    [song] = saved.record[0].touched
+    assert (song.title, song.untrusted) == ("Real Title", True)
+
+
+class _App:
+    def __init__(self, name: str) -> None:
+        self.name = name

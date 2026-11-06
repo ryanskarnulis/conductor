@@ -401,14 +401,15 @@ class LoopDriver:
         self._seen = 0
 
     def say(self, text: str, *, surface: str) -> TurnRecord:
-        # Today's loop has no notion of surface: a voice turn reaches it as the
-        # transcribed text, the same as typing it.
+        # A voice turn reaches the loop as the transcribed text plus its
+        # surface, as the voice client sends it (#64's ``Now``).
         assert self._conversation is not None
         self._reset()
         index = self._holder.world.turn if self._holder.world else 0
         started = time.monotonic()
         response = self._client.post(
-            f"/api/agent/conversations/{self._conversation}/messages", json={"content": text}
+            f"/api/agent/conversations/{self._conversation}/messages",
+            json={"content": text, "surface": surface},
         )
         seconds = time.monotonic() - started
         if response.status_code != 200:

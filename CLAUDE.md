@@ -86,6 +86,11 @@ frontend on `8300`.
   record is stored per call (`app_record`, never sent to the model), and a 5xx
   whose record lists `done` work is reported as partly happened, by name
   (untrusted titles by kind and id). No record means unknown: never retry blind.
+- **The planner decides, the narrator speaks** (#65). A completed run's reply
+  is a tool-less call on a typed receipt of what ran (`app/ai/narrator.py`);
+  the persona lives only there. Code guarantees the facts (titles, counts,
+  undo, quoted outside text, two sentences on voice); handoffs and an app's
+  confirm question pass through verbatim.
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
   depth stacks.
 - **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every

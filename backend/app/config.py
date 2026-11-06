@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     # call (model-profile's turn cap), and the per-run tool-call cap.
     conductor_max_tokens: int = 2048
     conductor_max_tool_calls: int = 12
+    # A completed run's reply is the narrator's (#65, app/ai/narrator.py).
+    # Off replies with the planner's own words: an A/B switch for the evals.
+    conductor_narrator: bool = True
     # Diagnostics (#62), both off by default. One JSONL record per turn
     # (app/ai/trace.py), and the exact bytes of every model call
     # (app/ai/context_capture.py; heavy, a debugging switch).

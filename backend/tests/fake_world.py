@@ -45,9 +45,12 @@ from typing import Any
 from app.fleet.delegate import (
     ConfirmRequired,
     DelegateConfirmRefused,
+    EntityRef,
     MessageExchange,
     MessageRead,
+    RecordEntry,
     ToolCallRead,
+    Undo,
 )
 
 # --- dates -----------------------------------------------------------------------
@@ -405,10 +408,77 @@ class AppReply:
     tools: list[ToolCallRead] = field(default_factory=list)
     stop_reason: str = "completed"
     confirm: ConfirmRequired | None = None
+    # What a read found, as the real apps' v1.1 records name it. Writes need
+    # none: the client builds their entries from the receipts they left.
+    found: list[RecordEntry] = field(default_factory=list)
 
 
 def _tool(tool_name: str, **arguments: Any) -> ToolCallRead:
     return ToolCallRead(tool=tool_name, arguments=arguments, result="ok")
+
+
+# --- the apps' typed records (delegate-api v1.1) --------------------------------------
+#
+# Shaped as PCC's and music's ``app/ai/receipts.py`` build them: a task or
+# project is named by its own title; a song's title comes from outside (web
+# titles, file tags), so it is ``untrusted``; a download job is named by the
+# request. Writes are read back off the receipts each call left.
+
+
+def _task_ref(task: Task) -> EntityRef:
+    return EntityRef(app="tasks", kind="task", id=str(task.id), title=task.title)
+
+
+def _song_ref(song: Song) -> EntityRef:
+    return EntityRef(app="music", kind="song", id=str(song.id), title=song.title, untrusted=True)
+
+
+def _looked_up(tool: str, refs: list[EntityRef]) -> RecordEntry:
+    return RecordEntry(tool=tool, outcome="looked_up", touched=refs, count=len(refs))
+
+
+# Each write family as (tool, undo): the inverse the real app offers, or why
+# there is none.
+_TASK_WRITES: dict[str, tuple[str, Undo]] = {
+    "create": ("create_task", Undo(how="move it to the trash")),
+    "update": ("update_task", Undo(none="an edit isn't versioned; change it back by hand")),
+    "complete": ("complete_task", Undo(how="reopen it")),
+    "trash": ("trash_task", Undo(how="restore it from the trash")),
+}
+
+
+def _write_entry(receipt: Receipt) -> RecordEntry:
+    if receipt.kind == "cancel":
+        return RecordEntry(tool="cancel", outcome="done", count=receipt.detail.get("filed"))
+    kind, ident = receipt.ref.split(":", 1)
+    if receipt.app == "tasks":
+        tool, undo = _TASK_WRITES[receipt.kind]
+        if kind == "project":
+            tool, undo = "trash_project", Undo(how="restore it and its tasks from the trash")
+        if undo.how:
+            undo = Undo(handle=f"{tool}:{ident}", how=undo.how)
+        ref = EntityRef(app="tasks", kind=kind, id=ident, title=receipt.title)
+        return RecordEntry(tool=tool, outcome="done", touched=[ref], undo=undo)
+    if receipt.kind == "file":
+        ref = EntityRef(app="music", kind="song", id=ident, title=receipt.title, untrusted=True)
+        undo = Undo(handle="undo_last_filing", how="file the songs again")
+        return RecordEntry(tool="file_song", outcome="done", touched=[ref], undo=undo)
+    no_undo = Undo(none="a download can't be undone")
+    if kind == "song":
+        ref = EntityRef(app="music", kind="song", id=ident, title=receipt.title, untrusted=True)
+        return RecordEntry(tool="download_song", outcome="done", touched=[ref], undo=no_undo)
+    job_kind = str(receipt.detail.get("job_kind", "album"))
+    refs = [
+        EntityRef(app="music", kind=job_kind, id=ident, title=receipt.title, untrusted=True),
+        EntityRef(app="music", kind="download_job", id=ident, title=f"{job_kind} download"),
+    ]
+    return RecordEntry(tool="queue_download", outcome="done", touched=refs, undo=no_undo)
+
+
+def _record(reply: AppReply, written: list[Receipt]) -> list[RecordEntry]:
+    if reply.confirm is not None:
+        return [RecordEntry(tool=reply.confirm.tool, outcome="not_run", reason="needs a yes")]
+    return [*reply.found, *(_write_entry(receipt) for receipt in written)]
 
 
 class TasksApp:
@@ -490,7 +560,11 @@ class TasksApp:
             due = f", due {task.due.isoformat()}" if task.due else ""
             notes = f" — note: {task.notes}" if task.notes else ""
             lines.append(f"- {task.title} (#{task.id}, {task.project}{due}){notes}")
-        return AppReply("\n".join(lines), [_tool("list_tasks", filter=what)])
+        return AppReply(
+            "\n".join(lines),
+            [_tool("list_tasks", filter=what)],
+            found=[_looked_up("list_tasks", [_task_ref(task) for task in found])],
+        )
 
     # writes
 
@@ -710,14 +784,22 @@ class MusicApp:
             f"downloaded" + (f", {job.failed} didn't match" if job.failed else "")
             for job in self.world.jobs.values()
         ]
-        return AppReply("\n".join(lines), [_tool("list_jobs")])
+        refs = [
+            EntityRef(app="music", kind="download_job", id=str(j.id), title=j.title)
+            for j in self.world.jobs.values()
+        ]
+        return AppReply(
+            "\n".join(lines), [_tool("list_jobs")], found=[_looked_up("list_jobs", refs)]
+        )
 
     def _unsorted(self) -> AppReply:
         self.world.read("music", "unsorted")
         songs = self.world.unsorted()
         names = "; ".join(f"{s.title} by {s.artist}" for s in songs)
         return AppReply(
-            f"{len(songs)} songs still need sorting: {names}.", [_tool("list_unsorted")]
+            f"{len(songs)} songs still need sorting: {names}.",
+            [_tool("list_unsorted")],
+            found=[_looked_up("list_unsorted", [_song_ref(song) for song in songs])],
         )
 
     def _resolve_song(self, message: str) -> list[Song]:
@@ -865,6 +947,7 @@ class FakeDelegateClient:
         self, conversation_id: int, message: str, *, confirm_token: str | None = None
     ) -> MessageExchange:
         self._world.threads.setdefault(self._app_name, []).append(conversation_id)
+        before = len(self._world.receipts)
         if self._app is None:
             reply = AppReply("Done — nothing else to report.")
         elif isinstance(self._app, TasksApp):
@@ -889,6 +972,7 @@ class FakeDelegateClient:
                 stop_reason=reply.stop_reason,
                 created_at=now,
                 confirm_required=reply.confirm,
+                record=_record(reply, self._world.receipts[before:]),
             ),
         )
 

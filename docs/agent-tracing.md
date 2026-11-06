@@ -14,7 +14,11 @@ The turn id is `run_id`: its log lines, its trace record, its captured calls
 and `AgentRunResult.run_id` all carry it. The record also holds:
 
 - the conversation, utterance and history it was handed;
-- `calls[]`: status (`ok`/`truncated`/`bad_args`/`failed`), ms, tokens, finish reason;
+- `calls[]`: role (`planner`/`narrator`), status (`ok`/`truncated`/`bad_args`/`failed`), ms,
+  tokens, finish reason;
+- `surface` and `narration` (#65): how the reply was made (`path`: narrated,
+  respoken, appended, handoff, confirm, fallback, planner), what code
+  appended, and the narrator's calls and ms;
 - `tools[]`: every tool call as the loop recorded it;
 - `hops[]`: one per delegate call. Each hop has its `hop_id`, the app, the
   subagent thread, the app's `X-Request-ID` (`app_request_id`), what the app

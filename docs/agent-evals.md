@@ -202,3 +202,38 @@ relay doesn't invent writes; it leaves them unnamed. That is #55, and #65's
 narrator is the fix, so the known reds point there. Floors stay at 0.8. Warm
 turn p50 was 1–3 s; the GPU was shared with a PCC eval, so S16 hit four 300 s
 provider timeouts and aborted on infra (retried, never scored).
+
+### #65, the narrator (2026-11-06, gemma-4-12b)
+
+Paired on one harness: `CONDUCTOR_NARRATOR=0` is the planner's own relay
+("before"), the default is the narrator ("after"). The fake apps now send
+v1.1 records shaped like PCC's and music's, so both arms see the same receipts.
+Gate tier, 5-sample blocks; S5 also at 20.
+
+| scenario | before | after | turn p50 before → after |
+|---|---|---|---|
+| S1 | 5/5 | 5/5 | 0.8 → 1.3 s |
+| S2 | 0/5 | **5/5** | 0.9 → 1.6 s |
+| S2r | 1/5 | **5/5** | 0.9 → 1.7 s |
+| S5 | 2/5 | **5/5**, then 18/20 | 1.0 → 2.0 s |
+| S7 | 5/5 | 5/5 | 0.7 → 1.3 s |
+| S8 | 5/5 | 5/5 | 0.5 → 0.5 s |
+| S9 | 15/20 | **5/5** | 0.8 → 1.4 s |
+| S16 | 0/5 | **5/5** | 0.8 → 1.6 s |
+
+- Claims backed: 24/24 before, **30/30** after (create 20/20, trash 5/5,
+  update 5/5). The known reds on S2, S2r, S5, S9 and S16 are dropped.
+- **Relay probe** (`tests/test_relay_probe.py`, spike R1 as a standing probe:
+  "download this song", music's real note and record, "Odessa" and "Real
+  Title"): **40/40** kept after, twice (Wilson lower 0.94); 0/20 before.
+  Turn p50 0.75 → 1.24 s.
+- **Latency:** the median of the gate scenarios' p50s goes 0.8 → 1.45 s
+  (+0.65 s); the relay probe +0.49 s. The worst is S5 (+1.0 s): a long receipt
+  of notes to answer from.
+- **Routing** with the narrator on: 19 pass, `music-save` 5/5 (xpass),
+  `refuse-playback` 0/5 (known red, #36). The planner prompt and tool schemas
+  are byte-identical, so routing can't move.
+- The first cut required every title a read touched; S5 fell to 9/20 (lists
+  crowded out the answer, and every search re-spoke). A read now owes one
+  thing it found; a write owes every title. The narrator re-speaks in about 1
+  of 20 S5 turns.
