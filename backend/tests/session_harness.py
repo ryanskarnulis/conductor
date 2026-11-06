@@ -220,6 +220,7 @@ class Sample:
     taken: Taken
     session: Session
     seconds: float
+    seed: int | None = None
 
 
 def run_sample(scenario: Scenario, driver: Driver, world: World | None = None) -> Sample:

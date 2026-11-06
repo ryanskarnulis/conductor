@@ -125,7 +125,7 @@ def test_stop_mid_delegate(fleet: Path) -> None:
         if h.cancel_path is None:
             pytest.xfail("no cancel route yet: Stop mid-delegate waits on #66")
     log = run_steps(fleet, [Step("sort", (calls(SORT), DONE), Fault("stop", 0))])
-    assert log[0].run is not None and log[0].run.stop_reason == "cancelled"
+    assert log[0].run is not None and str(log[0].run.stop_reason) == "cancelled"
 
 
 # --- the instrument's own checks ---------------------------------------------------------
@@ -149,7 +149,9 @@ def test_every_invariant_can_fire(fleet: Path) -> None:
         assert not _breaches(invariant, clean), invariant.__name__
     assert clean.run is not None
     run = clean.run
-    unanswered = run.model_copy(update={"messages": [m for m in run.messages if m["role"] != "tool"]})
+    unanswered = run.model_copy(
+        update={"messages": [m for m in run.messages if m["role"] != "tool"]}
+    )
     mutants = {
         check_every_call_has_one_answer: replace(clean, run=unanswered),
         check_saved_turn_is_what_ran: replace(clean, run=run.model_copy(update={"reply": "x"})),

@@ -38,7 +38,7 @@ from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import sessionmaker
 
 import app.main as main_module
-from app.ai.loop import AgentLoop
+from app.ai.loop import AgentLoop, loop_from_settings
 from app.ai.provider import ProviderRequestError
 from app.api import rate_limit, routes_agent
 from app.config import get_settings
@@ -46,6 +46,7 @@ from app.db.session import get_db
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
 from app.tools import registry
+from tests import eval_seed
 from tests.evalstats import (
     Decision,
     GateAborted,
@@ -76,6 +77,8 @@ _INFRA = InfraBudget(
     budget=int(os.environ.get("CONDUCTOR_EVAL_INFRA_BUDGET", "12")),
 )
 _CLAIMS = Tally()
+# Paired A/B (#53): sample j of a scenario sends seed base + j (``eval_seed``).
+_SEED_BASE = eval_seed.seed_base()
 
 
 def _tool_names() -> set[str]:
@@ -254,6 +257,8 @@ def live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[LoopDriver, None, None]:
     for client, holder in _started(WORKSPACE_ROOT, db_session, session_factory, monkeypatch):
+        if _SEED_BASE is not None:
+            app.dependency_overrides[routes_agent.get_agent_loop] = _seeded_loop
         if not {"ask_tasks", "ask_music", "open_chess"} <= _tool_names():
             pytest.skip(
                 f"fleet discovery registered {sorted(_tool_names())}; is "
@@ -262,11 +267,24 @@ def live(
         yield LoopDriver(client, holder, tool_names=_tool_names, reset=rate_limit._reset)
 
 
+def _seeded_loop() -> Generator[AgentLoop, None, None]:
+    provider = eval_seed.seeded_provider()
+    try:
+        yield loop_from_settings(provider, fleet_section=getattr(app.state, "fleet_section", None))
+    finally:
+        provider.close()
+
+
 def _take(
     scenario: Scenario, driver: LoopDriver, samples: list[Sample]
 ) -> Callable[[int | None], Taken]:
-    def take(_seed: int | None) -> Taken:
-        sample = run_sample(scenario, driver)
+    def take(seed: int | None) -> Taken:
+        eval_seed.current.seed = seed
+        try:
+            sample = run_sample(scenario, driver)
+        finally:
+            eval_seed.current.seed = None
+        sample.seed = seed
         print(sample_line(scenario, sample))
         if sample.taken.outcome in (Outcome.PASS, Outcome.FAIL):
             samples.append(sample)
@@ -286,7 +304,15 @@ def _record(scenario: Scenario, result: Any, samples: list[Sample], tier: str) -
     for mode, count in sorted(result.failure_modes.items(), key=lambda item: -item[1]):
         print(f"[session]   ×{count} {mode}")
     if _REPORT:
-        line = scenario_record(scenario.id, result, 0.8, tier=tier, turn_p50=p50)
+        line = scenario_record(
+            scenario.id,
+            result,
+            0.8,
+            kind="session",
+            tier=tier,
+            turn_p50=p50,
+            samples=[{"seed": s.seed, "pass": s.taken.outcome == "PASS"} for s in samples],
+        )
         with open(_REPORT, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(line) + "\n")
 
@@ -314,6 +340,7 @@ def test_live_gate(scenario: Scenario, live: LoopDriver) -> None:
             budget=_INFRA,
             block_runs=_BLOCK_RUNS,
             max_runs=_MAX_RUNS,
+            seed_base=_SEED_BASE,
         )
     except GateAborted as aborted:
         pytest.fail(str(aborted))
@@ -337,6 +364,7 @@ def test_live_frontier(scenario: Scenario, live: LoopDriver) -> None:
             budget=_INFRA,
             block_runs=_FRONTIER_RUNS,
             max_runs=_FRONTIER_RUNS,
+            seed_base=_SEED_BASE,
         )
     except GateAborted as aborted:
         pytest.skip(f"frontier sample aborted on infra: {aborted}")
