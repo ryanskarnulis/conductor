@@ -45,6 +45,7 @@ visible.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Generator
@@ -58,6 +59,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.main as main_module
+from app.ai.loop import AgentLoop, loop_from_settings
 from app.api import rate_limit, routes_agent
 from app.config import get_settings
 from app.db.session import get_db
@@ -66,6 +68,7 @@ from app.fleet.manifests import FleetApp, fleet_from_settings
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
 from app.tools import registry
+from tests import eval_seed
 from tests.evalstats import (
     Decision,
     GateAborted,
@@ -74,6 +77,7 @@ from tests.evalstats import (
     classify,
     provider_failure_kind,
     run_gate,
+    scenario_record,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -100,6 +104,13 @@ _MAX_RUNS = int(os.environ.get("CONDUCTOR_EVAL_MAX_RUNS", "20"))
 _INFRA_RETRIES = int(os.environ.get("CONDUCTOR_EVAL_INFRA_RETRIES", "3"))
 _INFRA_BUDGET = int(os.environ.get("CONDUCTOR_EVAL_INFRA_BUDGET", "12"))
 _INFRA = InfraBudget(retries=_INFRA_RETRIES, budget=_INFRA_BUDGET)
+
+# Paired A/B (#53): with CONDUCTOR_AGENT_EVALS_SEED set, sample j of each golden
+# sends seed base + j (``eval_seed``); unset, the gate samples unseeded.
+# CONDUCTOR_EVAL_REPORT appends one JSON line per golden, with each scored
+# sample's seed and verdict, for ``scripts/campaign_report.py``.
+_SEED_BASE = eval_seed.seed_base()
+_REPORT = os.environ.get("CONDUCTOR_EVAL_REPORT")
 
 # The agents today's goldens are written against.
 EXPECTED_AGENT_TOOLS = frozenset({"ask_tasks", "open_chess", "ask_music"})
@@ -193,6 +204,8 @@ def eval_client(
     monkeypatch.setattr(main_module, "default_client_factory", lambda: fake_factory)
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[routes_agent.get_thread_store] = lambda: DbThreadStore(session_factory)
+    if _SEED_BASE is not None:
+        app.dependency_overrides[routes_agent.get_agent_loop] = _seeded_loop
     try:
         with TestClient(app) as client:
             registered = {tool.name for tool in registry.all_tools()}
@@ -206,6 +219,15 @@ def eval_client(
             yield client
     finally:
         app.dependency_overrides.clear()
+
+
+def _seeded_loop() -> Generator[AgentLoop, None, None]:
+    """``get_agent_loop`` over the seeding provider (``eval_seed``)."""
+    provider = eval_seed.seeded_provider()
+    try:
+        yield loop_from_settings(provider, fleet_section=getattr(app.state, "fleet_section", None))
+    finally:
+        provider.close()
 
 
 # --- goldens -------------------------------------------------------------------
@@ -339,14 +361,16 @@ def test_routing_golden(
     delegate_calls: list[tuple[str, str]],
 ) -> None:
     durations: list[float] = []
+    samples: list[dict[str, Any]] = []
 
-    def take(_seed: int | None) -> Taken:
+    def take(seed: int | None) -> Taken:
         # A fresh conversation per sample: a failed turn leaves its user
         # message behind, and the next sample must not see it as history. And
         # a fresh rate-limit window: the route allows 10 messages a minute per
         # client, and an escalated scenario takes up to 20 samples from one.
         rate_limit._reset()
         delegate_calls.clear()
+        eval_seed.current.seed = seed
         created = eval_client.post("/api/agent/conversations", json={})
         assert created.status_code == 201
         conversation_id = created.json()["id"]
@@ -374,6 +398,7 @@ def test_routing_golden(
         except Exception as exc:  # classify: an AssertionError is a miss, else HARNESS
             error = exc
         outcome = classify(status_code=200, stop_reason=assistant["stop_reason"], error=error)
+        samples.append({"seed": seed, "pass": outcome == "PASS"})
         trajectory = [call["tool"] for call in assistant["tool_calls"] or []]
         print(
             f"[eval]   {golden.id} {outcome} trajectory={trajectory or '-'} "
@@ -391,10 +416,17 @@ def test_routing_golden(
             budget=_INFRA,
             block_runs=_BLOCK_RUNS,
             max_runs=_MAX_RUNS,
+            seed_base=_SEED_BASE,
             on_infra=on_infra,
         )
     except GateAborted as aborted:
         pytest.fail(str(aborted))
+    finally:
+        eval_seed.current.seed = None
+    if _REPORT:
+        record = scenario_record(golden.id, result, 0.8, kind="routing", samples=samples)
+        with open(_REPORT, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
     span = f" {min(durations):.1f}–{max(durations):.1f}s" if durations else ""
     print(
         f"[eval] scenario={golden.id} kind={golden.kind} expected={golden.route or '-'} "
