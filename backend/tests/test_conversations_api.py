@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
+import structlog
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -16,8 +18,12 @@ from app.ai.loop import AgentLoop
 from app.ai.provider import ProviderRequestError
 from app.api import routes_agent, turn_activity
 from app.config import get_settings
+from app.fleet import context as fleet_context
 from app.fleet.context import current_delegation_context
+from app.fleet.delegate import DelegateClient
+from app.fleet.manifests import AgentSpec, Fleet, FleetApp
 from app.fleet.thread_store import DbThreadStore
+from app.fleet.tools import build_delegate_tools
 from app.main import app
 from app.tools import registry
 from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
@@ -301,3 +307,91 @@ def test_a_note_is_carried_into_the_next_turns_context(client: TestClient) -> No
 
     sent = provider.requests[0]["messages"]
     assert any("Zeds Dead → Dubstep" in str(message.get("content")) for message in sent)
+
+
+def test_a_provider_death_after_a_delegate_write_keeps_the_write_in_the_thread(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#52 / B2: conductor's model dies after ``ask_tasks`` wrote. The turn is
+    stored naming the write, the route still answers 502, and the next turn's
+    context carries it."""
+    # The client's lifespan turns on structlog's cache-on-first-use, so the
+    # first delegate_call logged here would pin the module's logger and blind
+    # later ``capture_logs`` audits. Log through a throwaway proxy instead.
+    monkeypatch.setattr(fleet_context, "logger", structlog.get_logger(fleet_context.__name__))
+    writes: list[str] = []
+
+    def tasks_app(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/conversations"):
+            return httpx.Response(201, json={"id": 5})
+        writes.append(request.read().decode())
+        turn = {"conversation_id": 5, "created_at": "2026-11-05T00:00:00Z"}
+        return httpx.Response(
+            200,
+            json={
+                "user_message": {**turn, "id": 1, "role": "user", "content": "add pay rent"},
+                "assistant_message": {
+                    **turn,
+                    "id": 2,
+                    "role": "assistant",
+                    "content": "Added task #41 pay rent.",
+                    "tool_calls": [
+                        {"tool": "create_task", "arguments": {"title": "pay rent"}, "result": "41"}
+                    ],
+                    "stop_reason": "completed",
+                },
+            },
+        )
+
+    fleet = Fleet(
+        apps=(
+            FleetApp(
+                name="tasks",
+                title="Tasks",
+                upstream="127.0.0.1:8100",
+                agent=AgentSpec(description="Tasks.", api="/api/agent", examples=("add a task",)),
+            ),
+        )
+    )
+    build_delegate_tools(
+        fleet,
+        lambda app: DelegateClient(
+            "http://tasks.test/api/agent",
+            client=httpx.Client(transport=httpx.MockTransport(tasks_app)),
+        ),
+    )
+    dying = ScriptedProvider(
+        [
+            tool_calls_turn(("ask_tasks", {"message": "add a task to pay rent"})),
+            ProviderRequestError("llama-server request failed: timed out"),
+        ]
+    )
+    _use_loop(dying)
+    conversation_id = _create_conversation(client)
+
+    response = client.post(
+        f"/api/agent/conversations/{conversation_id}/messages",
+        json={"content": "add a task to pay rent"},
+    )
+    # Still a provider death to the client (and to the eval harness's infra check).
+    assert response.status_code == 502
+    assert response.json()["detail"] == "agent run failed: llama-server request failed: timed out"
+    assert len(writes) == 1
+
+    messages = client.get(f"/api/agent/conversations/{conversation_id}").json()["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    stored = messages[1]
+    assert stored["stop_reason"] == "provider_error"
+    assert "ask_tasks" in stored["content"] and "Added task #41 pay rent." in stored["content"]
+    assert stored["tool_calls"][0]["tool"] == "ask_tasks"
+
+    follow_up = ScriptedProvider([text_turn("It's on your list.")])
+    _use_loop(follow_up)
+    response = client.post(
+        f"/api/agent/conversations/{conversation_id}/messages",
+        json={"content": "did that go through?"},
+    )
+    assert response.status_code == 200
+    replayed = follow_up.requests[0]["messages"]
+    assert [m["role"] for m in replayed] == ["system", "user", "assistant", "user"]
+    assert "Added task #41 pay rent." in replayed[2]["content"]

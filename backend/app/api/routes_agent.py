@@ -23,8 +23,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.ai.loop import AgentLoop, LoopActivity, loop_from_settings
-from app.ai.provider import ProviderError
+from app.ai.loop import AgentLoop, AgentRunFailed, LoopActivity, loop_from_settings
 from app.ai.providers.llamacpp import provider_from_settings
 from app.api import turn_activity
 from app.api.rate_limit import rate_limit
@@ -194,7 +193,11 @@ def post_message(
 
     The user message is committed *before* the loop runs: a run can take
     minutes (each iteration may wrap a subagent's full loop) and a provider
-    failure — surfaced as 502 — must not swallow what the user said. The
+    failure — surfaced as 502 — must not swallow what the user said. A failed
+    run (:class:`AgentRunFailed`: 502 for the provider, 500 for a crash) is
+    stored as a truthful partial turn before the error goes out, so a write an
+    app made before the failure stays in the transcript and the next turn's
+    history (#52). The
     delegation context is bound for exactly the run: the DB-backed thread
     store keyed by this conversation, the per-turn per-app call budget, and
     the ``agent:loop`` audit driver.
@@ -219,12 +222,20 @@ def post_message(
     try:
         with use_delegation_context(context):
             run = loop.run(data.content, history=history, on_activity=report)
-    except ProviderError as exc:
-        logger.error("agent_run_failed", conversation_id=conversation_id, error=str(exc))
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"agent run failed: {exc}",
-        ) from exc
+    except AgentRunFailed as exc:
+        logger.error(
+            "agent_run_failed",
+            conversation_id=conversation_id,
+            stop_reason=exc.result.stop_reason,
+            tool_calls=len(exc.result.tool_calls),
+            error=str(exc),
+        )
+        if exc.result.tool_calls:
+            # Something ran: keep the record. A failure before any call leaves
+            # the user turn alone, as before.
+            conversations_service.append_assistant_message(db, conversation, exc.result)
+            db.commit()
+        raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
     finally:
         turn_activity.end(conversation_id)
 

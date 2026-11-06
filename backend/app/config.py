@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # iteration may wrap a full subagent loop (a delegate call fans out into
     # that app's own bounded loop), so latency stacks. See CLAUDE.md.
     conductor_max_iterations: int = 6
+    # STANDARD.md §3 safety nets (#52): the completion cap sent on every model
+    # call (model-profile's turn cap), and the per-run tool-call cap.
+    conductor_max_tokens: int = 2048
+    conductor_max_tool_calls: int = 12
 
     # --- voice (shared workspace speech service) -----------------------------
     # ../speech/: Speaches STT on 8400, Kokoro-FastAPI TTS on 8410. Env var
