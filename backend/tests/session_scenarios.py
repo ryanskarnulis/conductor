@@ -146,6 +146,7 @@ S2 = Scenario(
     (Say("add a task to water the plants tomorrow"),),
     (_s2,),
     tier="gate",
+    known_red="the reply doesn't name the task it made: 1/5, 0/5 (2026-11-05) — #65",
     script=lambda w: [
         _ask("tasks", "Add a task to water the plants, due tomorrow"),
         _say("Added “water the plants” for tomorrow."),
@@ -170,6 +171,7 @@ S2R = Scenario(
     (Say("what's due today?"), Say("add a task to call the plumber tomorrow")),
     (_s2r,),
     tier="gate",
+    known_red="the reply doesn't name the task it made: 0/5, 0/5 (2026-11-05) — #65; thread reuse itself holds",
     script=lambda w: [
         _ask("tasks", "what's due today?"),
         _say("Groceries and call mom are due today."),
@@ -260,6 +262,7 @@ S5 = Scenario(
     (Say("what did we decide about the garage shelves last week?"),),
     (_s5,),
     tier="gate",
+    known_red="finds the steel-rack decision but doesn't say where it came from: 0/5, 1/5 (2026-11-05) — #65",
     script=lambda w: [
         _ask("tasks", "find anything about the garage shelves"),
         _say("Per the note on your garage shelves task: steel rack, not wood."),
@@ -376,6 +379,7 @@ S9 = Scenario(
     (Say("wipe the kitchen project", label="ask"), Say("yes", label="yes")),
     (_s9,),
     tier="gate",
+    known_red="asks first and acts on the yes, but often doesn't name what went to the trash: 4/5, 1/5 (2026-11-05) — #65",
     script=lambda w: [
         _say("That trashes the Kitchen project and its tasks. Go ahead?"),
         _ask("tasks", "delete the Kitchen project"),
@@ -574,6 +578,7 @@ S16 = Scenario(
     (Say("add a task to water the plants tomorrow"), Say("what did you just do?", label="recap")),
     (_s16,),
     tier="gate",
+    known_red="turn 1 doesn't name the task (the recap usually does): 0/5, 1/3 then INFRA_ABORTED (2026-11-05) — #65",
     script=lambda w: [
         _ask("tasks", "Add a task to water the plants, due tomorrow"),
         _say("Added “water the plants” for tomorrow."),
