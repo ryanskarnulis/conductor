@@ -203,6 +203,10 @@ narrator is the fix, so the known reds point there. Floors stay at 0.8. Warm
 turn p50 was 1–3 s; the GPU was shared with a PCC eval, so S16 hit four 300 s
 provider timeouts and aborted on infra (retried, never scored).
 
+**#66 (2026-11-06), Stop:** S10 0/5 → **5/5** (the reply is the run record:
+what got filed, and the app's undo note). Gate tier unchanged at 5/5 each;
+routing 19 pass, `refuse-playback` still the known red.
+
 ### #65, the narrator (2026-11-06, gemma-4-12b)
 
 Paired on one harness: `CONDUCTOR_NARRATOR=0` is the planner's own relay

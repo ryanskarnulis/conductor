@@ -98,6 +98,9 @@ frontend on `8300`.
   stop short of `completed` replies from the code-kept run record, and a
   failed run is stored before the route answers 502/500, so a write never
   vanishes from the thread.
+- **Stop** (#66): `POST …/cancel` ends the turn `cancelled` at its next
+  provider call or dispatch, replying from the record (never narrated); a
+  delegate call in flight gets the app's `…/cancel`, best-effort.
 - **The fleet action proxy** (`/api/fleet/{app}/actions/{path}`) forwards only
   to declared `agent.actions` prefixes: no path escapes, no forwarded browser
   headers, short timeouts (5s/30s), the app's status passes through. It is the

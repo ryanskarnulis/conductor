@@ -129,11 +129,15 @@ def test_history_stays_text_after_tool_turns(fleet: Path) -> None:
 
 
 def test_stop_mid_delegate(fleet: Path) -> None:
-    with harness(fleet) as h:
-        if h.cancel_path is None:
-            pytest.xfail("no cancel route yet: Stop mid-delegate waits on #66")
     log = run_steps(fleet, [Step("sort", (calls(SORT), DONE), Fault("stop", 0))])
-    assert log[0].run is not None and str(log[0].run.stop_reason) == "cancelled"
+    run = log[0].run
+    assert run is not None and str(run.stop_reason) == "cancelled"
+    # The record replies: the delegate call that finished, nothing after it.
+    assert run.reply is not None and run.reply.startswith("I stopped before finishing")
+    assert [record.tool for record in run.tool_calls] == ["ask_music"]
+    # The app got conductor's Stop, and no model call started after it.
+    assert ("music", "cancel") in log[0].tool_events
+    assert log[0].chat_calls == 1
 
 
 # --- the instrument's own checks ---------------------------------------------------------

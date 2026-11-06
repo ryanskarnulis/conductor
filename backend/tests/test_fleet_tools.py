@@ -149,6 +149,9 @@ class FakeClient:
         assert isinstance(effect, MessageExchange)
         return effect
 
+    def cancel(self, conversation_id: int) -> bool:
+        return False
+
 
 def _factory(client: FakeClient) -> Callable[[FleetApp], FakeClient]:
     """A client_factory that always hands back the same shared fake client."""
