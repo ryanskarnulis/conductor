@@ -31,6 +31,12 @@ Contract behaviors live here, not in the client:
   them and adapts); a 429 surfaces its ``Retry-After`` and is never auto-retried.
 - **Budget.** The per-turn per-app call is charged before the request, so an
   over-budget call never leaves conductor.
+- **Delegate v1.1 (#67).** Each ``ask`` step mints one ``Idempotency-Key``
+  (on the hop; every message of the step carries it). A connection that drops
+  after the message went out is retried once under that key, so the app
+  answers from its store instead of running again. The app's typed record
+  rides out beside the reply (``runtime.delegated_record``), and a failure
+  body that lists ``done`` work is reported as partly happened, by name.
 
 ``list_agents`` is a local tool (no network) reporting the fleet from the
 manifests. Routing *hints* live in the system prompt, not tool docstrings —
@@ -41,25 +47,29 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any, Protocol
 
 import structlog
 
-from app.fleet.context import current_delegation_context
 from app.ai import trace as run_trace
+from app.fleet.context import current_delegation_context
 from app.fleet.delegate import (
     CONDUCTOR_ACTOR,
     DelegateClient,
+    DelegateConnectionLost,
     DelegateError,
     DelegateOutcomeUnknown,
     DelegateProtocolError,
     DelegateRateLimited,
     DelegateRequestRejected,
+    DelegateRunFailed,
     DelegateThreadGone,
     DelegateUnavailable,
     MessageExchange,
     MessageRead,
+    RecordEntry,
 )
 from app.fleet.manifests import Fleet, FleetApp
 from app.tools import registry, runtime
@@ -216,6 +226,9 @@ def _delegate(app: FleetApp, client_factory: ClientFactory, message: str) -> str
     # One hop per delegate call (#62): its ids ride every request to the app,
     # and what came back lands on the turn's trace.
     with run_trace.hop(app.name) as hop:
+        # One key for this step: a retry below, and a 404 → recreate (a fresh
+        # thread has never seen it), resend it rather than run twice.
+        hop.idempotency_key = uuid.uuid4().hex
         started = time.monotonic()
         subagent_id: int | None = None
         try:
@@ -225,14 +238,14 @@ def _delegate(app: FleetApp, client_factory: ClientFactory, message: str) -> str
                     subagent_id = client.create_conversation()
                     context.remember_thread(app.name, subagent_id)
                 try:
-                    exchange = client.send_message(subagent_id, message)
+                    exchange = _send_once_more_if_dropped(client, subagent_id, message)
                 except DelegateThreadGone:
                     # Contract rule: a pruned thread → recreate once and retry
                     # exactly once. A second 404 propagates and fails the call.
                     context.forget_thread(app.name)
                     subagent_id = client.create_conversation()
                     context.remember_thread(app.name, subagent_id)
-                    exchange = client.send_message(subagent_id, message)
+                    exchange = _send_once_more_if_dropped(client, subagent_id, message)
         except DelegateError as exc:
             latency_ms = _elapsed_ms(started)
             context.audit_delegate_call(
@@ -244,6 +257,10 @@ def _delegate(app: FleetApp, client_factory: ClientFactory, message: str) -> str
                 app_request_id=hop.app_request_id,
             )
             hop.thread_id, hop.ms, hop.error = subagent_id, latency_ms, type(exc).__name__
+            if isinstance(exc, DelegateRunFailed):
+                # The app said what it did before failing: keep it on the turn.
+                hop.app_stop_reason = exc.stop_reason
+                _report(hop, exc.record, [entry.tool for entry in exc.record])
             raise _to_tool_error(app, exc) from exc
 
         assistant = exchange.assistant_message
@@ -257,13 +274,47 @@ def _delegate(app: FleetApp, client_factory: ClientFactory, message: str) -> str
             app_request_id=hop.app_request_id,
         )
         hop.thread_id, hop.ms, hop.app_stop_reason = subagent_id, latency_ms, assistant.stop_reason
-        hop.app_tools = [call.tool for call in assistant.tool_calls or []]
         # Which of the app's own tools ran, recorded structurally as well as in the
         # `[app did: …]` note. The note is prose for the model; this is for the UI,
         # which has to know what a turn actually did rather than infer it from a
         # 12B's paraphrase of it.
-        runtime.delegated_tools.set(tuple(call.tool for call in assistant.tool_calls or []))
+        _report(hop, assistant.record, [call.tool for call in assistant.tool_calls or []])
         return _format_reply(app, assistant)
+
+
+def _send_once_more_if_dropped(
+    client: DelegateClientLike, conversation_id: int, message: str
+) -> MessageExchange:
+    """Send, and resend once if the connection dropped after the message went out.
+
+    The resend carries the hop's ``Idempotency-Key``, so the app answers with
+    what the first send did (the stored exchange or failure) rather than
+    running it again. A 409 there means the first run never finished and
+    whatever it did has happened; a resend that can't reach the app leaves it
+    unknown. Either way it is the first send's unknown outcome, never a retry.
+    """
+    try:
+        return client.send_message(conversation_id, message)
+    except DelegateConnectionLost as lost:
+        hop = run_trace.current_hop()
+        if hop is None or not hop.idempotency_key:
+            raise  # without a key a resend could run it twice
+        try:
+            return client.send_message(conversation_id, message)
+        except (DelegateRequestRejected, DelegateUnavailable, DelegateOutcomeUnknown) as again:
+            if isinstance(again, DelegateRequestRejected) and again.status != 409:
+                raise
+            raise DelegateOutcomeUnknown(f"{lost}; the resend found: {again}") from again
+
+
+def _report(hop: run_trace.Hop, record: list[RecordEntry] | None, tools: list[str]) -> None:
+    """Hand what the app did to the dispatcher and the trace."""
+    hop.app_tools = tools
+    runtime.delegated_tools.set(tuple(tools))
+    if record is not None:
+        dumped = [entry.model_dump(exclude_none=True) for entry in record]
+        hop.app_record = dumped
+        runtime.delegated_record.set(tuple(dumped))
 
 
 def _to_tool_error(app: FleetApp, exc: DelegateError) -> ToolError:
@@ -284,6 +335,19 @@ def _to_tool_error(app: FleetApp, exc: DelegateError) -> ToolError:
             f"{app.name} rejected the request as invalid. Do not retry the same message — "
             f"rephrase or shorten it, or report the failure."
         )
+    if isinstance(exc, DelegateRunFailed):
+        done = exc.done
+        if done:
+            return ToolError(
+                f"{app.name}'s agent failed partway through this request, but part of it "
+                f"happened. Done: {_describe_done(done)}. Anything else in the request was "
+                f"not done. Do not resend the request: that would repeat what is done. Tell "
+                f"the user what was done and what wasn't."
+            )
+        return ToolError(
+            f"{app.name}'s agent failed before changing anything; nothing was changed. "
+            f"Tell the user it failed; trying again shortly is safe."
+        )
     if isinstance(exc, DelegateOutcomeUnknown):
         return ToolError(
             f"{app.name}'s agent stopped partway through this request, so what it did is "
@@ -300,6 +364,26 @@ def _to_tool_error(app: FleetApp, exc: DelegateError) -> ToolError:
             f"{app.name}'s agent returned a response I couldn't read. Treat the request as failed."
         )
     return ToolError(f"{app.name} delegate call failed: {exc}")
+
+
+def _describe_done(entries: list[RecordEntry]) -> str:
+    """The done receipts as one line: each tool and what it touched.
+
+    An ``untrusted`` title (outside text) is never handed to the model, which
+    decides what to do next from this; its kind and id name it instead.
+    """
+    parts: list[str] = []
+    for entry in entries:
+        names = [
+            ref.title
+            if ref.title and not (ref.untrusted or entry.untrusted)
+            else f"{ref.kind} {ref.id}"
+            for ref in entry.touched
+        ]
+        if entry.count is not None and entry.count > len(names):
+            names.append(f"{entry.count - len(names)} more")
+        parts.append(f"{entry.tool} ({', '.join(names)})" if names else entry.tool)
+    return "; ".join(parts)
 
 
 def _format_reply(app: FleetApp, assistant: MessageRead) -> str:

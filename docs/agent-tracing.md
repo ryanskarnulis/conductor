@@ -18,7 +18,9 @@ and `AgentRunResult.run_id` all carry it. The record also holds:
 - `tools[]`: every tool call as the loop recorded it;
 - `hops[]`: one per delegate call. Each hop has its `hop_id`, the app, the
   subagent thread, the app's `X-Request-ID` (`app_request_id`), what the app
-  ran, its stop reason or error class, and ms;
+  ran, its stop reason or error class, and ms; for a v1.1 app also the
+  hop's `idempotency_key` and the app's typed record (`app_record`, its
+  receipts, also from a failure body);
 - the stop reason, error, reply, limits, and the model with hashes of the
   system prompt and tool schemas.
 

@@ -119,6 +119,12 @@ class Hop:
     app_stop_reason: str | None = None
     app_tools: list[str] = field(default_factory=list)
     error: str | None = None
+    # delegate-api v1.1 (#67): the key every message of this hop carries, so a
+    # retry is answered from the app's store rather than run again; and the
+    # app's typed record of what it did (its receipts), on a 200 or in a
+    # failure body. ``None`` when the app sent none (v1).
+    idempotency_key: str | None = None
+    app_record: list[dict[str, Any]] | None = None
 
 
 @dataclass

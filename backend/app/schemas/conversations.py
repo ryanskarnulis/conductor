@@ -51,6 +51,8 @@ class ToolCallRead(BaseModel):
     # For a delegate call, the tools the app ran while answering — persisted and
     # sent to the UI, never to the model.
     app_tools: list[str] | None = None
+    # For a delegate call to a v1.1 app, its typed record of what it did (#67).
+    app_record: list[dict[str, Any]] | None = None
 
 
 class MessageRead(BaseModel):

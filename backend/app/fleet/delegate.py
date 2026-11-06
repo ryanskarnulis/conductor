@@ -19,9 +19,15 @@ can react precisely and no bare ``httpx`` exception ever escapes:
   (nothing was sent), a 503, or any 5xx/timeout on a request with no side
   effects. Retrying is safe.
 - :class:`DelegateOutcomeUnknown` — a ``send_message`` that went out and then
-  failed (a 500/502/504, or a read timeout/drop). The app's run may have done
-  writes before dying (PCC and music persist the partial run and return 5xx),
-  so the result is unknown and a retry could duplicate them (#60).
+  failed with no word on what it did (a v1 5xx, a read timeout, a 409 on a
+  retried key). The app's run may have done writes before dying, so the
+  result is unknown and a retry could duplicate them (#60).
+  :class:`DelegateConnectionLost` is the one the tool layer may retry, under
+  the same ``Idempotency-Key``: the connection dropped after the request went
+  out.
+- :class:`DelegateRunFailed` — a v1.1 failure body (#67): the run failed and
+  the app said what it did. Any ``done`` entry means it partly happened; none
+  means nothing changed.
 - :class:`DelegateRequestRejected` — any other 4xx (e.g. a 422 for a message
   the app's schema refuses): the request itself is invalid, so retrying the
   same input can never succeed.
@@ -35,11 +41,11 @@ long read timeout (300s), because a delegate call can wrap a cold model load of
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 
 import httpx
 import structlog
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, ValidatorFunctionWrapHandler, WrapValidator
 
 from app.ai import trace as run_trace
 
@@ -70,6 +76,10 @@ CONDUCTOR_ACTOR = "agent:conductor"
 TURN_HEADER = "X-Agent-Turn"
 HOP_HEADER = "X-Agent-Hop"
 APP_REQUEST_ID_HEADER = "X-Request-ID"
+
+# delegate-api v1.1 (#67): the client's name for one exchange, so a retry of it
+# never runs the app's loop twice. Minted per ``ask`` step, carried on the hop.
+IDEMPOTENCY_HEADER = "Idempotency-Key"
 
 _DEFAULT_READ_TIMEOUT = 300.0
 _DEFAULT_CONNECT_TIMEOUT = 5.0
@@ -103,8 +113,47 @@ class DelegateOutcomeUnknown(DelegateError):
     """
 
 
+class DelegateConnectionLost(DelegateOutcomeUnknown):
+    """The connection dropped after the message went out (not a timeout).
+
+    The app may have run, so this is still an unknown outcome; but a retry
+    under the same ``Idempotency-Key`` gets the app's stored answer instead of
+    a second run, so the tool layer retries it once.
+    """
+
+
+class DelegateRunFailed(DelegateError):
+    """A run that failed with a v1.1 failure body: the app said what it did.
+
+    ``record`` is the failed run's partial record. Any ``done`` entry means the
+    request partly happened, and resending it would repeat that; none means
+    nothing changed.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int,
+        stop_reason: str | None,
+        record: list[RecordEntry],
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.stop_reason = stop_reason
+        self.record = record
+
+    @property
+    def done(self) -> list[RecordEntry]:
+        return [entry for entry in self.record if entry.outcome == "done"]
+
+
 class DelegateRequestRejected(DelegateError):
     """The app rejected the request as invalid (a 4xx other than 404/429)."""
+
+    def __init__(self, message: str, *, status: int = 400) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 class DelegateProtocolError(DelegateError):
@@ -124,6 +173,67 @@ class ToolCallRead(BaseModel):
     error: str | None = None
 
 
+class EntityRef(BaseModel):
+    """What a call changed or found: ``{app, kind, id, title}`` (v1.1).
+
+    ``untrusted`` marks a ``title`` that is outside text (a web title, a file
+    tag): shown or spoken quoted, never fed to anything that decides what to do.
+    """
+
+    app: str
+    kind: str
+    id: str
+    title: str | None = None
+    untrusted: bool = False
+
+
+class Undo(BaseModel):
+    """How a ``done`` call can be undone, or why it can't."""
+
+    handle: str | None = None
+    how: str | None = None
+    none: str | None = None
+
+
+class JobRef(BaseModel):
+    ref: str
+    status: str
+    done: int = 0
+    total: int | None = None
+
+
+RecordOutcome = Literal["done", "refused", "looked_up", "not_run"]
+
+
+class RecordEntry(BaseModel):
+    """One receipt: what one of the app's tool calls did, built by the app's
+    code from the call, never from its model's words (delegate-api v1.1)."""
+
+    tool: str
+    outcome: RecordOutcome
+    touched: list[EntityRef] = []
+    count: int | None = None
+    reason: str | None = None
+    undo: Undo | None = None
+    job: JobRef | None = None
+    untrusted: bool = False
+
+
+def _lenient_record(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+    """A record conductor can't read is an absent one (outcome unknown), never a
+    reason to drop the turn it rides on."""
+    try:
+        return handler(value)
+    except ValidationError:
+        logger.warning("delegate_record_unreadable")
+        return None
+
+
+# ``None`` is a v1 app (or an unreadable record); ``[]`` is a v1.1 app saying
+# nothing ran.
+Record = Annotated[list[RecordEntry] | None, WrapValidator(_lenient_record)]
+
+
 class MessageRead(BaseModel):
     id: int
     conversation_id: int
@@ -133,6 +243,17 @@ class MessageRead(BaseModel):
     tool_calls: list[ToolCallRead] | None = None
     stop_reason: str | None = None
     created_at: datetime
+    # v1.1: one receipt per tool call.
+    record: Record = None
+
+
+class FailureBody(BaseModel):
+    """A 5xx body from ``POST …/messages``. v1 apps send only ``detail``."""
+
+    detail: Any = None
+    stop_reason: str | None = None
+    assistant_message_id: int | None = None
+    record: Record = None
 
 
 class MessageExchange(BaseModel):
@@ -200,16 +321,23 @@ class DelegateClient:
         response = self._send("POST", "/conversations", json=body)
         return self._parse(response, ConversationCreated).id
 
-    def send_message(self, conversation_id: int, message: str) -> MessageExchange:
+    def send_message(
+        self, conversation_id: int, message: str, *, idempotency_key: str | None = None
+    ) -> MessageExchange:
         """``POST /conversations/{id}/messages`` → the user + assistant turns.
 
-        The delegate contract's request field is ``content``.
+        The delegate contract's request field is ``content``. The
+        ``Idempotency-Key`` is ``idempotency_key``, else the current hop's
+        (the tool layer mints one per ``ask`` step), else none (v1).
         """
+        hop = run_trace.current_hop()
+        key = idempotency_key or (hop.idempotency_key if hop is not None else None)
         response = self._send(
             "POST",
             f"/conversations/{conversation_id}/messages",
             json={"content": message},
             may_have_acted=True,
+            extra_headers={IDEMPOTENCY_HEADER: key} if key else None,
         )
         return self._parse(response, MessageExchange)
 
@@ -223,7 +351,13 @@ class DelegateClient:
         self._send("DELETE", f"/conversations/{conversation_id}")
 
     def _send(
-        self, method: str, path: str, *, json: Any = None, may_have_acted: bool = False
+        self,
+        method: str,
+        path: str,
+        *,
+        json: Any = None,
+        may_have_acted: bool = False,
+        extra_headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         """One request with the actor header, mapping every fault to a typed error.
 
@@ -232,7 +366,7 @@ class DelegateClient:
         :class:`DelegateOutcomeUnknown` rather than :class:`DelegateUnavailable`.
         """
         url = f"{self._base_url}{path}"
-        headers = {"X-Agent-Actor": self._actor}
+        headers = {"X-Agent-Actor": self._actor, **(extra_headers or {})}
         # Trace propagation (#62): the turn and this hop, so the app's records
         # of the request can join conductor's. The app's own request id comes
         # back on its response and is kept on the hop.
@@ -245,6 +379,10 @@ class DelegateClient:
         except httpx.HTTPError as exc:
             logger.warning("delegate_request_failed", url=url, error=str(exc))
             if may_have_acted and not isinstance(exc, _NOT_SENT_ERRORS):
+                if not isinstance(exc, httpx.TimeoutException):
+                    raise DelegateConnectionLost(
+                        f"connection to {url} dropped after the request was sent: {exc}"
+                    ) from exc
                 raise DelegateOutcomeUnknown(
                     f"request to {url} failed after it was sent: {exc}"
                 ) from exc
@@ -265,12 +403,22 @@ class DelegateClient:
             # A 503 means the app turned the request away; any other 5xx on a
             # run may follow writes the app already made (and persisted).
             if may_have_acted and status != httpx.codes.SERVICE_UNAVAILABLE:
+                failure = _failure_body(response)
+                if failure is not None and failure.record is not None:
+                    raise DelegateRunFailed(
+                        detail,
+                        status=status,
+                        stop_reason=failure.stop_reason,
+                        record=failure.record,
+                    )
                 raise DelegateOutcomeUnknown(detail)
             raise DelegateUnavailable(detail)
         if status >= 400:
             # A client error that isn't 404/429 (e.g. a 422 schema rejection).
             # The request is at fault, not the app — retrying it can't succeed.
-            raise DelegateRequestRejected(f"{method} {path} → {status}: {response.text[:300]}")
+            raise DelegateRequestRejected(
+                f"{method} {path} → {status}: {response.text[:300]}", status=status
+            )
         return response
 
     @staticmethod
@@ -281,6 +429,15 @@ class DelegateClient:
             raise DelegateProtocolError(
                 f"delegate response failed {model.__name__} validation: {exc}"
             ) from exc
+
+
+def _failure_body(response: httpx.Response) -> FailureBody | None:
+    """A 5xx's v1.1 failure body, or ``None`` when it isn't one (a v1 app, a
+    proxy's HTML page)."""
+    try:
+        return FailureBody.model_validate_json(response.text)
+    except ValidationError:
+        return None
 
 
 def _parse_retry_after(raw: str | None) -> int | None:

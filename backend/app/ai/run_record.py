@@ -4,7 +4,9 @@ STANDARD.md §3: when a run stops at a limit, or fails after calls ran, its
 reply is this record — never the model's words. Every
 :class:`~app.ai.loop.ToolCallRecord` is sorted into
 
-- **done**: a delegate or handoff call that came back with an answer;
+- **done**: a delegate or handoff call that came back with an answer, or a
+  delegate call that failed but whose app's record lists ``done`` work (#67):
+  that work happened, so it is never filed as a failure;
 - **failed**: a call the app or the tool refused or that broke partway (its
   reason attached, so a "stopped partway" from #60 is kept word for word);
 - **looked up**: a local read (``list_agents``) that came back;
@@ -71,6 +73,8 @@ def classify(record: ToolCallRecord) -> Outcome:
     """Sort one call by what its record shows happened."""
     if record.result is not None:
         return "looked_up" if record.tool in READ_TOOLS else "done"
+    if _app_done(record):
+        return "done"
     error = record.error or ""
     if error.startswith((NOT_RUN_PREFIX, INVALID_ARGUMENTS_PREFIX, UNKNOWN_TOOL_PREFIX)):
         return "not_run"
@@ -89,8 +93,11 @@ def render(records: Sequence[ToolCallRecord]) -> str:
         outcome = classify(record)
         line = f"#{ref} {record.tool} {_clip(_compact(record.arguments))}"
         if outcome in ("done", "looked_up"):
-            line += f" -> {_clip(record.result or '')}"
-            if record.app_tools:
+            line += f" -> {_clip(record.result or record.error or '')}"
+            done = _app_done(record)
+            if done:
+                line += f" [app did: {', '.join(done)}]"
+            elif record.app_tools:
                 line += f" [app ran: {', '.join(record.app_tools)}]"
         else:
             line += f" -> {_clip(record.error or '')}"
@@ -118,6 +125,15 @@ def stop_reply(stop_reason: str, records: Sequence[ToolCallRecord]) -> str | Non
         return None
     reason = STOP_REASONS.get(stop_reason, stop_reason)
     return f"I stopped before finishing: {reason}. Here is what ran.\n\n{render(records)}\n\n{LIMIT_NOTE}"
+
+
+def _app_done(record: ToolCallRecord) -> list[str]:
+    """The tools the app's own record (v1.1) says it did, in order."""
+    return [
+        str(entry.get("tool"))
+        for entry in record.app_record or []
+        if entry.get("outcome") == "done"
+    ]
 
 
 def _compact(arguments: dict[str, Any]) -> str:

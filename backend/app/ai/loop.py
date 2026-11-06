@@ -253,6 +253,11 @@ class ToolCallRecord(BaseModel):
     # reads it to know what a turn actually did, which a paraphrased reply
     # cannot be trusted to say.
     app_tools: list[str] | None = None
+    # For a delegate call to a v1.1 app, its typed record (receipts) of what it
+    # did, also when the call failed partway (#67). Same rule as `app_tools`:
+    # persisted and shown, never sent to the model. The narrator speaks from
+    # it (#65).
+    app_record: list[dict[str, Any]] | None = None
 
 
 class AgentRunResult(BaseModel):
@@ -577,6 +582,7 @@ class AgentLoop:
         # Cleared per dispatch and reset after, so what one delegate call
         # reported can never be read as the next call's.
         delegated = runtime.delegated_tools.set(None)
+        delegated_record = runtime.delegated_record.set(None)
         try:
             outcome = registry.call_tool(call.name, call.arguments, actor=actor)
         except UnknownToolError as exc:
@@ -586,15 +592,18 @@ class AgentLoop:
             record.error = f"Invalid arguments: {_validation_summary(exc)}"
             schema_error = True
         except ToolError as exc:
-            # Domain rejection with a reason the model can act on.
+            # Domain rejection with a reason the model can act on. A delegate
+            # call that failed partway still reports what the app did.
             record.error = str(exc)
+            self._take_app_report(record)
         else:
             record.result = _result_text(outcome)
-            record.app_tools = list(runtime.delegated_tools.get() or []) or None
+            self._take_app_report(record)
             logger.info("agent_tool_call", tool=call.name, ok=True)
             return record, record.result, False
         finally:
             runtime.delegated_tools.reset(delegated)
+            runtime.delegated_record.reset(delegated_record)
         logger.warning(
             "agent_tool_call",
             tool=call.name,
@@ -603,6 +612,13 @@ class AgentLoop:
             schema_error=schema_error,
         )
         return record, f"Error: {record.error}", schema_error
+
+    @staticmethod
+    def _take_app_report(record: ToolCallRecord) -> None:
+        """What the app said it did while answering this call, if anything."""
+        record.app_tools = list(runtime.delegated_tools.get() or []) or None
+        app_record = runtime.delegated_record.get()
+        record.app_record = list(app_record) if app_record is not None else None
 
     @staticmethod
     def _skip(
