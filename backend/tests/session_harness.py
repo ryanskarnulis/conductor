@@ -357,7 +357,10 @@ class LoopDriver:
     ``client`` is a started ``TestClient`` whose lifespan built the delegate
     tools over ``holder.factory``; ``reset`` is called before every turn
     (the route's rate limiter allows 10 messages a minute, and a session
-    sampled 20 times sends far more).
+    sampled 20 times sends far more). ``fresh_db`` is called at the start of
+    every sample: samples share one app and one database, and a sample's
+    "new conversation" must not find another world's conversations (#64's
+    cross-conversation recall reads them).
     """
 
     def __init__(
@@ -367,11 +370,13 @@ class LoopDriver:
         *,
         tool_names: Callable[[], set[str]],
         reset: Callable[[], None] = lambda: None,
+        fresh_db: Callable[[], None] = lambda: None,
     ) -> None:
         self._client = client
         self._holder = holder
         self._tool_names = tool_names
         self._reset = reset
+        self._fresh_db = fresh_db
         self._conversation: int | None = None
         self._seen: int = 0
         routes = {getattr(route, "path", "") for route in client.app.routes}
@@ -385,6 +390,7 @@ class LoopDriver:
         return False
 
     def begin(self, world: World) -> None:
+        self._fresh_db()
         self._holder.bind(world)
         self.new_conversation()
 
