@@ -136,6 +136,7 @@ def append_assistant_message(
         message_id=message.id,
         stop_reason=run.stop_reason,
         tool_calls=len(run.tool_calls),
+        run_id=run.run_id,
     )
     return message
 

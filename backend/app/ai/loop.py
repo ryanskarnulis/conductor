@@ -41,6 +41,7 @@ fleet; conductor has no run deadline yet, and Stop lands with #66.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -52,12 +53,14 @@ import structlog
 from pydantic import BaseModel, ValidationError
 
 from app.ai import run_record
+from app.ai import trace as run_trace
 from app.ai.provider import (
     ChatProvider,
     ChatResult,
     ProviderError,
     ToolCall,
     ToolCallArgumentsError,
+    ToolSpec,
     tool_result_message,
 )
 from app.config import get_settings
@@ -260,6 +263,9 @@ class AgentRunResult(BaseModel):
     tool_calls: list[ToolCallRecord]
     iterations: int
     messages: list[dict[str, Any]]
+    # The turn id: what the turn's log lines, trace record and captured model
+    # calls are keyed by (#62).
+    run_id: str = ""
 
 
 class AgentRunFailed(Exception):
@@ -288,6 +294,7 @@ class AgentLoop:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
         fleet_section: str | None = None,
+        tracer: run_trace.Tracer | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be >= 1")
@@ -303,6 +310,8 @@ class AgentLoop:
         # The prompt's fleet layer (built once from the discovered manifests).
         # None keeps the prompt to base → Glitch → date (Slice 2 behavior).
         self._fleet_section = fleet_section
+        # Where finished turns are recorded (#62); ``None`` keeps no record.
+        self._tracer = tracer
 
     def run(
         self,
@@ -311,6 +320,7 @@ class AgentLoop:
         history: Sequence[dict[str, Any]] | None = None,
         actor: str = LOOP_ACTOR,
         on_activity: OnActivity | None = None,
+        conversation_id: str | None = None,
     ) -> AgentRunResult:
         """Run the loop for one user message. Always returns; never spins.
 
@@ -323,12 +333,72 @@ class AgentLoop:
 
         A failure stop (``provider_error``, ``internal_error``) raises
         :class:`AgentRunFailed` with the partial run; every other stop returns.
+
+        Every turn gets a ``run_id`` (reused if the caller bound one) on its
+        log lines, its result, its trace record and its captured model calls.
+        With a tracer configured the turn is recorded however it ends; a trace
+        write that fails is logged and never costs the turn.
         """
+        bound = structlog.contextvars.get_contextvars()
         bindings: dict[str, str] = {}
-        if "request_id" not in structlog.contextvars.get_contextvars():
+        if "request_id" not in bound:
             bindings["request_id"] = uuid.uuid4().hex[:8]
-        with structlog.contextvars.bound_contextvars(**bindings):
-            return self._run(user_message, history, actor, on_activity)
+        run_id = str(bound.get("run_id") or run_trace.new_run_id())
+        bindings["run_id"] = run_id
+        trace = run_trace.RunTrace(
+            run_id=run_id,
+            actor=actor,
+            utterance=user_message,
+            conversation_id=conversation_id,
+            model=getattr(self._provider, "model", None),
+            history=[dict(message) for message in history or []],
+        )
+        started = time.monotonic()
+        with structlog.contextvars.bound_contextvars(**bindings), run_trace.tracing(trace):
+            try:
+                result = self._run(user_message, history, actor, on_activity, trace)
+            except AgentRunFailed as exc:
+                exc.result.run_id = run_id
+                self._write_trace(trace, exc.result, str(exc), started)
+                raise
+            result.run_id = run_id
+            self._write_trace(trace, result, "", started)
+            return result
+
+    def _write_trace(
+        self, trace: run_trace.RunTrace, result: AgentRunResult, error: str, started: float
+    ) -> None:
+        if self._tracer is None:
+            return
+        try:
+            total_ms = round((time.monotonic() - started) * 1000)
+            self._tracer.write(trace.record(result, error=error, total_ms=total_ms))
+        except Exception as exc:
+            logger.warning("agent_trace_failed", error=str(exc), error_type=type(exc).__name__)
+
+    def _chat(
+        self, messages: list[dict[str, Any]], specs: Sequence[Any], trace: run_trace.RunTrace
+    ) -> ChatResult:
+        """One metered provider call: its status, time and tokens go on the trace."""
+        call = run_trace.ModelCall()
+        started = time.monotonic()
+        try:
+            result = self._provider.chat(messages, tools=specs, max_tokens=self._max_tokens)
+        except ToolCallArgumentsError as exc:
+            call.status, call.failure = "bad_args", type(exc).__name__
+            raise
+        except Exception as exc:
+            call.status, call.failure = "failed", type(exc).__name__
+            raise
+        else:
+            call.status = "truncated" if result.finish_reason == _FINISH_LENGTH else "ok"
+            call.finish_reason = result.finish_reason
+            call.tool_calls = len(result.tool_calls)
+            call.meter(result.usage)
+            return result
+        finally:
+            call.ms = round((time.monotonic() - started) * 1000)
+            trace.calls.append(call)
 
     def _run(
         self,
@@ -336,13 +406,21 @@ class AgentLoop:
         history: Sequence[dict[str, Any]] | None,
         actor: str,
         on_activity: OnActivity | None,
+        trace: run_trace.RunTrace,
     ) -> AgentRunResult:
-        specs = registry.tool_specs()
+        specs = self._tool_specs()
+        system_prompt = self._system_prompt()
+        trace.system_prompt_sha256 = run_trace.sha256(system_prompt)
+        trace.tool_schemas_sha256 = run_trace.tool_schemas_sha256(specs)
+        trace.tools_offered = len(specs)
+        trace.limits = {
+            "max_iterations": self._max_iterations,
+            "max_corrections": self._max_corrections,
+            "max_tokens": self._max_tokens,
+            "max_tool_calls": self._max_tool_calls,
+        }
         messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": build_system_prompt(date.today(), fleet_section=self._fleet_section),
-            },
+            {"role": "system", "content": system_prompt},
             *(history or []),
             {"role": "user", "content": user_message},
         ]
@@ -357,12 +435,13 @@ class AgentLoop:
             iterations = iteration
             self._emit(on_activity, LoopActivity(kind="model", iteration=iteration))
             try:
-                result = self._provider.chat(messages, tools=specs, max_tokens=self._max_tokens)
+                result = self._chat(messages, specs, trace)
             except ToolCallArgumentsError as exc:
                 # The turn is unusable — its tool calls can't round-trip into
                 # history — so the correction goes back as a user-role message
                 # instead of a tool result.
                 corrections += 1
+                trace.corrections = corrections
                 logger.warning(
                     "agent_unparseable_tool_call",
                     tool=exc.tool_name,
@@ -467,6 +546,7 @@ class AgentLoop:
                 return self._stop("tool_call_limit", records, iteration, messages)
             if schema_error_this_turn:
                 corrections += 1
+                trace.corrections = corrections
                 if corrections > self._max_corrections:
                     return self._stop("correction_limit", records, iteration, messages)
                 # A malformed call is what the correction budget is for, so a
@@ -475,6 +555,14 @@ class AgentLoop:
                 logger.warning("agent_run_no_progress", tool_calls=len(result.tool_calls))
                 return self._stop("no_progress", records, iteration, messages)
         return self._stop("max_iterations", records, iterations, messages)
+
+    def _tool_specs(self) -> list[ToolSpec]:
+        """The tools offered this turn. A seam for :mod:`app.ai.replay`."""
+        return registry.tool_specs()
+
+    def _system_prompt(self) -> str:
+        """This turn's system prompt. A seam for :mod:`app.ai.replay`."""
+        return build_system_prompt(date.today(), fleet_section=self._fleet_section)
 
     def _dispatch(self, call: ToolCall, actor: str) -> tuple[ToolCallRecord, str, bool]:
         """Run one tool call as ``actor``.
@@ -603,6 +691,7 @@ def loop_from_settings(provider: ChatProvider, *, fleet_section: str | None = No
         max_tokens=settings.conductor_max_tokens,
         max_tool_calls=settings.conductor_max_tool_calls,
         fleet_section=fleet_section,
+        tracer=run_trace.tracer_from_settings(),
     )
 
 

@@ -47,6 +47,7 @@ from typing import Any, Protocol
 import structlog
 
 from app.fleet.context import current_delegation_context
+from app.ai import trace as run_trace
 from app.fleet.delegate import (
     CONDUCTOR_ACTOR,
     DelegateClient,
@@ -212,46 +213,57 @@ def _delegate(app: FleetApp, client_factory: ClientFactory, message: str) -> str
     # Charge the budget before any network work; over-budget never leaves here.
     context.charge_call(app.name)
 
-    started = time.monotonic()
-    subagent_id: int | None = None
-    try:
-        with client_factory(app) as client:
-            subagent_id = context.thread_for(app.name)
-            if subagent_id is None:
-                subagent_id = client.create_conversation()
-                context.remember_thread(app.name, subagent_id)
-            try:
-                exchange = client.send_message(subagent_id, message)
-            except DelegateThreadGone:
-                # Contract rule: a pruned thread → recreate once and retry
-                # exactly once. A second 404 propagates and fails the call.
-                context.forget_thread(app.name)
-                subagent_id = client.create_conversation()
-                context.remember_thread(app.name, subagent_id)
-                exchange = client.send_message(subagent_id, message)
-    except DelegateError as exc:
+    # One hop per delegate call (#62): its ids ride every request to the app,
+    # and what came back lands on the turn's trace.
+    with run_trace.hop(app.name) as hop:
+        started = time.monotonic()
+        subagent_id: int | None = None
+        try:
+            with client_factory(app) as client:
+                subagent_id = context.thread_for(app.name)
+                if subagent_id is None:
+                    subagent_id = client.create_conversation()
+                    context.remember_thread(app.name, subagent_id)
+                try:
+                    exchange = client.send_message(subagent_id, message)
+                except DelegateThreadGone:
+                    # Contract rule: a pruned thread → recreate once and retry
+                    # exactly once. A second 404 propagates and fails the call.
+                    context.forget_thread(app.name)
+                    subagent_id = client.create_conversation()
+                    context.remember_thread(app.name, subagent_id)
+                    exchange = client.send_message(subagent_id, message)
+        except DelegateError as exc:
+            latency_ms = _elapsed_ms(started)
+            context.audit_delegate_call(
+                app=app.name,
+                subagent_conversation_id=subagent_id,
+                latency_ms=latency_ms,
+                error=type(exc).__name__,
+                hop_id=hop.hop_id,
+                app_request_id=hop.app_request_id,
+            )
+            hop.thread_id, hop.ms, hop.error = subagent_id, latency_ms, type(exc).__name__
+            raise _to_tool_error(app, exc) from exc
+
+        assistant = exchange.assistant_message
         latency_ms = _elapsed_ms(started)
         context.audit_delegate_call(
             app=app.name,
             subagent_conversation_id=subagent_id,
             latency_ms=latency_ms,
-            error=type(exc).__name__,
+            stop_reason=assistant.stop_reason,
+            hop_id=hop.hop_id,
+            app_request_id=hop.app_request_id,
         )
-        raise _to_tool_error(app, exc) from exc
-
-    assistant = exchange.assistant_message
-    context.audit_delegate_call(
-        app=app.name,
-        subagent_conversation_id=subagent_id,
-        latency_ms=_elapsed_ms(started),
-        stop_reason=assistant.stop_reason,
-    )
-    # Which of the app's own tools ran, recorded structurally as well as in the
-    # `[app did: …]` note. The note is prose for the model; this is for the UI,
-    # which has to know what a turn actually did rather than infer it from a
-    # 12B's paraphrase of it.
-    runtime.delegated_tools.set(tuple(call.tool for call in assistant.tool_calls or []))
-    return _format_reply(app, assistant)
+        hop.thread_id, hop.ms, hop.app_stop_reason = subagent_id, latency_ms, assistant.stop_reason
+        hop.app_tools = [call.tool for call in assistant.tool_calls or []]
+        # Which of the app's own tools ran, recorded structurally as well as in the
+        # `[app did: …]` note. The note is prose for the model; this is for the UI,
+        # which has to know what a turn actually did rather than infer it from a
+        # 12B's paraphrase of it.
+        runtime.delegated_tools.set(tuple(call.tool for call in assistant.tool_calls or []))
+        return _format_reply(app, assistant)
 
 
 def _to_tool_error(app: FleetApp, exc: DelegateError) -> ToolError:

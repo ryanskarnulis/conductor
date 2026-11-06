@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     # call (model-profile's turn cap), and the per-run tool-call cap.
     conductor_max_tokens: int = 2048
     conductor_max_tool_calls: int = 12
+    # Diagnostics (#62), both off by default. One JSONL record per turn
+    # (app/ai/trace.py), and the exact bytes of every model call
+    # (app/ai/context_capture.py; heavy, a debugging switch).
+    conductor_trace_path: Path | None = None
+    conductor_context_path: Path | None = None
 
     # --- voice (shared workspace speech service) -----------------------------
     # ../speech/: Speaches STT on 8400, Kokoro-FastAPI TTS on 8410. Env var

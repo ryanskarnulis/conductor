@@ -130,8 +130,14 @@ class DelegationContext:
         latency_ms: int,
         stop_reason: str | None = None,
         error: str | None = None,
+        hop_id: str | None = None,
+        app_request_id: str | None = None,
     ) -> None:
-        """Emit the one audit event required for every delegate call."""
+        """Emit the one audit event required for every delegate call.
+
+        ``hop_id`` and ``app_request_id`` (#62) join the line to the turn's
+        trace record and to the app's own logs for the request.
+        """
         logger.info(
             "delegate_call",
             app=app,
@@ -141,6 +147,8 @@ class DelegationContext:
             latency_ms=latency_ms,
             stop_reason=stop_reason,
             error=error,
+            hop_id=hop_id,
+            app_request_id=app_request_id,
         )
 
 

@@ -41,6 +41,8 @@ import httpx
 import structlog
 from pydantic import BaseModel, ValidationError
 
+from app.ai import trace as run_trace
+
 logger = structlog.get_logger(__name__)
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
@@ -61,6 +63,13 @@ _NOT_SENT_ERRORS: tuple[type[httpx.HTTPError], ...] = (
 # identity conductor may stamp. It is constant regardless of who drives
 # conductor (its own loop, or the MCP host).
 CONDUCTOR_ACTOR = "agent:conductor"
+
+# Trace headers (#62). Conductor sends the turn and hop ids on every request of
+# a delegate call; apps answer with their own request id (PCC's and music's
+# RequestIDMiddleware), which the hop records.
+TURN_HEADER = "X-Agent-Turn"
+HOP_HEADER = "X-Agent-Hop"
+APP_REQUEST_ID_HEADER = "X-Request-ID"
 
 _DEFAULT_READ_TIMEOUT = 300.0
 _DEFAULT_CONNECT_TIMEOUT = 5.0
@@ -224,6 +233,13 @@ class DelegateClient:
         """
         url = f"{self._base_url}{path}"
         headers = {"X-Agent-Actor": self._actor}
+        # Trace propagation (#62): the turn and this hop, so the app's records
+        # of the request can join conductor's. The app's own request id comes
+        # back on its response and is kept on the hop.
+        hop = run_trace.current_hop()
+        if hop is not None:
+            headers[TURN_HEADER] = hop.run_id
+            headers[HOP_HEADER] = hop.hop_id
         try:
             response = self._client.request(method, url, json=json, headers=headers)
         except httpx.HTTPError as exc:
@@ -234,6 +250,8 @@ class DelegateClient:
                 ) from exc
             raise DelegateUnavailable(f"request to {url} failed: {exc}") from exc
 
+        if hop is not None:
+            hop.app_request_id = response.headers.get(APP_REQUEST_ID_HEADER) or hop.app_request_id
         status = response.status_code
         if status == httpx.codes.NOT_FOUND:
             raise DelegateThreadGone(f"{method} {path} → 404 (thread gone)")
