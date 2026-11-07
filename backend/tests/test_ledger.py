@@ -412,7 +412,9 @@ def test_the_migrations_build_the_models_schema_and_go_back_down(
     monkeypatch.setenv("DATABASE_URL", url)
     get_settings.cache_clear()
     try:
-        config = Config(str(BACKEND / "alembic.ini"))
+        # No ini file: its logging section would disable the app's loggers for
+        # every test after this one (``env.py`` only calls ``fileConfig`` with one).
+        config = Config()
         config.set_main_option("script_location", str(BACKEND / "app" / "alembic"))
         command.upgrade(config, "head")
         engine = create_engine(url)
