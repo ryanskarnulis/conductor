@@ -17,16 +17,17 @@ Code owns what happens next. :func:`problems` is the validator: refs, order,
 targets, policy and budgets; a plan with problems gets one repair, then the
 turn falls back to the loop. :func:`fallback_reason` says whether the
 interpreter can run a valid plan yet: it runs ``ask``/``open``/``ask_user``/
-``confirm`` plans across apps, with ``{sN}`` data flow between them (#72), and
-the direct answers; every other kind (``look``, ``recall``, ``cancel``,
-``amend``, ``undo``, ``think``) falls back to the loop until its issue lands
-(#73, #74, #78, #80). :func:`reads_only` says which asks may run in parallel.
-Pure: no I/O.
+``confirm`` plans across apps, with ``{sN}`` data flow between them (#72), the
+control steps ``cancel``/``amend``/``undo`` on their own (#74, except on a
+running job, #76), and the direct answers; every other kind (``look``,
+``recall``, ``think``) falls back to the loop until its issue lands (#73, #78,
+#80). :func:`reads_only` says which asks may run in parallel. Pure: no I/O.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
@@ -45,6 +46,9 @@ StepKind = Literal[
 
 # What the interpreter runs; the rest fall back to the loop.
 RUNNABLE_KINDS: frozenset[str] = frozenset({"ask", "open", "ask_user", "confirm"})
+# Control steps (#74): they act on what's waiting or on what just ran, so each
+# runs as a plan of its own (:mod:`app.ai.control`).
+CONTROL_KINDS: frozenset[str] = frozenset({"cancel", "amend", "undo"})
 
 # ``{sN}`` (or ``{sN.field}``): what step N touched, filled in by code (#72).
 REF = re.compile(r"\{(s(?:[1-9]|1[0-2]))(?:\.[a-z_]+)?\}")
@@ -403,7 +407,13 @@ def _lost_refs(steps: list[Step]) -> list[str]:
     return found
 
 
-def fallback_reason(plan: Plan, *, confirm_app: str | None = None) -> str | None:
+def fallback_reason(
+    plan: Plan,
+    *,
+    confirm_app: str | None = None,
+    pending: bool = False,
+    running_jobs: Collection[str] = (),
+) -> str | None:
     """Why the interpreter can't run this valid plan yet, or ``None`` if it can.
 
     Cross-app plans run (#72): writes in order, one at a time. ``{sN}`` runs
@@ -411,9 +421,23 @@ def fallback_reason(plan: Plan, *, confirm_app: str | None = None) -> str | None
     ``ask_user`` (the person's answer). ``confirm_app`` is the app a
     ``confirm`` step answers, when it's an app's question; kept for the
     callers, it no longer changes the answer.
+
+    A control step (#74) runs when it is the whole plan. ``cancel`` and
+    ``amend`` act on what's ``pending`` (a paused plan or an app's question);
+    one aimed at a running job (``running_jobs``, ``app:ref``), or said with
+    nothing pending while a job runs, is the jobs runtime's (#76): until it
+    lands, the loop takes it (``job:cancel``, ``job:amend``).
     """
     del confirm_app
     if not isinstance(plan, StepPlan):
+        return None
+    control = next((step for step in plan.steps if step.do in CONTROL_KINDS), None)
+    if control is not None:
+        if len(plan.steps) > 1:
+            return f"kind:{control.do}"
+        if isinstance(control, Cancel | Amend) and running_jobs:
+            if not pending or names_job(control.target, running_jobs):
+                return f"job:{control.do}"
         return None
     namers: set[str] = set()
     for step in plan.steps:
@@ -424,6 +448,24 @@ def fallback_reason(plan: Plan, *, confirm_app: str | None = None) -> str | None
         if isinstance(step, Ask | AskUser):
             namers.add(step.id)
     return None
+
+
+def has_control(plan: Plan) -> bool:
+    """Whether a plan has a control step (``cancel``, ``amend``, ``undo``)."""
+    return isinstance(plan, StepPlan) and any(step.do in CONTROL_KINDS for step in plan.steps)
+
+
+_JOB_WORD = re.compile(r"\bjobs?\b", re.IGNORECASE)
+
+
+def names_job(target: str, running_jobs: Collection[str]) -> bool:
+    """Whether a control step's target points at a job: it says "job", or
+    names a running one's ref (``music:31``, ``music:job:31`` and ``31`` all
+    name ``music:31``)."""
+    if _JOB_WORD.search(target):
+        return True
+    words = set(re.findall(r"[\w-]+", target.lower()))
+    return any(job.rsplit(":", 1)[-1].lower() in words for job in running_jobs)
 
 
 # What a request that only reads looks like: a question, with no word that
@@ -490,6 +532,10 @@ class TurnPlan(BaseModel):
     pause_app: str | None = None
     ack: str | None = None
     repaired: bool = False
+    # A control step that ended the waiting plan (#74): its ledger id, and
+    # whether it was ``cancelled`` or ``amended`` (the amended words run on).
+    ends: int | None = None
+    ends_as: Literal["cancelled", "amended"] | None = None
 
 
 @dataclass(frozen=True)
@@ -500,6 +546,57 @@ class PausedPlan:
     reason: PauseReason
     resume_at: int
     app: str | None = None
+    # Its ledger row, for a control step that ends it (#74).
+    plan_id: int | None = None
+
+
+@dataclass(frozen=True)
+class Touched:
+    """One thing a receipt touched, as the ledger kept it."""
+
+    kind: str
+    ref: str
+    title: str | None = None
+    untrusted: bool = False
+
+
+@dataclass(frozen=True)
+class UndoReceipt:
+    """A write receipt an ``undo`` can act on (#74), from the ledger.
+
+    ``outcome`` is ``done`` (the app's) or ``unknown`` (conductor's, when an
+    app ran and said nothing it could read). ``handle``/``how`` are the app's
+    undo, ``none`` why there is none; ``undone`` means a later step already
+    undid it.
+    """
+
+    id: int
+    plan_id: int
+    app: str
+    tool: str | None
+    outcome: str
+    touched: tuple[Touched, ...] = ()
+    count: int | None = None
+    handle: str | None = None
+    how: str | None = None
+    none: str | None = None
+    undone: bool = False
+
+
+@dataclass(frozen=True)
+class Ledgered:
+    """What the ledger says a control step acts on (#74).
+
+    ``last_plan`` is the newest plan that ran steps, leaving out control
+    plans and steps that undid something; ``receipts`` are the write
+    receipts of the last few such plans, newest plan first, so a target that
+    names something older can still find it. ``jobs`` are running jobs as
+    ``app:ref``.
+    """
+
+    last_plan: int | None = None
+    receipts: tuple[UndoReceipt, ...] = ()
+    jobs: tuple[str, ...] = ()
 
 
 # --- the honest ack --------------------------------------------------------------------------

@@ -209,7 +209,7 @@ class LedgerStep(Base, TimestampMixin):
 
     plan: Mapped[LedgerPlan] = relationship(back_populates="steps")
     receipts: Mapped[list[LedgerReceipt]] = relationship(
-        back_populates="step", order_by="LedgerReceipt.seq"
+        back_populates="step", order_by="LedgerReceipt.seq", foreign_keys="LedgerReceipt.step_id"
     )
 
 
@@ -221,7 +221,8 @@ class LedgerReceipt(Base, TimestampMixin):
     ``source`` is ``app`` or ``conductor``. ``outcome`` is the app's
     (``done``/``refused``/``looked_up``/``not_run``) or ``unknown``, which
     counts as a possible write: the person can check and undo it, never
-    "nothing changed". The undo handle is opaque and only its app reads it.
+    "nothing changed". The undo handle is opaque and only its app reads it;
+    ``undone_by_step_id`` is the step that redeemed it (#74).
     """
 
     __tablename__ = "ledger_receipts"
@@ -240,9 +241,13 @@ class LedgerReceipt(Base, TimestampMixin):
     undo_handle: Mapped[str | None] = mapped_column(default=None)
     undo_how: Mapped[str | None] = mapped_column(default=None)
     undo_none: Mapped[str | None] = mapped_column(default=None)
+    # The step that undid it (#74): no receipt is undone twice.
+    undone_by_step_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ledger_steps.id"), default=None
+    )
     job_id: Mapped[int | None] = mapped_column(ForeignKey("ledger_jobs.id"), default=None)
 
-    step: Mapped[LedgerStep] = relationship(back_populates="receipts")
+    step: Mapped[LedgerStep] = relationship(back_populates="receipts", foreign_keys=[step_id])
     touched: Mapped[list[LedgerTouch]] = relationship(
         back_populates="receipt", order_by="LedgerTouch.id"
     )

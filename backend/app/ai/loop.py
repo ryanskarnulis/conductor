@@ -65,8 +65,8 @@ from typing import Any, Literal
 import structlog
 from pydantic import BaseModel, ValidationError
 
-from app.ai import narrator, run_record
-from app.ai.plan import PausedPlan, TurnPlan
+from app.ai import confirmation, narrator, run_record
+from app.ai.plan import Ledgered, PausedPlan, TurnPlan
 from app.ai.stop import STOPPED_ERROR, Stop, use_stop
 from app.ai import trace as run_trace
 from app.ai.provider import (
@@ -79,6 +79,7 @@ from app.ai.provider import (
     tool_result_message,
 )
 from app.config import get_settings
+from app.fleet.context import NoDelegationContextError, current_delegation_context
 from app.fleet.manifests import Fleet
 from app.tools import registry, runtime
 from app.tools.registry import ToolError, UnknownToolError
@@ -273,6 +274,10 @@ class ToolCallRecord(BaseModel):
     # token, thread and question kept for the person's yes
     # (``app.ai.confirmation.AppConfirm``). Persisted, never sent to the model.
     app_confirm: dict[str, Any] | None = None
+    # For a call that carries an undo (#74, ``app.ai.control``): the ledger
+    # receipts it undoes, marked undone once the app says it did. Persisted,
+    # never sent to the model.
+    undoes: list[int] | None = None
 
 
 class AgentRunResult(BaseModel):
@@ -358,6 +363,7 @@ class AgentLoop:
         stop: Stop | None = None,
         paused: PausedPlan | None = None,
         self_facts: Callable[[], str] | None = None,
+        control_view: Callable[[], Ledgered] | None = None,
     ) -> AgentRunResult:
         """Run the loop for one user message. Always returns; never spins.
 
@@ -387,7 +393,8 @@ class AgentLoop:
         Built with a fleet (#70), the turn is compiled first
         (:mod:`app.ai.interpreter`): ``paused`` is last turn's plan waiting on
         the person, ``self_facts`` what code knows about its own recent work
-        (for "what did you just do?"). A plan the interpreter can't run yet
+        (for "what did you just do?"), ``control_view`` what the ledger says a
+        control step acts on (#74). A plan the interpreter can't run yet
         falls back to the loop, and the result carries the plan either way.
         """
         bound = structlog.contextvars.get_contextvars()
@@ -424,6 +431,7 @@ class AgentLoop:
                         stop=stop,
                         paused=paused,
                         self_facts=self_facts,
+                        control_view=control_view,
                     )
                     trace.plan = turn_plan.model_dump()
                 if result is None:
@@ -718,6 +726,8 @@ class AgentLoop:
         only self-corrects what the model can fix.
         """
         record = ToolCallRecord(tool=call.name, arguments=call.arguments)
+        # A yes to an app's question about an undo carries what it undoes (#74).
+        record.undoes = _answered_undo(call)
         schema_error = False
         # Cleared per dispatch and reset after, so what one delegate call
         # reported can never be read as the next call's.
@@ -861,6 +871,22 @@ def loop_from_settings(
 
 def _stopped(stop: Stop | None) -> bool:
     return stop is not None and stop.is_set()
+
+
+def _answered_undo(call: ToolCall) -> list[int] | None:
+    """The ledger receipts a ``confirm`` call undoes (#74): those the app's
+    waiting question was about, when it came from an undo. Read before the
+    call takes the question."""
+    if call.name != confirmation.CONFIRM_TOOL:
+        return None
+    try:
+        pending = current_delegation_context().pending_confirm
+    except NoDelegationContextError:
+        return None
+    app = str(call.arguments.get("app") or "").strip().lower()
+    if pending is None or not pending.undoes or pending.app != app:
+        return None
+    return list(pending.undoes)
 
 
 def _validation_summary(exc: ValidationError) -> str:

@@ -17,6 +17,8 @@ same as the loop's. What it runs, across apps (#72):
   filled in by code when the step runs (:mod:`app.ai.dataflow`, which holds
   the rules for no title, several titles and outside text).
 - ``confirm``: yes or no to whatever is waiting.
+- ``cancel``/``amend``/``undo``: on what's waiting or what just ran, over the
+  ledger (:mod:`app.ai.control`, #74), each as a plan of its own.
 - The direct answers (:mod:`app.ai.speaker`), ``self`` from the ledger.
 
 Independent reads (:func:`plans.reads_only`: asks to different apps, phrased
@@ -47,11 +49,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
-from app.ai import compiler, dataflow, narrator, run_record, speaker
+from app.ai import compiler, control, dataflow, narrator, run_record, speaker
 from app.ai import plan as plans
 from app.ai import trace as run_trace
 from app.ai.provider import ChatResult, ProviderError, ToolCall
-from app.ai.plan import PausedPlan, TurnPlan
+from app.ai.plan import Ledgered, PausedPlan, TurnPlan
 from app.ai.stop import STOPPED_ERROR, Stop
 from app.fleet.context import current_delegation_context
 from app.fleet.manifests import Fleet
@@ -78,6 +80,8 @@ class _Run:
     stop: Stop | None
     records: list[ToolCallRecord] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
+    # What the ledger says control steps act on (#74), read only if needed.
+    view: control.View = field(default_factory=lambda: control.View(None))
 
 
 class Interpreter:
@@ -103,10 +107,11 @@ class Interpreter:
         stop: Stop | None,
         paused: PausedPlan | None,
         self_facts: Callable[[], str] | None,
+        control_view: Callable[[], Ledgered] | None = None,
     ) -> tuple[AgentRunResult | None, TurnPlan]:
         """The turn's result, or ``None`` when the loop should take it; and the plan."""
         loop = self._loop
-        state = _Run(words, actor, trace, on_activity, stop)
+        state = _Run(words, actor, trace, on_activity, stop, view=control.View(control_view))
         if _stopped(stop):
             return loop._stop("cancelled", [], 0, []), TurnPlan(status="ran", note="stopped")
         pending = current_delegation_context().pending_confirm
@@ -149,7 +154,12 @@ class Interpreter:
             )
         body = plans.dump(plan)
         confirm_app = (gate.app if gate else None) or (pending.app if pending else None)
-        reason = plans.fallback_reason(plan, confirm_app=confirm_app)
+        reason = plans.fallback_reason(
+            plan,
+            confirm_app=confirm_app,
+            pending=paused is not None or pending is not None,
+            running_jobs=state.view.jobs(plan),
+        )
         logger.info(
             "plan_compiled",
             plan=plans.describe(plan),
@@ -179,7 +189,20 @@ class Interpreter:
         assert isinstance(plan, plans.StepPlan)
         first = plan.steps[0]
         if isinstance(first, plans.Confirm):
-            result = self._confirm(state, turn, plan, first, gate=gate, pending_app=confirm_app)
+            result = self._confirm(
+                state,
+                turn,
+                plan,
+                first,
+                gate=gate,
+                pending_app=confirm_app,
+                undoing=control.undo_waiting(paused, pending),
+            )
+            return result, turn
+        if first.do in plans.CONTROL_KINDS:
+            result = control.run(
+                self, state, turn, first, state.view, paused=paused, pending=pending
+            )
             return result, turn
         return self._execute(state, turn, plan.steps, 0, {}), turn
 
@@ -227,6 +250,7 @@ class Interpreter:
         *,
         gate: PausedPlan | None,
         pending_app: str | None,
+        undoing: tuple[plans.Undo, int, tuple[int, ...]] | None = None,
     ) -> AgentRunResult:
         rest = plan.steps[1:]
         if gate is not None:
@@ -238,6 +262,11 @@ class Interpreter:
             paused = plans.load(gate.body)
             assert isinstance(paused, plans.StepPlan)
             steps = paused.steps[gate.resume_at :]
+            if steps and isinstance(steps[0], plans.Undo):
+                undo, at = steps[0], gate.resume_at
+                return control.undo(
+                    self, state, turn, undo, state.view, position=at, gate_app=gate.app
+                )
             return self._execute(
                 state, turn, steps, gate.resume_at, {}, gate_passed=steps[0].id if steps else None
             )
@@ -246,6 +275,13 @@ class Interpreter:
             turn.note = "declined the app's question"
             return self._loop._finish("completed", _LEFT_IT, [], 1, state.messages)
         record = self._dispatch(state, _CONFIRM_TOOL, {"app": pending_app or ""})
+        if undoing is not None and record is not None and self._went_well(record):
+            # The yes was to an undo's question: the rest of that undo goes on.
+            undo_step, position, handled = undoing
+            turn.body = {"steps": [undo_step.model_dump()]}
+            return control.undo(
+                self, state, turn, undo_step, state.view, position=position, handled=handled
+            )
         if record is None or not self._went_well(record):
             return self._finish(state, turn, rest, 1)
         return self._execute(state, turn, rest, 1, {})

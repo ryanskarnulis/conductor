@@ -15,7 +15,8 @@ placeholder-looking ones ~40% of the time. Descriptive rules don't bind the
 - every title a ``done`` or ``looked_up`` entry touched is in the reply; if
   not, the narrator re-speaks once with the missing names, then code appends
   what is still missing;
-- counts and undo offers the narrator dropped are appended from the receipts;
+- counts and undo offers the narrator dropped are appended from the receipts
+  (never for a call that was itself an undo, #74);
 - untrusted titles (outside text: web titles, file tags) are quoted, sanitised
   and marked as names in the receipt, never instructions;
 - a compiled plan's steps that never ran (an earlier step failed, or the data
@@ -322,6 +323,8 @@ def receipt_steps(records: Sequence[ToolCallRecord]) -> list[dict[str, Any]]:
             step["app"] = app
         if record.tool == confirmation.CONFIRM_TOOL:
             step["asked"] = "the person's yes to the app's question"
+        if record.undoes:
+            step["undoing"] = "what the person asked to undo"
         if record.app_confirm:
             step["result"] = "asked_a_question_since_replaced"
         elif record.error is not None:
@@ -330,7 +333,7 @@ def receipt_steps(records: Sequence[ToolCallRecord]) -> list[dict[str, Any]]:
         else:
             step["result"] = "answered"
         if record.app_record is not None:
-            step["did"] = [_entry(entry) for entry in record.app_record]
+            step["did"] = [_entry(entry, offer=not record.undoes) for entry in record.app_record]
         else:
             step["did"] = "unknown: the app sent no record of what it did"
         if record.result:
@@ -381,7 +384,7 @@ def _unrun_ask(record: ToolCallRecord) -> str:
     return run_record.clip(" ".join(text.split()))
 
 
-def _entry(entry: dict[str, Any]) -> dict[str, Any]:
+def _entry(entry: dict[str, Any], *, offer: bool = True) -> dict[str, Any]:
     view: dict[str, Any] = {
         "action": _verb(str(entry.get("tool") or "")),
         "outcome": entry.get("outcome"),
@@ -407,7 +410,9 @@ def _entry(entry: dict[str, Any]) -> dict[str, Any]:
     if entry.get("reason"):
         view["reason"] = entry["reason"]
     undo = entry.get("undo") or {}
-    if undo.get("how") or undo.get("handle"):
+    if not offer:
+        pass  # an undo's own inverse is never offered back (#74)
+    elif undo.get("how") or undo.get("handle"):
         view["undo"] = f"offered: {undo.get('how') or 'undo it'}"
     elif undo.get("none"):
         view["undo"] = f"not possible: {undo['none']}"
@@ -475,6 +480,8 @@ def _facts(records: Sequence[ToolCallRecord]) -> list[_Fact]:
                 noun = kind.replace("_", " ") + ("" if total == 1 else "s")
                 facts.append(_Fact("count", str(total), f"{verb} {total} {noun}"))
             offer = entry.get("undo") or {}
+            if record.undoes:
+                offer = {}  # an undo's own inverse is never offered back (#74)
             if outcome == "done" and undo is None and (offer.get("how") or offer.get("handle")):
                 undo = offer.get("how") or "undo it"
     if undo is not None:
