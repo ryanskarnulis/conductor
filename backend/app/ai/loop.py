@@ -65,7 +65,7 @@ from typing import Any, Literal
 import structlog
 from pydantic import BaseModel, ValidationError
 
-from app.ai import narrator, run_record
+from app.ai import narrator, run_record, turn_events
 from app.ai.plan import PausedPlan, TurnPlan
 from app.ai.stop import STOPPED_ERROR, Stop, use_stop
 from app.ai import trace as run_trace
@@ -619,6 +619,7 @@ class AgentLoop:
                 self._emit(
                     on_activity, LoopActivity(kind="tool", iteration=iteration, tool=call.name)
                 )
+                turn_events.step_started(len(records) + 1, call.name, call.arguments)
                 try:
                     record, feedback, schema_error = self._dispatch(call, actor)
                 except Exception as exc:
@@ -643,6 +644,7 @@ class AgentLoop:
                         messages,
                     ) from exc
                 records.append(record)
+                turn_events.receipt(len(records), record)
                 messages.append(tool_result_message(call.id, feedback))
                 schema_error_this_turn = schema_error_this_turn or schema_error
                 # Judged on what came back, not the call alone: a repeat that
@@ -776,6 +778,7 @@ class AgentLoop:
         in the transcript has exactly one answer."""
         for call in calls:
             records.append(ToolCallRecord(tool=call.name, arguments=call.arguments, error=error))
+            turn_events.receipt(len(records), records[-1])
             messages.append(tool_result_message(call.id, f"Error: {error}"))
         if calls:
             logger.warning("agent_tool_calls_skipped", count=len(calls), error=error)

@@ -53,7 +53,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
-from app.ai import compiler, dataflow, narrator, run_record, speaker
+from app.ai import compiler, dataflow, narrator, run_record, speaker, turn_events
 from app.ai import glance as glances
 from app.ai import plan as plans
 from app.ai import trace as run_trace
@@ -263,6 +263,7 @@ class Interpreter:
             # The app's question lapses on its own; nothing is sent.
             turn.note = "declined the app's question"
             return self._loop._finish("completed", _LEFT_IT, [], 1, state.messages)
+        turn_events.plan(turn.body, 0)
         record = self._dispatch(state, _CONFIRM_TOOL, {"app": pending_app or ""})
         if record is None or not self._went_well(record):
             return self._finish(state, turn, rest, 1)
@@ -282,6 +283,7 @@ class Interpreter:
     ) -> AgentRunResult:
         """Run ``steps``; ``offset`` is the first one's index in the plan."""
         loop = self._loop
+        turn_events.plan(turn.body, offset)
         index = 0
         while index < len(steps):
             step = steps[index]
@@ -377,6 +379,9 @@ class Interpreter:
         """An app asked the person to confirm: the plan waits on their answer
         if anything is left to run after it."""
         plan_length = len((turn.body or {}).get("steps") or [])
+        asked = next((r.app_confirm for r in reversed(state.records) if r.app_confirm), None)
+        question = asked.get("question") if asked else None
+        turn_events.paused("app_confirm", question=question, app=step.app, step=step.id)
         if resume_at < plan_length:
             turn.status, turn.pause = "paused", "app_confirm"
             turn.resume_at, turn.pause_app = resume_at, step.app
@@ -410,6 +415,7 @@ class Interpreter:
                 tool=tool, arguments=arguments, error=run_record.NOT_RUN_PREFIX + refusal
             )
         )
+        turn_events.receipt(len(state.records), state.records[-1])
         turn.note = f"{step.id} not run: {refusal}"[:500]
         logger.info("plan_step_refused", step=step.id, reason=refusal)
         return self._finish(state, turn, steps[index + 1 :], 1)
@@ -430,6 +436,7 @@ class Interpreter:
         """One step through the loop's dispatch; a crash fails the turn like the loop's."""
         loop = self._loop
         loop._emit(state.on_activity, _activity("tool", tool=tool))
+        turn_events.step_started(len(state.records) + 1, tool, arguments)
         call = ToolCall(id=f"plan-{len(state.records) + 1}", name=tool, arguments=arguments)
         try:
             record, _feedback, _schema = self._call(call, state.actor)
@@ -444,6 +451,7 @@ class Interpreter:
                 "internal_error", f"agent run crashed in {tool}: {exc}", state.records, 1, []
             ) from exc
         state.records.append(record)
+        turn_events.receipt(len(state.records), record)
         return record
 
     def _dispatch_all(
@@ -461,8 +469,9 @@ class Interpreter:
             ToolCall(id=f"plan-{first + n + 1}", name=tool, arguments=arguments)
             for n, (tool, arguments) in enumerate(calls)
         ]
-        for call in tool_calls:
+        for n, call in enumerate(tool_calls):
             loop._emit(state.on_activity, _activity("tool", tool=call.name))
+            turn_events.step_started(first + n + 1, call.name, call.arguments)
         logger.info("plan_reads_parallel", tools=[call.name for call in tool_calls])
         with ThreadPoolExecutor(max_workers=len(tool_calls), thread_name_prefix="plan") as pool:
             futures = [
@@ -471,7 +480,7 @@ class Interpreter:
             ]
         records: list[ToolCallRecord] = []
         crash: tuple[str, Exception] | None = None
-        for call, future in zip(tool_calls, futures, strict=True):
+        for n, (call, future) in enumerate(zip(tool_calls, futures, strict=True)):
             try:
                 record, _feedback, _schema = future.result()
             except Exception as error:
@@ -484,6 +493,7 @@ class Interpreter:
                 # Taken for a read, it wrote: harmless once, worth knowing.
                 logger.warning("plan_read_wrote", tool=call.name)
             records.append(record)
+            turn_events.receipt(first + n + 1, record)
         state.records.extend(records)
         if crash is not None:
             tool, cause = crash
@@ -566,6 +576,7 @@ class Interpreter:
         for step in steps:
             tool, arguments = _call_for(step)
             state.records.append(ToolCallRecord(tool=tool, arguments=arguments, error=error))
+            turn_events.receipt(len(state.records), state.records[-1])
 
     # --- questions -------------------------------------------------------------------------
 
@@ -574,11 +585,13 @@ class Interpreter:
         options = [option.strip() for option in step.options if option.strip()]
         if options:
             question = f"{question} ({' / '.join(options)})"
+        turn_events.paused("ask_user", question=question, step=step.id)
         reply = self._with_record_line(state, question)
         return self._loop._finish("completed", reply, state.records, 1, state.messages)
 
     def _gate(self, state: _Run, step: plans.Ask, request: str) -> AgentRunResult:
         question = f'Just to check: should I ask {step.app} to "{request}"?'
+        turn_events.paused("gate", question=question, app=step.app, step=step.id)
         reply = self._with_record_line(state, question)
         return self._loop._finish("completed", reply, state.records, 1, state.messages)
 

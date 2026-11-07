@@ -88,7 +88,7 @@ export interface MessageExchange {
 }
 
 /** What the in-flight turn is doing right now (GET …/activity — the poll
- * target while a send blocks; v1 has no SSE). All fields but `active` are
+ * fallback while a send blocks; the stream is `GET …/events`). All fields but `active` are
  * null when the conversation has no turn in flight. */
 export interface TurnActivity {
   active: boolean
@@ -96,4 +96,79 @@ export interface TurnActivity {
   tool: string | null
   iteration: number | null
   elapsed_seconds: number | null
+  /** A compiled plan's honest ack (#70): what's about to happen, never what's done. */
+  ack?: string | null
+}
+
+// --- The live channel (#38): GET …/events, mirrors backend app/api/turn_activity.py.
+
+/** One beat on the stream (`turn_started`, `activity`, a snapshot's `activity`). */
+export interface TurnBeat {
+  kind: 'model' | 'tool'
+  tool: string | null
+  iteration: number
+  ack: string | null
+  elapsed_seconds: number
+}
+
+/** One step of a validated plan, as the planner wrote it (backend `plan.py`). */
+export interface PlanBodyStep {
+  id: string
+  do: string
+  app?: string
+  request?: string
+  intent?: string
+  question?: string
+  answer?: string
+  [field: string]: unknown
+}
+
+/** A step as the ledger journals it (backend `ledger.live_step`): sent only
+ * once its record exists. `receipts` are the app's own entries, or
+ * conductor's `unknown` one for an app call with no readable record. */
+export interface LiveReceipt {
+  seq: number
+  kind: string
+  app: string | null
+  tool: string
+  arguments: Record<string, unknown>
+  outcome: 'done' | 'failed' | 'looked_up' | 'not_run'
+  error: string | null
+  receipts: (AppRecordEntry & { source: 'app' | 'conductor' })[]
+  /** An app's confirm question, without its token. */
+  confirm: { app: string; tool: string; question: string } | null
+}
+
+/** The `seq`-th call of the turn: started, and its receipt once it landed. */
+export interface LiveStep {
+  seq: number
+  tool?: string
+  arguments?: Record<string, unknown>
+  receipt: LiveReceipt | null
+}
+
+export interface LivePlan {
+  steps: PlanBodyStep[]
+  /** The plan step this turn's first call runs (a resumed plan starts past 0). */
+  start: number
+}
+
+export interface TurnPause {
+  reason: 'ask_user' | 'gate' | 'app_confirm'
+  question: string | null
+  app: string | null
+  step: string | null
+}
+
+export interface TurnSnapshot {
+  active: boolean
+  activity?: TurnBeat
+  plan?: LivePlan | null
+  steps?: LiveStep[]
+  paused?: TurnPause | null
+}
+
+export interface TurnEnded {
+  stop_reason: AgentStopReason | null
+  message_id: number | null
 }

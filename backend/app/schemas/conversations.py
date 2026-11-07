@@ -97,7 +97,8 @@ class RunCancelRead(BaseModel):
 class TurnActivityRead(BaseModel):
     """What conductor is doing right now for one conversation's in-flight turn.
 
-    The poll target while ``POST …/messages`` blocks (v1 has no SSE): ``kind``
+    The poll fallback while ``POST …/messages`` blocks (``GET …/events`` is
+    the stream, #38): ``kind``
     "model" means waiting on a provider turn, "tool" means the named tool —
     for an ``ask_<app>`` tool, that is a live delegate call the UI can render
     as "asking chess…". All fields but ``active`` are null when idle.

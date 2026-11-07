@@ -345,6 +345,40 @@ def step_kind(tool: str, arguments: dict[str, Any]) -> tuple[str, str | None]:
     return "unknown", None
 
 
+def live_step(seq: int, record: ToolCallRecord) -> dict[str, Any]:
+    """One step as the ledger will journal it, for the live channel (#38).
+
+    The same kind, app and outcome as its ``LedgerStep`` row, and the same
+    receipts: the app's typed record entries as the app wrote them, or
+    conductor's ``unknown`` receipt for an app call with no readable record.
+    An app's confirm question goes out without its token.
+    """
+    kind, app = step_kind(record.tool, record.arguments)
+    outcome = run_record.classify(record)
+    receipts: list[dict[str, Any]] = []
+    if app is not None and kind in ("ask", "confirm"):
+        if record.app_record is not None:
+            receipts = [{**entry, "source": "app"} for entry in record.app_record]
+        elif _may_have_written(record, outcome):
+            receipts = [{"source": "conductor", "outcome": "unknown", "reason": UNKNOWN_REASON}]
+    asked = record.app_confirm or {}
+    return {
+        "seq": seq,
+        "kind": kind,
+        "app": app,
+        "tool": record.tool,
+        "arguments": record.arguments,
+        "outcome": outcome,
+        "error": record.error,
+        "receipts": receipts,
+        "confirm": (
+            {"app": asked.get("app"), "tool": asked.get("tool"), "question": asked["question"]}
+            if asked.get("question")
+            else None
+        ),
+    }
+
+
 # --- internals ----------------------------------------------------------------------------
 
 

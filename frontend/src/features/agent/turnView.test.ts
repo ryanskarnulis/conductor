@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { AgentMessage, ToolCallRecord } from '../../types/agent'
+import type { AgentMessage, LiveReceipt, ToolCallRecord } from '../../types/agent'
+import { nextSceneState } from './sceneState'
+import { applyTurnEvent, EMPTY_STREAM, type TurnEventName, type TurnStream } from './turnStream'
 import { buildTurns, pendingConfirm, presenceFor, receiptFrom } from './turnView'
 
 function msg(over: Partial<AgentMessage>): AgentMessage {
@@ -122,5 +124,92 @@ describe('presenceFor', () => {
     expect(presenceFor(true, { active: true, kind: 'tool', tool: 'ask_music', iteration: 1, elapsed_seconds: 1 }, false)).toEqual({ state: 'work', label: 'Asking music' })
     expect(presenceFor(false, null, true)).toEqual({ state: 'wait', label: 'Waiting on you' })
     expect(presenceFor(false, null, false)).toEqual({ state: 'idle', label: 'Ready' })
+  })
+})
+
+// --- the live channel (#38): nothing looks done before its receipt says so ---------------
+
+const beat = { kind: 'model' as const, tool: null, iteration: 1, ack: 'On it, asking music and tasks.', elapsed_seconds: 0 }
+const plan = {
+  steps: [
+    { id: 's1', do: 'ask', app: 'music', request: 'grab Swim', destructive: false },
+    { id: 's2', do: 'ask', app: 'tasks', request: 'sort {s1}', destructive: false },
+  ],
+  start: 0,
+}
+const landed = (seq: number, over: Partial<LiveReceipt> = {}): LiveReceipt => ({
+  seq,
+  kind: 'ask',
+  app: 'music',
+  tool: 'ask_music',
+  arguments: { message: 'grab Swim' },
+  outcome: 'done',
+  error: null,
+  receipts: [{ source: 'app', tool: 'download_album', outcome: 'done', touched: [{ app: 'music', kind: 'album', id: '7', title: 'Swim' }] }],
+  confirm: null,
+  ...over,
+})
+
+function streamOf(events: [TurnEventName, unknown][]): TurnStream {
+  return events.reduce((state, [name, data], i) => applyTurnEvent(state, name, data, i + 1), EMPTY_STREAM)
+}
+
+const live = (stream: TurnStream) => buildTurns([], 'grab Swim and sort it', null, stream)[0]
+
+describe('buildTurns from the stream', () => {
+  it('no step shows a state ahead of its receipt', () => {
+    const planned = streamOf([['turn_started', beat], ['plan', plan]])
+    expect(live(planned).steps.map((s) => s.state)).toEqual(['queued', 'queued'])
+
+    const started = streamOf([['turn_started', beat], ['plan', plan], ['step_started', { seq: 1, tool: 'ask_music', arguments: { message: 'grab Swim' } }]])
+    expect(live(started).steps.map((s) => s.state)).toEqual(['run', 'queued'])
+    expect(live(started).receipts).toEqual([])
+
+    const done = applyTurnEvent(started, 'receipt', landed(1), 99)
+    expect(live(done).steps.map((s) => s.state)).toEqual(['done', 'queued'])
+    expect(live(done).steps[0]).toMatchObject({ kind: 'ask', appKey: 'music', text: 'grab Swim' })
+    expect(live(done).receipts).toEqual([expect.objectContaining({ appKey: 'music', verb: 'Queued', entity: '“Swim”' })])
+  })
+
+  it('the scene reads the same steps: a running strand is not done', () => {
+    const started = streamOf([['turn_started', beat], ['plan', plan], ['step_started', { seq: 1, tool: 'ask_music', arguments: {} }]])
+    const scene = nextSceneState(null, live(started), 'work', null, 10)
+    expect(scene.strands).toEqual({ music: { state: 'run', since: 10 }, tasks: { state: 'queued', since: 10 } })
+  })
+
+  it('shows a failed or unrun step plainly, from its receipt', () => {
+    const stream = streamOf([
+      ['turn_started', beat],
+      ['plan', plan],
+      ['receipt', landed(1, { outcome: 'failed', error: 'music timed out', receipts: [] })],
+      ['receipt', landed(2, { app: 'tasks', tool: 'ask_tasks', outcome: 'not_run', error: "not run: an earlier step of the plan didn't finish", receipts: [] })],
+    ])
+    expect(live(stream).steps.map((s) => [s.state, s.detail])).toEqual([
+      ['failed', 'music timed out'],
+      ['failed', "not run: an earlier step of the plan didn't finish"],
+    ])
+  })
+
+  it('a step an app asked about waits on you once the plan pauses', () => {
+    const asked = landed(1, { app: 'tasks', tool: 'ask_tasks', receipts: [{ source: 'app', tool: 'trash_project', outcome: 'not_run', reason: 'needs confirmation' }], confirm: { app: 'tasks', tool: 'trash_project', question: 'Trash it?' } })
+    const stream = streamOf([['turn_started', beat], ['receipt', asked], ['paused', { reason: 'app_confirm', question: 'Trash it?', app: 'tasks', step: 's1' }]])
+    expect(live(stream).steps[0].state).toBe('wait')
+    expect(live(stream).receipts).toEqual([]) // the confirmation card's business
+  })
+
+  it('a step at code’s gate waits on you; nothing ran', () => {
+    const gated = { steps: [{ id: 's1', do: 'ask', app: 'music', request: 'delete the album', destructive: true }], start: 0 }
+    const stream = streamOf([['turn_started', beat], ['plan', gated], ['paused', { reason: 'gate', question: 'Just to check?', app: 'music', step: 's1' }]])
+    expect(live(stream).steps).toEqual([{ appKey: 'music', kind: 'ask', app: 'music', text: 'delete the album', state: 'wait' }])
+  })
+
+  it('conductor’s own unknown receipt is never shown as a chip', () => {
+    const stream = streamOf([['turn_started', beat], ['receipt', landed(1, { receipts: [{ source: 'conductor', tool: '', outcome: 'unknown', reason: 'no record' }] })]])
+    expect(live(stream).receipts).toEqual([])
+  })
+
+  it('falls back to the beat while the stream has no steps yet', () => {
+    const turns = buildTurns([], 'hi', { active: true, kind: 'tool', tool: 'ask_chess', iteration: 1, elapsed_seconds: 1 }, streamOf([['turn_started', beat]]))
+    expect(turns[0].steps[0]).toMatchObject({ appKey: 'chess', state: 'run' })
   })
 })
