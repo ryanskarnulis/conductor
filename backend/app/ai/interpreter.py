@@ -207,7 +207,7 @@ class Interpreter:
         self, state: _Run, plan: plans.Direct, self_facts: Callable[[], str] | None
     ) -> AgentRunResult:
         facts = None
-        if plan.answer in ("self", "knowledge"):
+        if plan.answer in ("self", "knowledge", "chat"):
             facts = self._facts(self_facts)
         reply, path = speaker.answer(
             plan.answer,

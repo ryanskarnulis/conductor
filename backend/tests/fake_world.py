@@ -365,6 +365,60 @@ class World:
     def read(self, app: str, what: str) -> None:
         self.reads.append((app, what, self.turn))
 
+    def glance(self, app: str) -> dict[str, Any]:
+        """What the app's glance endpoint would answer from the world as it is
+        now (agent-standard#21), recorded as a read of that app: a look is a
+        read, so a check that wants "the app was read" sees it. Shapes follow
+        the apps' own: PCC's due_today refs, overdue count, focus and next_due;
+        music's jobs and unsorted count; chess's game and last game."""
+        as_of = datetime.now(UTC).isoformat()
+        if app == "tasks":
+            self.read("tasks", "glance")
+            due = self.due_today()
+            upcoming_due = sorted(
+                {t.due for t in self.live_tasks() if not t.done and t.due and t.due > self.today}
+            )
+            pinned = due + self.overdue()
+            focus = pinned[0] if pinned else None
+            return {
+                "as_of": as_of,
+                "due_today": [_ref_json(_task_ref(task)) for task in due[:5]],
+                "overdue": len(self.overdue()),
+                "focus": _ref_json(_task_ref(focus)) if focus else None,
+                "next_due": upcoming_due[0].isoformat() if upcoming_due else None,
+            }
+        if app == "music":
+            self.read("music", "glance")
+            return {
+                "as_of": as_of,
+                "jobs": [
+                    {
+                        **_ref_json(
+                            EntityRef(app="music", kind="download_job", id=str(j.id), title=j.title)
+                        ),
+                        "status": j.state,
+                        "done": j.done,
+                        "total": j.total,
+                        "failed": j.failed,
+                    }
+                    for j in list(self.jobs.values())[-5:]
+                ],
+                "queued": sum(1 for j in self.jobs.values() if j.state == "queued"),
+                "unsorted": len(self.unsorted()),
+            }
+        if app == "chess":
+            self.read("chess", "glance")
+            return {
+                "as_of": as_of,
+                "game": None,
+                "last_game": {"result": self.chess.result, "summary": self.chess.summary},
+            }
+        raise KeyError(f"no glance for {app}")
+
+    def glance_reader(self) -> Callable[[Any], dict[str, Any]]:
+        """This world as a ``GlanceReader`` for the interpreter: no HTTP, ever."""
+        return lambda fleet_app: self.glance(fleet_app.name)
+
     # -- queries the checks use --
 
     def live_tasks(self) -> list[Task]:
@@ -431,6 +485,10 @@ def _task_ref(task: Task) -> EntityRef:
 
 def _song_ref(song: Song) -> EntityRef:
     return EntityRef(app="music", kind="song", id=str(song.id), title=song.title, untrusted=True)
+
+
+def _ref_json(ref: EntityRef) -> dict[str, Any]:
+    return ref.model_dump(exclude_none=True)
 
 
 def _looked_up(tool: str, refs: list[EntityRef]) -> RecordEntry:

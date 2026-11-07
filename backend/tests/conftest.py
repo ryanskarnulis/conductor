@@ -46,6 +46,20 @@ def fleet_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def no_real_glance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A plan's `look` must never dial a real app (a dev PCC may be listening
+    on its manifest port). Tests that look inject a reader; one that doesn't
+    gets "couldn't look", the same as an app that is down."""
+    from app.ai import interpreter
+    from app.fleet.glance import GlanceError
+
+    def refuse(app: object) -> dict[str, object]:
+        raise GlanceError("tests don't read real apps")
+
+    monkeypatch.setattr(interpreter, "read_glance", refuse)
+
+
+@pytest.fixture(autouse=True)
 def _reset_rate_limiter() -> None:
     rate_limit._reset()
 

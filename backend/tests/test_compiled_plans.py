@@ -261,7 +261,9 @@ def test_no_valid_plan_after_a_repair_falls_back(run_with: Any, db_session: Sess
     ("answer", "spoken", "expected"),
     [
         ("decline", None, speaker.DECLINE),
-        ("chat", "Any time.", "Any time."),
+        ("chat", '{"about_you": false, "reply": "Any time."}', "Any time."),
+        # The planner files "what did you just do?" under chat some of the time (#73).
+        ("chat", '{"about_you": true, "reply": "I added the task."}', "I added the task."),
         (
             "knowledge",
             '{"about_you": false, "reply": "About nine minutes."}',
@@ -760,3 +762,28 @@ def test_a_lost_ref_gets_the_repair(fleet: Fleet) -> None:
     )
     assert _problems(three, fleet) == []
     assert _problems(named, fleet) == []  # a name the person said is no lost ref
+
+
+def test_a_chat_answer_sees_the_facts_and_the_structured_about_you_check(run_with: Any) -> None:
+    """The planner files "what did you just do?" under chat some of the time:
+    the speaker must be able to answer it from the ledger's facts (#73)."""
+    run_with(
+        ScriptedProvider(
+            [
+                plan_turn(steps(ask("tasks", "add a task to water the plants"))),
+                text_turn("Added it."),
+            ]
+        ),
+        "add a task to water the plants",
+    )
+    provider = ScriptedProvider(
+        [
+            plan_turn({"answer": "chat"}),
+            text_turn('{"about_you": true, "reply": "I added “water the plants”."}'),
+        ]
+    )
+    reply = run_with(provider, "what did you just do?")
+    assert reply["content"] == "I added “water the plants”."
+    speaker_call = provider.requests[1]
+    assert speaker_call["response_format"]["json_schema"]["name"] == "answer"
+    assert "water the plants" in speaker_call["messages"][-1]["content"]

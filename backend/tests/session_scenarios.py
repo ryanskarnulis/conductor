@@ -107,6 +107,8 @@ def _ask(app: str, message: str) -> Any:
 
 def _s1(session: Session) -> None:
     no_writes(session)
+    # A `look` (the glance, #73) is a read of tasks like an ask's list: the
+    # world records both.
     reads = [app for app, _, turn in session.world.reads if app == "tasks"]
     assert reads, "answered without reading tasks"
     reply = session.last.reply or ""
@@ -160,20 +162,24 @@ def _s2r(session: Session) -> None:
     sends = session.world.threads.get("tasks", [])
     assert len(sends) >= 2, f"tasks was asked {len(sends)} time(s); expected one per turn"
     assert len(set(sends)) == 1, f"tasks threads {sends}: a new thread per turn"
-    plumber = [r for r in _tasks_created(session) if "plumber" in r.title.lower()]
-    assert plumber, "no plumber task"
+    for word in ("lightbulbs", "plumber"):
+        made = [r for r in _tasks_created(session) if word in r.title.lower()]
+        assert made, f"no {word} task"
 
 
+# Both turns are writes. A read like "what's due today?" is a `look` now (#73:
+# the glance, no agent), so it would never open a delegate thread; two asks to
+# tasks are what exercises thread reuse.
 S2R = Scenario(
     "S2r",
     "a second turn to the same app reuses its delegate thread (#37)",
-    (Say("what's due today?"), Say("add a task to call the plumber tomorrow")),
+    (Say("add a task to buy lightbulbs"), Say("add a task to call the plumber tomorrow")),
     (_s2r,),
     tier="gate",
     script=lambda w: [
-        _ask("tasks", "what's due today?"),
-        _say("Groceries and call mom are due today."),
-        _ask("tasks", "add a task to call the plumber tomorrow"),
+        _ask("tasks", "Add a task to buy lightbulbs"),
+        _say("Added “buy lightbulbs”."),
+        _ask("tasks", "Add a task to call the plumber, due tomorrow"),
         _say("Added “call the plumber” for tomorrow."),
     ],
 )

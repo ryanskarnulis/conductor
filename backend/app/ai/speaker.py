@@ -15,7 +15,11 @@ The compiler can answer a turn without steps (:class:`app.ai.plan.Direct`):
 - ``self``: the model answers from facts code gathered: the ledger's last
   turns and what's running (S16, "what are you doing / what did you just
   do?"), and the app list. It says it doesn't know rather than guess.
-- ``chat``: one short line, in the persona.
+- ``chat``: one short line, in the persona. The planner also files "what did
+  you just do?" here some of the time (which glance lines sit in its prompt
+  moves it: S16 fell to 9/15 once the apps declared real ones, #73), so chat
+  gets the same facts and the same about-you check as ``knowledge``; a
+  question about conductor is answered from the facts, small talk is not.
 
 A provider failure falls back to a code line, so the turn always has a reply.
 """
@@ -70,7 +74,12 @@ _SYSTEM: dict[str, str] = {
     ),
     "chat": (
         "You are the household's local assistant. Reply to the person's small talk in one "
-        "short sentence. Don't offer to do anything and don't ask a question."
+        "short sentence. Don't offer to do anything and don't ask a question. If what they "
+        "said is really a question about you (what you can do, are doing, just did, or why), "
+        'set "about_you" to true and answer only from the facts below, written by code from '
+        "your own records, in plain verbs (added, moved, trashed, found), naming things by "
+        "their titles in quotes; if they don't say, say you don't know. Otherwise set it to "
+        "false and use the facts for nothing."
     ),
 }
 
@@ -108,14 +117,14 @@ def answer(
         return DECLINE, "code"
     system = f"{_SYSTEM[kind]}\n\nVoice: {PERSONA}"
     user = f"The person said: {words}"
-    if kind in ("self", "knowledge"):
+    if kind in ("self", "knowledge", "chat"):
         user = f"Facts:\n{facts or '(none)'}\n\n{user}"
     if surface in narrator.SPOKEN:
         user += "\n\nYour reply is spoken aloud: at most two short sentences, no markdown."
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     about_you = False
     try:
-        if kind == "knowledge" and structured is not None:
+        if kind in ("knowledge", "chat") and structured is not None:
             result = structured(messages, MAX_TOKENS, dict(_KNOWLEDGE_FORMAT))
             parsed = json.loads(result.content or "{}")
             about_you = bool(parsed.get("about_you"))

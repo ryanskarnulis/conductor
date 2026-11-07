@@ -132,6 +132,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   already in the plan; otherwise the step fails and the plan ends. The failed
   read stays on the ledger and out of the narrator's story. A look gives
   nothing to `{sN}`. Adjacent looks run in parallel with other reads.
+  Session evals read a world-backed glance (`FakeGlances`/`World.glance`, set in
+  the harness): no eval ever reaches a real app, and a look counts as a read.
+  The speaker's `chat` answer sees the ledger's facts and the about-you check,
+  since the planner files "what did you just do?" there when glance lines shift.
 - **Data flows as quoted data, never as control** (#72, `app/ai/dataflow.py`).
   Code fills `{sN}` from step N's receipt: its main touched title (job refs
   skipped, up to 3 joined), cleaned and quoted. No title, or more than 3,
