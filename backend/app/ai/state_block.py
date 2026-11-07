@@ -16,8 +16,9 @@ It holds, each line only when there is something to say:
 - the jobs an app reported as still running, as of their last report;
 - what is waiting on the person: a question the last reply asked, or an
   app's question that a yes answers with ``confirm`` (#68);
-- recent entities: what this conversation's calls touched, from the apps'
-  own records (delegate-api v1.1), newest first. Outside text is quoted and
+- recent entities: what this conversation's calls touched, newest first,
+  from the ledger (#69) when the caller passes them, else from the apps' own
+  records on the stored turns (delegate-api v1.1). Outside text is quoted and
   marked, never an instruction.
 
 Conductor has no plans yet; "the last plan" joins the block when compiled
@@ -64,6 +65,17 @@ _FINISHED_JOB = frozenset({"completed", "failed", "canceled"})
 
 
 @dataclass(frozen=True)
+class Entity:
+    """One recently touched thing, with its title as of the receipt that touched it."""
+
+    app: str
+    kind: str
+    id: str
+    title: str | None = None
+    untrusted: bool = False
+
+
+@dataclass(frozen=True)
 class Now:
     """What the client told conductor about where the person is."""
 
@@ -92,10 +104,16 @@ def calendar_lines(today: date) -> list[str]:
     ]
 
 
-def render(today: date, now: Now, history: Sequence[dict[str, Any]]) -> str:
+def render(
+    today: date,
+    now: Now,
+    history: Sequence[dict[str, Any]],
+    entities: Sequence[Entity] | None = None,
+) -> str:
     """The block for a turn starting ``today`` on a conversation with
     ``history`` (stored turns, oldest first, as :func:`app.ai.recall.Recall.of`
-    takes them)."""
+    takes them). ``entities``, newest first, are the ledger's; ``None`` reads
+    them from ``history``'s records instead."""
     lines = [_HEADER, *calendar_lines(today)]
     if now.surface is not None:
         lines.append(_SURFACE_LINES[now.surface])
@@ -116,10 +134,10 @@ def render(today: date, now: Now, history: Sequence[dict[str, Any]]) -> str:
         )
     elif question:
         lines.append(f'Waiting on the person: your last reply asked "{question}"')
-    entities = _entities(records)
-    if entities:
+    recent = list(entities[:MAX_ENTITIES]) if entities is not None else _entities(records)
+    if recent:
         lines.append("Recent entities (newest first, as of then):")
-        lines += [f"- {entity}" for entity in entities]
+        lines += [f"- {_entity(entity)}" for entity in recent]
     lines.append(_FOOTER)
     return "\n".join(lines)
 
@@ -173,9 +191,9 @@ def _clip_question(question: str) -> str:
     return question if len(question) <= MAX_QUESTION_CHARS else "…" + question[-MAX_QUESTION_CHARS:]
 
 
-def _entities(records: Sequence[ToolCallRecord]) -> list[str]:
+def _entities(records: Sequence[ToolCallRecord]) -> list[Entity]:
     seen: set[tuple[str, str, str]] = set()
-    lines: list[str] = []
+    lines: list[Entity] = []
     for record in reversed(records):
         for entry in reversed(record.app_record or []):
             if entry.get("outcome") not in ("done", "looked_up"):
@@ -185,18 +203,26 @@ def _entities(records: Sequence[ToolCallRecord]) -> list[str]:
                 if key in seen:
                     continue
                 seen.add(key)
-                lines.append(_entity(ref, untrusted=bool(entry.get("untrusted"))))
+                lines.append(
+                    Entity(
+                        app=key[0],
+                        kind=key[1],
+                        id=key[2],
+                        title=ref.get("title"),
+                        untrusted=bool(entry.get("untrusted") or ref.get("untrusted")),
+                    )
+                )
                 if len(lines) == MAX_ENTITIES:
                     return lines
     return lines
 
 
-def _entity(ref: dict[str, Any], *, untrusted: bool) -> str:
-    head = f"{ref.get('app')} {ref.get('kind')} {ref.get('id')}"
-    title = ref.get("title")
+def _entity(entity: Entity) -> str:
+    head = f"{entity.app} {entity.kind} {entity.id}"
+    title = entity.title
     if not title:
         return head
-    if untrusted or ref.get("untrusted"):
+    if entity.untrusted:
         return f'{head}: "{_clip(str(title))}" (outside text)'
     return f"{head}: {_clip(str(title))}"
 

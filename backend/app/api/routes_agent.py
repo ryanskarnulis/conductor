@@ -48,6 +48,7 @@ from app.schemas.conversations import (
     TurnActivityRead,
 )
 from app.services import conversations as conversations_service
+from app.services import ledger
 
 logger = structlog.get_logger(__name__)
 
@@ -206,6 +207,7 @@ def post_note(
     """
     conversation = _get_or_404(db, conversation_id)
     note = conversations_service.append_user_message(db, conversation, data.content)
+    ledger.note_turn(db, conversation, note)
     db.commit()
     db.refresh(note)
     logger.info("agent_note", conversation_id=conversation_id, message_id=note.id)
@@ -237,7 +239,8 @@ def post_message(
     turn is stored, so it is "before this turn". The
     delegation context is bound for exactly the run: the DB-backed thread
     store keyed by this conversation, the per-turn per-app call budget, and
-    the ``agent:loop`` audit driver.
+    the ``agent:loop`` audit driver. The ledger (#69) opens the turn with the
+    user message and closes it with the assistant turn, in the same commits.
     """
     conversation = _get_or_404(db, conversation_id)
     turns = _stored_turns(db, conversation.id)
@@ -247,8 +250,10 @@ def post_message(
         data.content,
         history=lambda: turns,
         earlier=lambda: conversations_service.earlier_calls(db, conversation.id),
+        entities=lambda: ledger.recent_entities(db, conversation.id),
     )
     user_message = conversations_service.append_user_message(db, conversation, data.content)
+    turn = ledger.open_turn(db, conversation, user_message, surface=data.surface, panel=data.panel)
     db.commit()
 
     context = DelegationContext(
@@ -283,16 +288,22 @@ def post_message(
             tool_calls=len(exc.result.tool_calls),
             error=str(exc),
         )
+        failed_message = None
         if exc.result.tool_calls:
             # Something ran: keep the record. A failure before any call leaves
             # the user turn alone, as before.
-            conversations_service.append_assistant_message(db, conversation, exc.result)
-            db.commit()
+            failed_message = conversations_service.append_assistant_message(
+                db, conversation, exc.result
+            )
+        # The ledger keeps the turn either way: its words, how it ended, what ran.
+        ledger.close_turn(db, turn, exc.result, failed_message)
+        db.commit()
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
     finally:
         turn_activity.end(conversation_id, stop)
 
     assistant_message = conversations_service.append_assistant_message(db, conversation, run)
+    ledger.close_turn(db, turn, run, assistant_message)
     db.commit()
     return MessageExchange(
         user_message=MessageRead.model_validate(user_message),

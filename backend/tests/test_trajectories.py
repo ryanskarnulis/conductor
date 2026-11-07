@@ -41,7 +41,9 @@ from tests.trajectory import (
     Step,
     Turn,
     check_delegate_budget,
+    check_every_app_write_has_a_receipt_row,
     check_every_app_write_is_recorded,
+    check_every_turn_is_on_the_ledger,
     check_every_call_has_one_answer,
     check_fault_ends_the_run_as_documented,
     check_handoffs_ask_nothing,
@@ -105,6 +107,17 @@ def test_a_write_before_a_provider_death_is_kept(fleet: Path) -> None:
 def test_partial_write_is_reported_as_outcome_unknown(fleet: Path) -> None:
     log = run_steps(fleet, [Step("add it", (calls(ADD), DONE), Fault("app_partial", 0))])
     assert log[0].receipts and log[0].status == 200
+    # The app's answer was lost, so the ledger's receipt is conductor's own (#69).
+    ledger = log[0].ledger
+    assert ledger is not None
+    assert [(app, outcome) for app, _, outcome, _ in ledger.receipts] == [("tasks", "unknown")]
+
+
+def test_app_down_writes_no_receipt(fleet: Path) -> None:
+    log = run_steps(fleet, [Step("sort", (calls(SORT), DONE), Fault("app_down", 0))])
+    ledger = log[0].ledger
+    assert ledger is not None and ledger.status == "ended"
+    assert ledger.steps == [("ask_music", "failed")] and ledger.receipts == []
 
 
 def test_app_down_is_a_domain_error_and_the_run_completes(fleet: Path) -> None:
@@ -157,6 +170,7 @@ def _breaches(check: object, observed: Observed) -> bool:
 
 def test_every_invariant_can_fire(fleet: Path) -> None:
     clean = _one_clean_step(fleet)
+    assert clean.receipts and clean.ledger is not None  # the write the receipt mutant hides
     for invariant in INVARIANTS:
         assert not _breaches(invariant, clean), invariant.__name__
     assert clean.run is not None
@@ -174,6 +188,10 @@ def test_every_invariant_can_fire(fleet: Path) -> None:
         check_delegate_budget: replace(clean, sends={"tasks": 4}),
         check_handoffs_ask_nothing: replace(clean, sends={"chess": 1}),
         check_every_app_write_is_recorded: replace(clean, saved_after=clean.saved_before),
+        check_every_turn_is_on_the_ledger: replace(clean, ledger=None),
+        check_every_app_write_has_a_receipt_row: replace(
+            clean, ledger=replace(clean.ledger, receipts=[])
+        ),
         check_fault_ends_the_run_as_documented: replace(clean, status=502),
         check_nothing_starts_after_stop: replace(clean, stopped_at=0),
     }

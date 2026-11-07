@@ -91,6 +91,13 @@ frontend on `8300`.
   the persona lives only there. Code guarantees the facts (titles, counts,
   undo, quoted outside text, two sentences on voice); handoffs and an app's
   confirm question pass through verbatim.
+- **The ledger** (#69, `app/services/ledger.py`) is the record of what
+  happened: a turn opens with the person's words before the loop runs and
+  closes with its plan, one step per call and the apps' receipts. Every app
+  write has a receipt row; an app call with no readable record gets
+  conductor's `unknown` receipt, never "nothing changed". Journaling runs in
+  savepoints and never costs the turn. The state block's recent entities
+  come from it.
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
   depth stacks.
 - **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every
