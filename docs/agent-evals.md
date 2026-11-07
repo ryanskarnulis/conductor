@@ -335,3 +335,83 @@ prompt is final.
 - S3, S4, S11, S13, S14 and S15 stay 0/5. They need cross-app data flow (#72),
   jobs (#76), undo (#74) or `think` (#78), which fall back to the loop today.
 - S12 is still `unsupported: tool:ask_chess`.
+
+### Cross-app plans and data flow (#72, 2026-11-07)
+
+Cross-app single-writer plans and `{sN}` data flow run on the interpreter
+now. `look` still falls back, until #73. The planner prompt is unchanged.
+What changed for the 12B is the validator. It now catches a ref the planner
+meant but didn't write:
+- a bare `s1`;
+- a later step describing what an earlier ask will find ("the album I just
+  downloaded");
+- an ask left pointing at State ("their other album", "the other album" with
+  no artist).
+
+The one repair turns each of these into `{s1}` or the name State gives.
+
+Session evals, frontier tier with the compiler on. "Before" is #70's run;
+the other columns are A/B arms of this change.
+
+| scenario | before (5) | data flow only (5) | + validator v1 (10) | + prompt line (10) | validator, no prompt line (10) | shipped (10) |
+|---|---|---|---|---|---|---|
+| S3 | 0/5 | 2/5 | 8/10 | 10/10 | 10/10 | **10/10** |
+| S15 | 0/5 | 1/5 | 1/10 | 8/10 | 3/10 | **9/10** |
+
+- With data flow alone, S3 was 2/5. The planner wrote `{s1}` about half
+  the time. Otherwise it wrote "step s1" or re-described the album ("the new
+  Caribou album"), and the real title was lost.
+- S15 lost the artist: "download their other album" reached music, which
+  can't see State. The repair then asked music which album, so code had no
+  title for `{s1}` and refused the task step instead of guessing.
+- A prompt line about pronouns lifted S15 to 8/10, but memory went red
+  (5/10, twice). It was cut. The shipped arm gets S15 to 9/10 without it, by
+  giving that check's repair a worked shape ("the other album by <the artist
+  in State>").
+
+Plan-level evals, every group, shipped validator vs #70's baseline:
+
+| group | floor | before | this change |
+|---|---|---|---|
+| golden | 0.8 | 89/105 | 89/105 |
+| cross | 0.8 | 32/35 | **35/35** |
+| ref | 0.85 | 18/20 | 18/20 |
+| control | 0.8 | 20/25 | 20/25 |
+| memory | 0.8 | 8/10 | 9/10 |
+| knowledge | 0.65 | 15/15 | 15/15 |
+| hard | 0.5 | 4/5 | 5/5 |
+| self | 0.55 | 9/15 | 14/15 |
+| holdout | 0.85 | 47/50 | 46/50 |
+| long | 0.7 | 39/40 | 37/40 |
+
+All groups are green. The baseline column is a same-day run with the prompt,
+schema and validator identical to main, not #70's table.
+
+Session gate tier with the compiler on, in two runs. The 5-sample run is the
+usual gate; the 10-sample run is a paired A/B against origin/main on the same
+day:
+
+| scenario | shipped (5) | origin/main (10) | shipped (10) |
+|---|---|---|---|
+| S1 | 5/5 | 10/10 | 10/10 |
+| S2 | 5/5 | 10/10 | 10/10 |
+| S2r | 5/5 | 10/10 | 10/10 |
+| S5 | 5/5 | 10/10 | 9/10 |
+| S7 | 4/5 | 9/10 | 9/10 |
+| S8 | 5/5 | 10/10 | 10/10 |
+| S9 | 5/5 | 10/10 | 10/10 |
+| S16 | 5/5 | 10/10 | 8/10 |
+
+- Every gate scenario is above its floor in every run.
+- S7's miss (the dentist's due date) happens on main too.
+- S5 is a `recall` turn, which still falls back to the loop, so this change
+  doesn't run in it.
+- S16's two misses are the speaker's recap leaving out the task's name. All
+  ten runs compiled and ran the same one-step plan, and the speaker and the
+  ledger's self-report are unchanged. Two misses against none isn't evidence
+  at n=10, so it's recorded here and not treated as a regression.
+
+- The other frontier scenarios: S4 (jobs, #76), S11 (undo, #74), S12 (no
+  `ask_chess`) and S13/S14 (`think`, #78) stay 0. S10 is 10/10, and S6 is
+  7/10 (#70: 2/5).
+- Turn p50s were 1.4–5.1 s. The two-turn cross-app scenarios run 2.5–4.5 s.

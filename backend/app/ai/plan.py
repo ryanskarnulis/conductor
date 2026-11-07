@@ -16,11 +16,12 @@ runaway, the same as the loop's per-run call cap.
 Code owns what happens next. :func:`problems` is the validator: refs, order,
 targets, policy and budgets; a plan with problems gets one repair, then the
 turn falls back to the loop. :func:`fallback_reason` says whether the
-interpreter can run a valid plan yet; v1 runs single-app ``ask``/``open``/
-``ask_user``/``confirm`` plans and the direct answers, and everything else
-(``look``, ``recall``, ``cancel``, ``amend``, ``undo``, ``think``, cross-app
-plans, data flow between steps) falls back to the loop until its issue lands
-(#72, #73, #74, #78, #80). Pure: no I/O.
+interpreter can run a valid plan yet: it runs ``ask``/``open``/``ask_user``/
+``confirm`` plans across apps, with ``{sN}`` data flow between them (#72), and
+the direct answers; every other kind (``look``, ``recall``, ``cancel``,
+``amend``, ``undo``, ``think``) falls back to the loop until its issue lands
+(#73, #74, #78, #80). :func:`reads_only` says which asks may run in parallel.
+Pure: no I/O.
 """
 
 from __future__ import annotations
@@ -42,10 +43,13 @@ StepKind = Literal[
     "ask", "look", "open", "ask_user", "recall", "cancel", "amend", "confirm", "undo", "think"
 ]
 
-# What interpreter v1 runs; the rest fall back to the loop.
+# What the interpreter runs; the rest fall back to the loop.
 RUNNABLE_KINDS: frozenset[str] = frozenset({"ask", "open", "ask_user", "confirm"})
 
-_REF = re.compile(r"\{(s(?:[1-9]|1[0-2]))(?:\.[a-z_]+)?\}")
+# ``{sN}`` (or ``{sN.field}``): what step N touched, filled in by code (#72).
+REF = re.compile(r"\{(s(?:[1-9]|1[0-2]))(?:\.[a-z_]+)?\}")
+# The free-text fields a step can carry refs in.
+STEP_TEXT_FIELDS = ("request", "intent", "query", "question", "target", "change", "problem")
 
 
 class Ask(BaseModel):
@@ -270,11 +274,12 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
         found.append(f"{len(steps)} steps is over the ceiling of {MAX_STEPS}")
     seen: set[str] = set()
     asks: dict[str, int] = {}
+    found += _lost_refs(steps)
     for index, step in enumerate(steps):
         expected = f"s{index + 1}"
         if step.id != expected:
             found.append(f"step {index + 1} has id {step.id}; ids go s1, s2, ... in order")
-        for ref in _REF.findall(step_text(step)):
+        for ref in REF.findall(step_text(step)):
             if ref not in seen:
                 found.append(f"{step.id} uses {{{ref}}} before {ref} runs")
         if isinstance(step, Think):
@@ -320,31 +325,136 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
     return found
 
 
-def fallback_reason(plan: Plan, *, confirm_app: str | None = None) -> str | None:
-    """Why interpreter v1 can't run this valid plan yet, or ``None`` if it can.
+# A step named without braces ("the album from step s1"), which code can't fill.
+_BARE_REF = re.compile(r"(?<![{\w])(?:step\s+)?(s(?:[1-9]|1[0-2]))(?![\w}])", re.IGNORECASE)
+# A thing an ask will find out, described rather than named: "the new Caribou
+# album", "their other album", "this playlist <url>". Only that step will know
+# its real title. (An ask that names it, "the song Odessa", gives no trouble.)
+_NOUNS = r"(?P<noun>album|song|track|playlist|record|ep|episode|mix|single)s?"
+_UNNAMED = re.compile(
+    r"\b(?:(?:the|their|his|her|its|my|that)\s+(?:\w+\s+){0,2}?(?:new|newest|latest|recent|"
+    r"other|next)\s+(?:[\w'’]+\s+){0,3}?|(?:this|that)\s+)" + _NOUNS + r"\b",
+    re.IGNORECASE,
+)
 
-    ``confirm_app`` is the app a ``confirm`` step answers, when it's an app's
-    question.
+
+# An ask that leaves the person's pointer unresolved: the app can't see State.
+_UNRESOLVED = re.compile(
+    r"\b(?:(?:their|his|her)\s+(?:[\w'’]+\s+){0,2}?|(?:the|my)\s+(?:other|next)\s+)"
+    + _NOUNS
+    + r"\b(?!\s+(?:by|from|of)\b)",
+    re.IGNORECASE,
+)
+
+
+def _described(noun: str) -> re.Pattern[str]:
+    """A later step pointing at that thing by description: "the album I just
+    downloaded", "the Caribou album"."""
+    return re.compile(
+        rf"\b(?:the|that|this|my|their|its)\s+(?:[\w'’-]+\s+){{0,3}}?{noun}s?\b", re.IGNORECASE
+    )
+
+
+def _lost_refs(steps: list[Step]) -> list[str]:
+    """Data flow the planner meant but didn't write as ``{sN}`` (#72): a bare
+    ``s1``, or a later step describing what an earlier ask will find ("the
+    album I just downloaded"). Either way the real title would be lost; the
+    repair asks for the ref the prompt already teaches."""
+    found: list[str] = []
+    earlier: list[Step] = []
+    for step in steps:
+        text = step_text(step)
+        bare = False
+        if isinstance(step, Ask):
+            unresolved = _UNRESOLVED.search(step.request)
+            if unresolved is not None:
+                phrase = unresolved.group(0)
+                noun = unresolved.group("noun")
+                found.append(
+                    f'{step.id} asks {step.app} about "{phrase}", but {step.app} never sees '
+                    f"State or this conversation, so it can't tell whose {noun} that is. "
+                    f'Write the artist or title State names, like "the other {noun} by '
+                    f'<the artist in State>"'
+                )
+        for match in _BARE_REF.finditer(text if isinstance(step, Ask | Open) else ""):
+            ref = match.group(1).lower()
+            if any(prior.id == ref for prior in earlier):
+                found.append(f"{step.id} names {ref} without braces; write {{{ref}}}")
+                bare = True
+        if isinstance(step, Ask | Open) and not bare and not REF.search(text):
+            for prior in earlier:
+                # Several similar asks to one app, or one ask for a list of
+                # things, aren't a lost ref: each names its own.
+                if not isinstance(prior, Ask) or getattr(step, "app", None) == prior.app:
+                    continue
+                if "," in prior.request or " and " in prior.request:
+                    continue
+                unnamed = _UNNAMED.search(prior.request)
+                if unnamed is None:
+                    continue
+                described = _described(unnamed.group("noun").lower()).search(text)
+                if described is not None:
+                    found.append(
+                        f'{step.id} says "{described.group(0)}", which only {prior.id} will '
+                        f"find out: write {{{prior.id}}} for its real name"
+                    )
+                    break
+        earlier.append(step)
+    return found
+
+
+def fallback_reason(plan: Plan, *, confirm_app: str | None = None) -> str | None:
+    """Why the interpreter can't run this valid plan yet, or ``None`` if it can.
+
+    Cross-app plans run (#72): writes in order, one at a time. ``{sN}`` runs
+    when step N can give a name: an ``ask`` (its receipt's title) or the
+    ``ask_user`` (the person's answer). ``confirm_app`` is the app a
+    ``confirm`` step answers, when it's an app's question; kept for the
+    callers, it no longer changes the answer.
     """
+    del confirm_app
     if not isinstance(plan, StepPlan):
         return None
-    apps: set[str] = set()
-    asked_user = False
+    namers: set[str] = set()
     for step in plan.steps:
         if step.do not in RUNNABLE_KINDS:
             return f"kind:{step.do}"
-        if isinstance(step, AskUser):
-            asked_user = True
-        if isinstance(step, Ask | Open):
-            apps.add(step.app)
-        if isinstance(step, Confirm) and confirm_app is not None:
-            apps.add(confirm_app)
-        refs = set(_REF.findall(step_text(step)))
-        if refs - ({"s1"} if asked_user else set()):
+        if set(REF.findall(step_text(step))) - namers:
             return "data_flow"
-    if len(apps) > 1:
-        return "cross_app"
+        if isinstance(step, Ask | AskUser):
+            namers.add(step.id)
     return None
+
+
+# What a request that only reads looks like: a question, with no word that
+# asks for a change. Conservative on purpose: a read taken for a write only
+# loses parallelism; a write taken for a read could run out of order.
+_QUESTION = re.compile(
+    r"^\s*(what|what's|whats|which|when|where|who|how|is|are|was|were|do|does|did|have|has|"
+    r"any|anything|show|list|tell|check|find|look|search|see|read)\b",
+    re.IGNORECASE,
+)
+_WRITE_WORDS = re.compile(
+    r"\b(add|adds|create|make|new|put|delete|remove|trash|wipe|clear|move|push|reschedule|"
+    r"rename|change|update|edit|set|mark|complete|finish|done|check off|tick|download|grab|"
+    r"get|queue|fetch|save|sort|file|tag|cancel|stop|pause|resume|start|play|undo|restore|"
+    r"archive|assign|schedule|remind|import|sync|retry|reset|resign)\b",
+    re.IGNORECASE,
+)
+
+
+def reads_only(step: BaseModel) -> bool:
+    """Whether a step only reads, so it may run alongside other reads (#72):
+    a non-destructive ``ask`` with no refs, phrased as a question, with no
+    word that asks for a change."""
+    if not isinstance(step, Ask) or step.destructive:
+        return False
+    request = step.request.strip()
+    if not request or REF.search(request):
+        return False
+    if not (_QUESTION.match(request) or request.endswith("?")):
+        return False
+    return _WRITE_WORDS.search(request) is None
 
 
 def _named_in(option: str, context: str) -> bool:
@@ -357,16 +467,7 @@ def _named_in(option: str, context: str) -> bool:
 
 def step_text(step: BaseModel) -> str:
     """Every free-text field of a step, for ref checks and the evals."""
-    return " ".join(
-        str(getattr(step, name))
-        for name in ("request", "intent", "query", "question", "target", "change", "problem")
-        if hasattr(step, name)
-    )
-
-
-def substitute(text: str, answers: dict[str, str]) -> str:
-    """``{sN}`` replaced by what step N gave (v1: the person's answer to ask_user)."""
-    return _REF.sub(lambda match: answers.get(match.group(1), match.group(0)), text)
+    return " ".join(str(getattr(step, name)) for name in STEP_TEXT_FIELDS if hasattr(step, name))
 
 
 PauseReason = Literal["ask_user", "gate", "app_confirm"]

@@ -22,6 +22,7 @@ tools read it to answer three questions:
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -95,15 +96,22 @@ class DelegationContext:
     # seen. A question asked during this run is never here.
     pending_confirm: PendingConfirm | None = None
     _calls_this_turn: dict[str, int] = field(default_factory=dict)
+    # A compiled plan's parallel reads (#72) run delegate calls from several
+    # threads: the budget and the thread store are touched one at a time (the
+    # store's DB work is a few short statements; only the network runs at once).
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def thread_for(self, app_name: str) -> int | None:
-        return self.thread_store.get(self.master_conversation_id, app_name)
+        with self._lock:
+            return self.thread_store.get(self.master_conversation_id, app_name)
 
     def remember_thread(self, app_name: str, thread_id: int) -> None:
-        self.thread_store.set(self.master_conversation_id, app_name, thread_id)
+        with self._lock:
+            self.thread_store.set(self.master_conversation_id, app_name, thread_id)
 
     def forget_thread(self, app_name: str) -> None:
-        self.thread_store.forget(self.master_conversation_id, app_name)
+        with self._lock:
+            self.thread_store.forget(self.master_conversation_id, app_name)
 
     def charge_call(self, app_name: str) -> None:
         """Count one delegate call to ``app_name`` this turn; enforce the budget.
@@ -114,14 +122,15 @@ class DelegationContext:
         """
         if self.calls_per_turn_per_app <= 0:
             return
-        used = self._calls_this_turn.get(app_name, 0)
-        if used >= self.calls_per_turn_per_app:
-            raise ToolError(
-                f"You've already asked {app_name} {used} time(s) this turn — that's the "
-                f"per-turn limit. Stop retrying {app_name}; either try a different app or "
-                f"tell the user what you found so far."
-            )
-        self._calls_this_turn[app_name] = used + 1
+        with self._lock:
+            used = self._calls_this_turn.get(app_name, 0)
+            if used >= self.calls_per_turn_per_app:
+                raise ToolError(
+                    f"You've already asked {app_name} {used} time(s) this turn — that's the "
+                    f"per-turn limit. Stop retrying {app_name}; either try a different app or "
+                    f"tell the user what you found so far."
+                )
+            self._calls_this_turn[app_name] = used + 1
 
     def take_pending_confirm(self, app_name: str) -> PendingConfirm | None:
         """The waiting question if it is ``app_name``'s; used at most once."""
