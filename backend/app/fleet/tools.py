@@ -122,6 +122,12 @@ class DelegateClientLike(Protocol):
 ClientFactory = Callable[[FleetApp], DelegateClientLike]
 
 
+# The words a delegate call's error carries when the app may have written but
+# its answer was lost (no record): the ledger files such a call as an
+# ``unknown`` receipt, a possible write (#69).
+OUTCOME_UNKNOWN = "stopped partway through"
+
+
 def default_client_factory() -> ClientFactory:
     """A factory that opens a real :class:`DelegateClient` per call."""
 
@@ -505,7 +511,7 @@ def _to_tool_error(app: FleetApp, exc: DelegateError) -> ToolError:
         )
     if isinstance(exc, DelegateOutcomeUnknown):
         return ToolError(
-            f"{app.name}'s agent stopped partway through this request, so what it did is "
+            f"{app.name}'s agent {OUTCOME_UNKNOWN} this request, so what it did is "
             f"unknown: some changes may have been made. Do not retry or resend it. Tell the "
             f"user it stopped partway and to check {app.name} before asking again."
         )

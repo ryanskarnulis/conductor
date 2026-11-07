@@ -33,9 +33,9 @@ fault joins the list when it lands.
 
 After every message every invariant in :data:`INVARIANTS` is checked against
 what the step observed. The one that matters most for the revamp is the
-ledger invariant, here in its pre-ledger form: **every app write is in
-conductor's record** — no receipt in the world that the saved turn doesn't
-account for (#69 makes it "every app write has a receipt row").
+ledger invariant (#69): **every app write has a receipt row** — no write in
+the world that the turn's ledger receipts don't account for, by the entity it
+touched, or as conductor's ``unknown`` when the app's answer was lost.
 
 The model is scripted and the world is fresh, so a walk is a pure function of
 its seed: a breach is reported with the seed, the steps so far and the command
@@ -55,7 +55,7 @@ from typing import Any, Literal
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -70,11 +70,12 @@ from app.ai.provider import (
 )
 from app.api import rate_limit, routes_agent, turn_activity
 from app.config import get_settings
-from app.db.models import Base
+from app.db.models import Base, LedgerTurn
 from app.db.session import get_db
 from app.fleet.delegate import DelegateOutcomeUnknown, DelegateUnavailable, MessageExchange
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
+from app.services import ledger
 from app.tools import registry
 from tests.fake_world import Receipt, World, client_factory, write_fixture_fleet
 
@@ -225,6 +226,16 @@ def next_step(rng: random.Random, tools: Sequence[str], faults: Sequence[FaultKi
 
 
 @dataclass
+class LedgerView:
+    """The step's ledger turn as the walk reads it back (#69)."""
+
+    status: str
+    stop_reason: str | None
+    steps: list[tuple[str, str]]  # (tool, outcome), in order
+    receipts: list[tuple[str, str | None, str, frozenset[str]]]  # app, tool, outcome, touched
+
+
+@dataclass
 class Observed:
     step: Step
     number: int
@@ -240,6 +251,7 @@ class Observed:
     tool_events: list[tuple[str, str]] = field(default_factory=list)  # (app, outcome)
     fault_fired: bool = False
     stopped_at: int | None = None  # chat_calls when Stop landed
+    ledger: LedgerView | None = None
 
     @property
     def new_messages(self) -> list[dict[str, Any]]:
@@ -384,6 +396,7 @@ class Harness:
     def __init__(self, fleet_dir: Path) -> None:
         self.world = World()
         self.current: Observed | None = None
+        self.current_message: str | None = None
         self._number = 0
         self._engine = create_engine(
             "sqlite:///:memory:",
@@ -466,6 +479,7 @@ class Harness:
             requests=[],
         )
         self.current = observed
+        self.current_message = step.message
         rate_limit._reset()
         try:
             response = self.client.post(
@@ -477,7 +491,30 @@ class Harness:
         observed.status = response.status_code
         observed.saved_after = self._saved()
         observed.receipts = self.world.writes(turn=self._number)
+        observed.ledger = self._ledger()
         return observed
+
+    def _ledger(self) -> LedgerView | None:
+        self._db.expire_all()
+        turn = self._db.execute(
+            select(LedgerTurn)
+            .where(LedgerTurn.conversation_id == self.conversation)
+            .order_by(LedgerTurn.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if turn is None or turn.words != (self.current_message or turn.words):
+            return None
+        steps = [(step.tool, step.outcome) for plan in turn.plans for step in plan.steps]
+        receipts = [
+            (
+                receipt.app,
+                receipt.tool,
+                receipt.outcome,
+                frozenset(f"{t.entity.kind}:{t.entity.ref}" for t in receipt.touched),
+            )
+            for receipt in ledger.receipts_for(self._db, turn.id)
+        ]
+        return LedgerView(turn.status, turn.stop_reason, steps, receipts)
 
     def close(self) -> None:
         try:
@@ -559,11 +596,72 @@ def check_handoffs_ask_nothing(observed: Observed) -> None:
         raise InvariantBreach("handoffs_ask_nothing", f"chess was asked {observed.sends}")
 
 
+def check_every_turn_is_on_the_ledger(observed: Observed) -> None:
+    """Every turn is on the ledger, ended the way the saved turn says, with
+    one step per call the saved turn shows, in order (#69)."""
+    view = observed.ledger
+    if view is None:
+        raise InvariantBreach("every_turn_is_on_the_ledger", "no ledger turn for this message")
+    if view.status != "ended":
+        raise InvariantBreach("every_turn_is_on_the_ledger", f"turn left {view.status}")
+    saved = observed.saved_assistant
+    if saved is None:
+        return
+    if view.stop_reason != saved.get("stop_reason"):
+        raise InvariantBreach(
+            "every_turn_is_on_the_ledger",
+            f"ledger says {view.stop_reason}, the saved turn {saved.get('stop_reason')}",
+        )
+    calls = [call["tool"] for call in saved.get("tool_calls") or []]
+    if [tool for tool, _ in view.steps] != calls:
+        raise InvariantBreach(
+            "every_turn_is_on_the_ledger", f"ledger steps {view.steps} vs saved calls {calls}"
+        )
+
+
+def check_every_app_write_has_a_receipt_row(observed: Observed) -> None:
+    """The ledger invariant (#69): every write an app made this step has a
+    receipt row — a ``done`` receipt touching what it wrote, or conductor's
+    ``unknown`` for a call to that app whose answer was lost. A write
+    conductor has no record of can't be narrated, undone or repeated."""
+    if not observed.receipts:
+        return
+    rows = observed.ledger.receipts if observed.ledger is not None else []
+    for receipt in observed.receipts:
+        if not any(
+            app == receipt.app
+            and (
+                outcome == "unknown"
+                or (
+                    outcome == "done"
+                    and (
+                        _touches(touched, receipt.ref)
+                        or (receipt.kind == "cancel" and tool == "cancel")
+                    )
+                )
+            )
+            for app, tool, outcome, touched in rows
+        ):
+            raise InvariantBreach(
+                "every_app_write_has_a_receipt_row",
+                f"{receipt.app} wrote {receipt.kind} {receipt.ref} {receipt.title!r} but the "
+                f"ledger (HTTP {observed.status}) has no receipt for it: {rows}",
+            )
+
+
+def _touches(touched: frozenset[str], ref: str) -> bool:
+    """The world's ``kind:id`` against the receipt's refs; the world calls a
+    download job ``job`` where music's record says ``download_job``."""
+    kind, _, ident = ref.partition(":")
+    return any(
+        key_ident == ident and (key_kind == kind or key_kind.endswith(f"_{kind}"))
+        for key_kind, _, key_ident in (key.partition(":") for key in touched)
+    )
+
+
 def check_every_app_write_is_recorded(observed: Observed) -> None:
-    """The ledger invariant, before the ledger: every write an app made this
-    step is accounted for by a delegate call in the saved turn — answered, or
-    reported as "outcome unknown". A write conductor has no record of can't
-    be narrated, undone or repeated (#69)."""
+    """Every write an app made this step is accounted for by a delegate call
+    in the saved turn — answered, or reported as "outcome unknown"."""
     if not observed.receipts:
         return
     saved = observed.saved_assistant
@@ -632,6 +730,8 @@ INVARIANTS: tuple[Callable[[Observed], None], ...] = (
     check_delegate_budget,
     check_handoffs_ask_nothing,
     check_every_app_write_is_recorded,
+    check_every_turn_is_on_the_ledger,
+    check_every_app_write_has_a_receipt_row,
     check_fault_ends_the_run_as_documented,
     check_nothing_starts_after_stop,
 )
