@@ -1,10 +1,10 @@
-"""Interpreter v1 (#70): run a compiled plan for one turn.
+"""The interpreter (#70, #72): run a compiled plan for one turn.
 
 The loop hands a turn here when it is built with a fleet
 (``CONDUCTOR_COMPILER``). The compiler writes the plan (:mod:`app.ai.compiler`)
 and code runs it, step by step, through the loop's own dispatch, so the
 delegate budget, Idempotency-Keys, receipts, Stop and the narrator are the
-same as the loop's. What v1 runs:
+same as the loop's. What it runs, across apps (#72):
 
 - ``ask``: the app's agent, through its ``ask_<app>`` tool. A ``destructive``
   ask to an app that doesn't confirm its own writes pauses first on code's
@@ -13,12 +13,24 @@ same as the loop's. What v1 runs:
 - ``open``: the handoff. Always last.
 - ``ask_user``: the plan pauses on the question; the person's answer resumes
   the same plan, ``{s1}`` replaced by their words.
+- ``{sN}`` in a step's text: the main title step N's receipt touched, quoted,
+  filled in by code when the step runs (:mod:`app.ai.dataflow`, which holds
+  the rules for no title, several titles and outside text).
 - ``confirm``: yes or no to whatever is waiting.
 - The direct answers (:mod:`app.ai.speaker`), ``self`` from the ledger.
 
+Independent reads (:func:`plans.reads_only`: asks to different apps, phrased
+as questions, no refs) that sit next to each other run at once, each in its
+own thread with the turn's context; everything else runs in order, one call
+at a time, so there is never more than one writer in flight. The per-app
+budget is charged under a lock and a Stop reaches every call in flight.
+
 A step that fails ends the plan: the steps after it are on the record as not
-run, and the narrator says so. A plan v1 can't run yet, or no valid plan after
-one repair, returns ``None`` and the loop takes the turn; the compiled plan is
+run, and the narrator says so. In a parallel group the reads beside it have
+already run; the plan ends after the group.
+
+A plan the interpreter can't run yet, or no valid plan after one repair,
+returns ``None`` and the loop takes the turn; the compiled plan is
 kept on the result either way (:class:`TurnPlan`), so the ledger records it.
 
 For a slow plan (one that asks an app) code speaks an honest ack as soon as the
@@ -27,13 +39,15 @@ plan is valid: what's about to happen, never what's done.
 
 from __future__ import annotations
 
+import contextvars
 import time
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
-from app.ai import compiler, narrator, run_record, speaker
+from app.ai import compiler, dataflow, narrator, run_record, speaker
 from app.ai import plan as plans
 from app.ai import trace as run_trace
 from app.ai.provider import ChatResult, ProviderError, ToolCall
@@ -160,7 +174,8 @@ class Interpreter:
             assert isinstance(resumed, plans.StepPlan)
             turn.body = paused.body
             steps = resumed.steps[paused.resume_at :]
-            return self._execute(state, turn, steps, paused.resume_at, {"s1": plan.resume}), turn
+            values = {"s1": dataflow.answer(plan.resume)}
+            return self._execute(state, turn, steps, paused.resume_at, values), turn
         assert isinstance(plan, plans.StepPlan)
         first = plan.steps[0]
         if isinstance(first, plans.Confirm):
@@ -243,13 +258,15 @@ class Interpreter:
         turn: TurnPlan,
         steps: Sequence[plans.Step],
         offset: int,
-        answers: dict[str, str],
+        values: dict[str, dataflow.Value],
         *,
         gate_passed: str | None = None,
     ) -> AgentRunResult:
-        """Run ``steps`` in order; ``offset`` is the first one's index in the plan."""
+        """Run ``steps``; ``offset`` is the first one's index in the plan."""
         loop = self._loop
-        for index, step in enumerate(steps):
+        index = 0
+        while index < len(steps):
+            step = steps[index]
             position = offset + index
             if _stopped(state.stop):
                 self._skip(steps[index:], state, STOPPED_ERROR)
@@ -258,29 +275,119 @@ class Interpreter:
             if isinstance(step, plans.AskUser):
                 turn.status, turn.pause, turn.resume_at = "paused", "ask_user", position + 1
                 return self._ask_user(state, step)
+            group = _read_group(steps, index)
+            if len(group) > 1:
+                results = self._dispatch_all(
+                    state, [(ask_tool_name(s.app), {"message": s.request}) for s in group]
+                )
+                for read, got in zip(group, results, strict=True):
+                    self._keep(values, read, got)
+                after = index + len(group)
+                asked = next(
+                    (
+                        (read, got)
+                        for read, got in zip(group, results, strict=True)
+                        if got.app_confirm and got.app_confirm.get("question")
+                    ),
+                    None,
+                )
+                if asked is not None:
+                    return self._app_asked(state, turn, steps, offset + after, asked[0], values)
+                failed = [
+                    read
+                    for read, got in zip(group, results, strict=True)
+                    if not self._went_well(got)
+                ]
+                if failed:
+                    turn.note = f"stopped after {failed[0].id}"
+                    return self._finish(state, turn, steps[after:], 1)
+                index = after
+                continue
             if isinstance(step, plans.Ask):
+                filled = dataflow.fill(step.request, values)
                 app = self._fleet.get(step.app)
                 confirms = app is not None and app.agent is not None and app.agent.confirms
+                refusal = _refusal(step, filled, confirms=confirms)
+                if refusal is not None:
+                    return self._refuse(state, turn, steps, index, filled, refusal)
                 if step.destructive and not confirms and step.id != gate_passed:
                     turn.status, turn.pause = "paused", "gate"
                     turn.resume_at, turn.pause_app = position, step.app
-                    return self._gate(state, step, answers)
-                request = plans.substitute(step.request, answers)
-                record = self._dispatch(state, ask_tool_name(step.app), {"message": request})
+                    self._carry(turn, position, values)
+                    return self._gate(state, step, filled.text)
+                record = self._dispatch(state, ask_tool_name(step.app), {"message": filled.text})
                 if record is not None and record.app_confirm and record.app_confirm.get("question"):
-                    if index + 1 < len(steps):
-                        turn.status, turn.pause = "paused", "app_confirm"
-                        turn.resume_at, turn.pause_app = position + 1, step.app
-                    return self._finish(state, turn, [], 1)
+                    return self._app_asked(state, turn, steps, position + 1, step, values)
             elif isinstance(step, plans.Open):
-                intent = plans.substitute(step.intent, answers)
-                record = self._dispatch(state, open_tool_name(step.app), {"intent": intent})
+                filled = dataflow.fill(step.intent, values)
+                refusal = _refusal(step, filled, confirms=False)
+                if refusal is not None:
+                    return self._refuse(state, turn, steps, index, filled, refusal)
+                record = self._dispatch(state, open_tool_name(step.app), {"intent": filled.text})
             else:  # the validator and fallback_reason keep other kinds out
-                raise AssertionError(f"interpreter v1 can't run {step.do}")
+                raise AssertionError(f"the interpreter can't run {step.do}")
             if record is None or not self._went_well(record):
                 turn.note = f"stopped after {step.id}"
                 return self._finish(state, turn, steps[index + 1 :], 1)
+            self._keep(values, step, record)
+            index += 1
         return self._finish(state, turn, [], 1)
+
+    @staticmethod
+    def _keep(values: dict[str, dataflow.Value], step: plans.Step, record: ToolCallRecord) -> None:
+        """What a step gives later steps as ``{sN}``, from its receipt."""
+        value = dataflow.from_record(record.app_record)
+        if value is not None:
+            values[step.id] = value
+
+    def _app_asked(
+        self,
+        state: _Run,
+        turn: TurnPlan,
+        steps: Sequence[plans.Step],
+        resume_at: int,
+        step: plans.Ask,
+        values: dict[str, dataflow.Value],
+    ) -> AgentRunResult:
+        """An app asked the person to confirm: the plan waits on their answer
+        if anything is left to run after it."""
+        plan_length = len((turn.body or {}).get("steps") or [])
+        if resume_at < plan_length:
+            turn.status, turn.pause = "paused", "app_confirm"
+            turn.resume_at, turn.pause_app = resume_at, step.app
+            self._carry(turn, resume_at, values)
+        return self._finish(state, turn, [], 1)
+
+    @staticmethod
+    def _carry(turn: TurnPlan, start: int, values: dict[str, dataflow.Value]) -> None:
+        """A pausing plan keeps what earlier steps found for the turn that resumes it."""
+        if turn.body is not None:
+            turn.body = dataflow.carry(turn.body, start, values)
+
+    def _refuse(
+        self,
+        state: _Run,
+        turn: TurnPlan,
+        steps: Sequence[plans.Step],
+        index: int,
+        filled: dataflow.Filled,
+        refusal: str,
+    ) -> AgentRunResult:
+        """A step code won't run (#72): on the record as not run, with why, and
+        the plan ends there."""
+        from app.ai.loop import ToolCallRecord  # noqa: PLC0415
+
+        step = steps[index]
+        tool, arguments = _call_for(step)
+        arguments = {name: filled.text for name in arguments}
+        state.records.append(
+            ToolCallRecord(
+                tool=tool, arguments=arguments, error=run_record.NOT_RUN_PREFIX + refusal
+            )
+        )
+        turn.note = f"{step.id} not run: {refusal}"[:500]
+        logger.info("plan_step_refused", step=step.id, reason=refusal)
+        return self._finish(state, turn, steps[index + 1 :], 1)
 
     def _finish(
         self, state: _Run, turn: TurnPlan, unrun: Sequence[plans.Step], iteration: int
@@ -314,6 +421,52 @@ class Interpreter:
         state.records.append(record)
         return record
 
+    def _dispatch_all(
+        self, state: _Run, calls: Sequence[tuple[str, dict[str, Any]]]
+    ) -> list[ToolCallRecord]:
+        """Independent reads at once (#72): one thread each, each running in a
+        copy of the turn's context (its delegation context, Stop and trace),
+        records kept in plan order. A crash fails the turn like the loop's,
+        once every call has come back."""
+        from app.ai.loop import ToolCallRecord  # noqa: PLC0415
+
+        loop = self._loop
+        first = len(state.records)
+        tool_calls = [
+            ToolCall(id=f"plan-{first + n + 1}", name=tool, arguments=arguments)
+            for n, (tool, arguments) in enumerate(calls)
+        ]
+        for call in tool_calls:
+            loop._emit(state.on_activity, _activity("tool", tool=call.name))
+        logger.info("plan_reads_parallel", tools=[call.name for call in tool_calls])
+        with ThreadPoolExecutor(max_workers=len(tool_calls), thread_name_prefix="plan") as pool:
+            futures = [
+                pool.submit(contextvars.copy_context().run, loop._dispatch, call, state.actor)
+                for call in tool_calls
+            ]
+        records: list[ToolCallRecord] = []
+        crash: tuple[str, Exception] | None = None
+        for call, future in zip(tool_calls, futures, strict=True):
+            try:
+                record, _feedback, _schema = future.result()
+            except Exception as error:
+                logger.exception("plan_step_crashed", tool=call.name)
+                record = ToolCallRecord(
+                    tool=call.name, arguments=call.arguments, error=_INTERNAL_ERROR
+                )
+                crash = crash or (call.name, error)
+            if any(entry.get("outcome") == "done" for entry in record.app_record or []):
+                # Taken for a read, it wrote: harmless once, worth knowing.
+                logger.warning("plan_read_wrote", tool=call.name)
+            records.append(record)
+        state.records.extend(records)
+        if crash is not None:
+            tool, cause = crash
+            raise loop._failed(
+                "internal_error", f"agent run crashed in {tool}: {cause}", state.records, 1, []
+            ) from cause
+        return records
+
     @staticmethod
     def _went_well(record: ToolCallRecord) -> bool:
         return run_record.classify(record) in ("done", "looked_up")
@@ -335,8 +488,7 @@ class Interpreter:
         reply = self._with_record_line(state, question)
         return self._loop._finish("completed", reply, state.records, 1, state.messages)
 
-    def _gate(self, state: _Run, step: plans.Ask, answers: dict[str, str]) -> AgentRunResult:
-        request = plans.substitute(step.request, answers)
+    def _gate(self, state: _Run, step: plans.Ask, request: str) -> AgentRunResult:
         question = f'Just to check: should I ask {step.app} to "{request}"?'
         reply = self._with_record_line(state, question)
         return self._loop._finish("completed", reply, state.records, 1, state.messages)
@@ -402,6 +554,37 @@ def _call_for(step: plans.Step) -> tuple[str, dict[str, Any]]:
 
 
 _INTERNAL_ERROR = "internal error: the tool call failed unexpectedly"
+
+
+def _read_group(steps: Sequence[plans.Step], start: int) -> list[plans.Ask]:
+    """The reads from ``start`` that can run at once: next to each other, each
+    to a different app (one call per app thread at a time)."""
+    group: list[plans.Ask] = []
+    for step in steps[start:]:
+        if not isinstance(step, plans.Ask) or not plans.reads_only(step):
+            break
+        if any(read.app == step.app for read in group):
+            break
+        group.append(step)
+    return group
+
+
+def _refusal(
+    step: plans.Ask | plans.Open, filled: dataflow.Filled, *, confirms: bool
+) -> str | None:
+    """Why code won't run this step with what it was given, or ``None`` (#72)."""
+    if filled.missing:
+        return f"{filled.missing[0]} gave no name to pass on"
+    if not filled.untrusted:
+        return None
+    source = filled.untrusted[0]
+    if isinstance(step, plans.Open):
+        return f"outside text from {source} can't go into a handoff"
+    if step.destructive:
+        return f"outside text from {source} can't choose what to delete"
+    if not confirms:
+        return f"outside text from {source} can't go to {step.app}, which doesn't confirm changes"
+    return None
 
 
 def _activity(

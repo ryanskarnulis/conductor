@@ -108,16 +108,30 @@ regenerate. Components live in `src/design/` (`cd-` classes in
 - **Compiled plans** (#70, `CONDUCTOR_COMPILER`): the 12B compiles each turn
   to a typed plan under `json_schema` (`app/ai/plan.py`, `compiler.py`), code
   validates it (one repair, else the loop takes the turn), and the
-  interpreter (`app/ai/interpreter.py`) runs single-app `ask`/`open`/
-  `ask_user`/`confirm` plans and the direct answers (`app/ai/speaker.py`).
+  interpreter (`app/ai/interpreter.py`) runs `ask`/`open`/`ask_user`/
+  `confirm` plans across apps and the direct answers (`app/ai/speaker.py`).
   Plans have no designed length; 12 steps is a runaway ceiling. Every other
-  kind, cross-app plans and `{sN}` data flow fall back to the loop until
-  their issue lands; the fallen-back plan stays on the ledger. A destructive
+  kind falls back to the loop until its issue lands; the fallen-back plan
+  stays on the ledger. A destructive
   ask to an app without `confirms` pauses on code's question; `ask_user` and
   an app's `confirm_required` pause too, and the next turn resumes the same
   plan. The planner prompt and the ten step kinds stay byte-stable: plan-level
   evals (`tests/test_plan_evals.py`, `CONDUCTOR_PLAN_EVALS=1`) gate any change
   to them, to the compiler, or to a manifest.
+- **Data flows as quoted data, never as control** (#72, `app/ai/dataflow.py`).
+  Code fills `{sN}` from step N's receipt: its main touched title (job refs
+  skipped, up to 3 joined), cleaned and quoted. No title, or more than 3,
+  means the step doesn't run and the plan ends, with the reason on the
+  record. Never guess a name or splice in an app's reply text. The validator
+  repairs a lost ref: a bare `s1`, a step re-describing what an earlier ask
+  will find, or an ask pointing at State ("their other album"). The plan is
+  fixed before any step runs, so a title can't steer control flow. An
+  `untrusted` title goes only into a non-destructive ask to an app with
+  `confirms`, never into a destructive ask, an app without `confirms`, or an
+  `open` intent. Only trusted values survive a pause. Adjacent reads to
+  different apps (`plan.reads_only`) run at once in threads with the turn's
+  context. Everything else runs in order, one call in flight. The budget and
+  thread store are locked, and Stop cancels every call in flight.
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
   depth stacks.
 - **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every
