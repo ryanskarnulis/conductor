@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.ai import confirmation, run_record
 from app.ai.loop import AgentRunResult, ToolCallRecord
+from app.ai.plan import PausedPlan, TurnPlan
 from app.ai.state_block import Entity
 from app.db.models import (
     Conversation,
@@ -120,8 +121,14 @@ def close_turn(
         turn.ended_at = utcnow()
         if assistant_message is not None:
             turn.assistant_message_id = assistant_message.id
-        plan = LedgerPlan(turn_id=turn.id, source="loop")
-        db.add(plan)
+        compiled = None if run.plan is None else _compiled_plan(turn, run.plan)
+        if compiled is not None:
+            db.add(compiled)
+        if compiled is not None and compiled.acted:
+            plan = compiled  # the compiled plan acted: its steps are the turn's calls
+        else:
+            plan = LedgerPlan(turn_id=turn.id, source="loop")
+            db.add(plan)
         db.flush()
         for seq, record in enumerate(run.tool_calls, start=1):
             _journal_step(db, plan, seq, record)
@@ -134,6 +141,135 @@ def close_turn(
         stop_reason=run.stop_reason,
         steps=len(run.tool_calls),
         run_id=run.run_id,
+    )
+
+
+def paused_plan(db: Session, conversation_id: int) -> PausedPlan | None:
+    """Last turn's compiled plan, if it is waiting on the person (#70).
+
+    Only the newest turn's plan can resume: anything said or done since (a
+    note included) lets the question lapse, as an app's question does.
+    """
+    last = db.execute(
+        select(LedgerTurn)
+        .where(LedgerTurn.conversation_id == conversation_id, LedgerTurn.status == "ended")
+        .order_by(LedgerTurn.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if last is None or last.kind != "message":
+        return None
+    for plan in last.plans:
+        if (
+            plan.source == "compiled"
+            and plan.acted
+            and plan.status == "paused"
+            and plan.body is not None
+            and plan.pause in ("ask_user", "gate", "app_confirm")
+            and plan.resume_at is not None
+        ):
+            return PausedPlan(
+                body=plan.body,
+                reason=plan.pause,  # type: ignore[arg-type]
+                resume_at=plan.resume_at,
+                app=plan.pause_app,
+            )
+    return None
+
+
+# How many of this conversation's turns the self-report reads.
+SELF_REPORT_TURNS = 3
+
+# Plain words for the self-report, so the speaker never reads a tool name or a
+# bare "done" as a claim that something was completed (S16).
+_STEP_WORDS = {"ask": "asked", "open": "opened", "confirm": "said yes to", "local": "looked up"}
+_OUTCOME_WORDS = {
+    "done": "it answered",
+    "looked_up": "it answered",
+    "failed": "it failed",
+    "not_run": "it didn't run",
+}
+_RECEIPT_WORDS = {
+    "done": "the app did",
+    "looked_up": "the app found",
+    "refused": "the app refused",
+    "not_run": "the app didn't run",
+    "unknown": "unknown whether the app did",
+}
+
+
+def self_report(db: Session, conversation_id: int) -> str:
+    """What conductor did lately and what's still running, from the ledger
+    alone, for "what are you doing / what did you just do?" (S16)."""
+    turns = (
+        db.execute(
+            select(LedgerTurn)
+            .where(
+                LedgerTurn.conversation_id == conversation_id,
+                LedgerTurn.status == "ended",
+                LedgerTurn.kind == "message",
+            )
+            .order_by(LedgerTurn.id.desc())
+            .limit(SELF_REPORT_TURNS)
+        )
+        .scalars()
+        .all()
+    )
+    lines: list[str] = []
+    for turn in turns:
+        lines.append(f'You were asked: "{_clip(turn.words)}"')
+        acted = [plan for plan in turn.plans if plan.acted]
+        steps = [step for plan in acted for step in plan.steps]
+        if not steps:
+            lines.append("- nothing ran; you answered directly")
+        for step in steps:
+            verb = _STEP_WORDS.get(step.kind, step.kind)
+            outcome = _OUTCOME_WORDS.get(step.outcome, step.outcome)
+            lines.append(f"- {verb} {step.app or step.tool}: {outcome}")
+            for receipt in step.receipts:
+                titles = [f'"{_clip(touch.title)}"' for touch in receipt.touched if touch.title][:3]
+                what = f" {', '.join(titles)}" if titles else ""
+                action = (receipt.tool or "something").replace("_", " ")
+                did = _RECEIPT_WORDS.get(receipt.outcome, receipt.outcome)
+                lines.append(f"  - {did}: {action}{what}")
+        if turn.stop_reason and turn.stop_reason != "completed":
+            lines.append(f"- the turn ended {turn.stop_reason}")
+    jobs = (
+        db.execute(
+            select(LedgerJob)
+            .where(LedgerJob.status.not_in(("completed", "failed", "canceled")))
+            .order_by(LedgerJob.updated_at.desc())
+            .limit(5)
+        )
+        .scalars()
+        .all()
+    )
+    for job in jobs:
+        total = f" of {job.total}" if job.total is not None else ""
+        lines.append(f"Running: {job.app} job {job.ref}, {job.status}, {job.done}{total} done")
+    if not lines:
+        return "Nothing on record yet in this conversation."
+    return "\n".join(lines)
+
+
+def _clip(text: str, limit: int = 80) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def _compiled_plan(turn: LedgerTurn, compiled: TurnPlan) -> LedgerPlan:
+    body = compiled.body
+    answer = body.get("answer") if isinstance(body, dict) else None
+    return LedgerPlan(
+        turn_id=turn.id,
+        source="compiled",
+        body=body,
+        answer=str(answer) if answer else None,
+        acted=compiled.acted,
+        status=compiled.status,
+        note=compiled.note,
+        pause=compiled.pause,
+        resume_at=compiled.resume_at,
+        pause_app=compiled.pause_app,
     )
 
 

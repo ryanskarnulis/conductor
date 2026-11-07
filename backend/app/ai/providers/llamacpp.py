@@ -142,11 +142,15 @@ class LlamaCppProvider:
         tools: Sequence[ToolSpec] | None = None,
         enable_thinking: bool = False,
         max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ChatResult:
-        """One completion turn, optionally offering tools."""
+        """One completion turn, optionally offering tools, or decoding under a
+        ``response_format`` (``json_schema``: llama-server's grammar, #70)."""
         payload = self._payload(
             messages, tools=tools, enable_thinking=enable_thinking, max_tokens=max_tokens
         )
+        if response_format is not None:
+            payload["response_format"] = response_format
         stamp = self._begin_capture()
         if stamp is None:
             return self._result(self._post(payload, None))

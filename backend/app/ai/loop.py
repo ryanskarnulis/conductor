@@ -66,6 +66,7 @@ import structlog
 from pydantic import BaseModel, ValidationError
 
 from app.ai import narrator, run_record
+from app.ai.plan import PausedPlan, TurnPlan
 from app.ai.stop import STOPPED_ERROR, Stop, use_stop
 from app.ai import trace as run_trace
 from app.ai.provider import (
@@ -78,6 +79,7 @@ from app.ai.provider import (
     tool_result_message,
 )
 from app.config import get_settings
+from app.fleet.manifests import Fleet
 from app.tools import registry, runtime
 from app.tools.registry import ToolError, UnknownToolError
 
@@ -241,6 +243,8 @@ class LoopActivity:
     kind: Literal["model", "tool"]
     iteration: int
     tool: str | None = None
+    # A compiled plan's honest ack (#70): what's about to happen, said at once.
+    ack: str | None = None
 
 
 OnActivity = Callable[[LoopActivity], None]
@@ -286,6 +290,9 @@ class AgentRunResult(BaseModel):
     # The turn id: what the turn's log lines, trace record and captured model
     # calls are keyed by (#62).
     run_id: str = ""
+    # What the compiler made of the turn (#70), when the loop has one: the plan
+    # that acted, or the one that fell back to the loop. Journaled by the ledger.
+    plan: TurnPlan | None = None
 
 
 class AgentRunFailed(Exception):
@@ -316,6 +323,7 @@ class AgentLoop:
         fleet_section: str | None = None,
         tracer: run_trace.Tracer | None = None,
         narrate: bool = False,
+        fleet: Fleet | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be >= 1")
@@ -335,6 +343,11 @@ class AgentLoop:
         self._tracer = tracer
         # Whether a completed run's reply is the narrator's (#65).
         self._narrate = narrate
+        # Compiled plans (#70): with a fleet, each turn is compiled first and
+        # the interpreter runs what it can; the rest falls back to the loop.
+        from app.ai.interpreter import Interpreter  # noqa: PLC0415
+
+        self._interpreter = Interpreter(self, fleet) if fleet is not None else None
 
     def run(
         self,
@@ -347,6 +360,8 @@ class AgentLoop:
         context: str | None = None,
         surface: str | None = None,
         stop: Stop | None = None,
+        paused: PausedPlan | None = None,
+        self_facts: Callable[[], str] | None = None,
     ) -> AgentRunResult:
         """Run the loop for one user message. Always returns; never spins.
 
@@ -372,6 +387,12 @@ class AgentLoop:
         log lines, its result, its trace record and its captured model calls.
         With a tracer configured the turn is recorded however it ends; a trace
         write that fails is logged and never costs the turn.
+
+        Built with a fleet (#70), the turn is compiled first
+        (:mod:`app.ai.interpreter`): ``paused`` is last turn's plan waiting on
+        the person, ``self_facts`` what code knows about its own recent work
+        (for "what did you just do?"). A plan the interpreter can't run yet
+        falls back to the loop, and the result carries the plan either way.
         """
         bound = structlog.contextvars.get_contextvars()
         bindings: dict[str, str] = {}
@@ -396,10 +417,25 @@ class AgentLoop:
             use_stop(stop),
         ):
             try:
-                opening = f"{context}\n\n{user_message}" if context else user_message
-                result = self._run(
-                    opening, history, actor, on_activity, trace, words=user_message, stop=stop
-                )
+                result, turn_plan = None, None
+                if self._interpreter is not None:
+                    result, turn_plan = self._interpreter.run(
+                        user_message,
+                        context=context,
+                        actor=actor,
+                        trace=trace,
+                        on_activity=on_activity,
+                        stop=stop,
+                        paused=paused,
+                        self_facts=self_facts,
+                    )
+                    trace.plan = turn_plan.model_dump()
+                if result is None:
+                    opening = f"{context}\n\n{user_message}" if context else user_message
+                    result = self._run(
+                        opening, history, actor, on_activity, trace, words=user_message, stop=stop
+                    )
+                result.plan = turn_plan
             except AgentRunFailed as exc:
                 exc.result.run_id = run_id
                 self._write_trace(trace, exc.result, str(exc), started)
@@ -427,14 +463,22 @@ class AgentLoop:
         *,
         max_tokens: int | None = None,
         role: run_trace.CallRole = "planner",
+        response_format: dict[str, Any] | None = None,
     ) -> ChatResult:
         """One metered provider call: its status, time and tokens go on the trace."""
         call = run_trace.ModelCall(role=role)
         started = time.monotonic()
         try:
-            result = self._provider.chat(
-                messages, tools=specs or None, max_tokens=max_tokens or self._max_tokens
-            )
+            if response_format is not None:
+                result = self._provider.chat(
+                    messages,
+                    max_tokens=max_tokens or self._max_tokens,
+                    response_format=response_format,
+                )
+            else:
+                result = self._provider.chat(
+                    messages, tools=specs or None, max_tokens=max_tokens or self._max_tokens
+                )
         except ToolCallArgumentsError as exc:
             call.status, call.failure = "bad_args", type(exc).__name__
             raise
@@ -795,7 +839,9 @@ class AgentLoop:
         )
 
 
-def loop_from_settings(provider: ChatProvider, *, fleet_section: str | None = None) -> AgentLoop:
+def loop_from_settings(
+    provider: ChatProvider, *, fleet_section: str | None = None, fleet: Fleet | None = None
+) -> AgentLoop:
     """An :class:`AgentLoop` bounded by the configured ``conductor_max_iterations``.
 
     The provider factory's counterpart: the one place the loop's shallow
@@ -812,6 +858,8 @@ def loop_from_settings(provider: ChatProvider, *, fleet_section: str | None = No
         fleet_section=fleet_section,
         tracer=run_trace.tracer_from_settings(),
         narrate=settings.conductor_narrator,
+        # Compiled plans (#70) need the fleet the prompt and schema are built from.
+        fleet=fleet if settings.conductor_compiler else None,
     )
 
 

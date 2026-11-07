@@ -105,6 +105,19 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   conductor's `unknown` receipt, never "nothing changed". Journaling runs in
   savepoints and never costs the turn. The state block's recent entities
   come from it.
+- **Compiled plans** (#70, `CONDUCTOR_COMPILER`): the 12B compiles each turn
+  to a typed plan under `json_schema` (`app/ai/plan.py`, `compiler.py`), code
+  validates it (one repair, else the loop takes the turn), and the
+  interpreter (`app/ai/interpreter.py`) runs single-app `ask`/`open`/
+  `ask_user`/`confirm` plans and the direct answers (`app/ai/speaker.py`).
+  Plans have no designed length; 12 steps is a runaway ceiling. Every other
+  kind, cross-app plans and `{sN}` data flow fall back to the loop until
+  their issue lands; the fallen-back plan stays on the ledger. A destructive
+  ask to an app without `confirms` pauses on code's question; `ask_user` and
+  an app's `confirm_required` pause too, and the next turn resumes the same
+  plan. The planner prompt and the ten step kinds stay byte-stable: plan-level
+  evals (`tests/test_plan_evals.py`, `CONDUCTOR_PLAN_EVALS=1`) gate any change
+  to them, to the compiler, or to a manifest.
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
   depth stacks.
 - **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every

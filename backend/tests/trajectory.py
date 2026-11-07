@@ -279,6 +279,7 @@ class WalkProvider:
         tools: Sequence[ToolSpec] | None = None,
         enable_thinking: bool = False,
         max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ChatResult:
         run = self._harness.current
         assert run is not None, "a model call outside a step"

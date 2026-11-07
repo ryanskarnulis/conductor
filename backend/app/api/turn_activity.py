@@ -38,6 +38,8 @@ class TurnActivity:
     # time.monotonic() when the whole turn began — elapsed time, not the beat's.
     started_at: float
     stop: Stop = field(default_factory=Stop, compare=False)
+    # A compiled plan's honest ack (#70), once said; it stays for the turn.
+    ack: str | None = None
 
 
 _LOCK = threading.Lock()
@@ -52,13 +54,22 @@ def begin(conversation_id: int) -> Stop:
     return activity.stop
 
 
-def update(conversation_id: int, *, kind: ActivityKind, tool: str | None, iteration: int) -> None:
+def update(
+    conversation_id: int,
+    *,
+    kind: ActivityKind,
+    tool: str | None,
+    iteration: int,
+    ack: str | None = None,
+) -> None:
     """Advance the in-flight turn's beat; a turn ``end()`` already cleared stays gone."""
     with _LOCK:
         current = _ACTIVE.get(conversation_id)
         if current is None:
             return
-        _ACTIVE[conversation_id] = replace(current, kind=kind, tool=tool, iteration=iteration)
+        _ACTIVE[conversation_id] = replace(
+            current, kind=kind, tool=tool, iteration=iteration, ack=ack or current.ack
+        )
 
 
 def end(conversation_id: int, stop: Stop | None = None) -> None:

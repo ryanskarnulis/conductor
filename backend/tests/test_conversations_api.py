@@ -161,6 +161,7 @@ def test_provider_failure_is_502_and_keeps_user_message(client: TestClient) -> N
         "tool": None,
         "iteration": None,
         "elapsed_seconds": None,
+        "ack": None,
     }
 
 
