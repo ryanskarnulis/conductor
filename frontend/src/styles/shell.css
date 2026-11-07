@@ -1,0 +1,307 @@
+/* The shell (#88, from the #87 prototype): a bar with presence, the Living
+ * Web stage, and the glass panel holding the conversation and the composer.
+ * Desktop: panel on the right. Phone (≤700px): a bottom sheet over the web. */
+
+.shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100svh;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.shell-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding-block: var(--space-4);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  min-width: 0;
+}
+
+.shell-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--ink);
+}
+
+.shell-brand svg {
+  color: var(--info);
+}
+
+.shell-wordmark {
+  font-weight: 300;
+  font-size: 18px;
+  letter-spacing: 0.38em;
+  text-transform: uppercase;
+}
+
+.shell-bar-spacer {
+  flex: 1;
+}
+
+.shell-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-chat);
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--text-h);
+}
+
+.shell-iconbtn:hover {
+  border-color: var(--glow);
+  box-shadow: var(--shadow-glow);
+}
+
+.shell-iconbtn[aria-pressed='true'],
+.shell-iconbtn[aria-expanded='true'] {
+  border-color: var(--glow);
+}
+
+.shell :focus-visible {
+  outline: 2px solid var(--glow);
+  outline-offset: 2px;
+}
+
+/* Conversations drawer: the list moves out of the way of the web */
+.shell-threads {
+  position: fixed;
+  z-index: 20;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(320px, 88vw);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  padding-left: max(14px, env(safe-area-inset-left, 0px));
+  background: var(--surface-veil);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border-right: 1px solid var(--silk-border);
+  box-shadow: var(--shadow);
+  overflow-y: auto;
+}
+
+.shell-threads[hidden] {
+  display: none;
+}
+
+.shell-threads-head {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.shell-threads-head .agent-new-chat {
+  flex: 1;
+}
+
+/* The stage: the 3D web, with the panel over it */
+.shell-stage {
+  position: relative;
+  overflow: hidden;
+  margin: 0 var(--space-5) var(--space-5);
+  border-radius: var(--radius-panel);
+  border: 1px solid var(--silk-border);
+  background: radial-gradient(ellipse at 34% 46%, #121a2c 0%, #070a11 58%, var(--bg-deep) 100%);
+  min-height: 0;
+}
+
+.shell-poster,
+.shell-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.shell-poster {
+  pointer-events: none;
+}
+
+.shell-canvas {
+  display: block;
+  opacity: 0;
+  transition: opacity var(--dur-scene-fade) var(--ease-in-out);
+  touch-action: pan-y;
+}
+
+.shell-canvas.on {
+  opacity: 1;
+}
+
+.shell-perf {
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  z-index: 3;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(5, 7, 12, 0.6);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  pointer-events: none;
+}
+
+.shell-panel {
+  position: absolute;
+  z-index: 2;
+  top: var(--space-7);
+  right: var(--space-7);
+  bottom: var(--space-7);
+  width: clamp(340px, 34%, 500px);
+  display: flex;
+  flex-direction: column;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--silk-border);
+  border-radius: var(--radius-panel);
+  overflow: hidden;
+}
+
+.shell-convo {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  scrollbar-width: thin;
+}
+
+.shell-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.shell-turn--old {
+  gap: var(--space-2);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid rgba(199, 211, 228, 0.1);
+  opacity: 0.82;
+}
+
+.shell-turn--old .cd-said {
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.shell-turn--old .cd-narration {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--silk);
+}
+
+.shell-turn--old .cd-receipt {
+  padding: 4px 8px;
+  font-size: 12px;
+  background: transparent;
+}
+
+.shell-working {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  color: var(--glow);
+  font-size: 13.5px;
+}
+
+.shell-welcome {
+  margin: auto 0;
+  padding: var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  align-items: flex-start;
+}
+
+.shell-welcome h1 {
+  font-weight: 300;
+  letter-spacing: 0.38em;
+  text-transform: uppercase;
+}
+
+.shell-welcome p {
+  color: var(--silk);
+}
+
+/* the composer sits at the foot of the panel */
+.shell-panel .agent-composer {
+  border-top: 1px solid var(--silk-border);
+}
+
+.shell-panel .agent-composer textarea {
+  min-height: 42px;
+}
+
+.agent-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: var(--radius-chat);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Phone: the web on top, the panel as a bottom sheet */
+.shell[data-view='phone'] .shell-stage {
+  margin: 0 var(--space-3) var(--space-3);
+}
+
+.shell[data-view='phone'] .shell-panel {
+  top: auto;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: var(--space-3);
+  width: auto;
+  max-height: 62%;
+  border-radius: 22px;
+}
+
+.shell[data-view='phone'] .shell-convo {
+  padding: var(--space-6);
+}
+
+.shell[data-view='phone'] .shell-turn--old {
+  display: none;
+}
+
+.shell[data-view='phone'] .cd-step {
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+}
+
+.shell[data-view='phone'] .cd-step .app {
+  display: none;
+}
+
+.shell[data-view='phone'] .shell-sound {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-canvas,
+  .cd-panel {
+    transition: none;
+  }
+}
+
+.shell[data-view='phone'] .shell-wordmark {
+  display: none;
+}
