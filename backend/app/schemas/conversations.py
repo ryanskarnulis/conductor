@@ -108,3 +108,6 @@ class TurnActivityRead(BaseModel):
     tool: str | None = None
     iteration: int | None = None
     elapsed_seconds: float | None = None
+    # A compiled plan's ack (#70): what conductor is about to do, said as soon
+    # as the plan is valid ("On it, asking music."). Never a claim of done.
+    ack: str | None = None

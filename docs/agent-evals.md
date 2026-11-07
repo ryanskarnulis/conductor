@@ -241,3 +241,97 @@ Gate tier, 5-sample blocks; S5 also at 20.
   crowded out the answer, and every search re-spoke). A read now owes one
   thing it found; a write owes every title. The narrator re-speaks in about 1
   of 20 S5 turns.
+
+## Plan-level evals (#70)
+
+`backend/tests/test_plan_evals.py` measures the compiler alone. Each sample is
+one compile through the shipped prompt, schema, validator and repair, against
+the real llama-server and the workspace manifests. Nothing runs. A sample
+passes when the plan is valid and matches one of the case's shapes
+(`plan_cases.py`).
+
+The cases are:
+- spike D1's bench: every routing golden re-labelled as a plan, the S1–S16
+  scenarios and the held-out set;
+- eight long-plan cases (6–10 steps when compiled one thing per step), added
+  when the 5-step limit went. They check coverage, not exact shape.
+
+The gate is per group. Red takes evidence: the Wilson upper bound below the
+floor. Floors sit a little under the spike's 12B v2 rates.
+
+```bash
+cd backend
+CONDUCTOR_PLAN_EVALS=1 CONDUCTOR_EVAL_FLEET_DIR=~/Documents/workspace \
+    .venv/bin/pytest tests/test_plan_evals.py -v -s
+```
+
+Any change to the planner prompt, the step kinds, the validator or a fleet
+app's manifest runs this suite, as well as the session evals with the
+compiler on.
+
+### Baseline: 2026-11-06, gemma-4-12b, 5 samples per case
+
+| group | floor | first run | shipped prompt |
+|---|---|---|---|
+| golden | 0.8 | 82/105 | 88/105 |
+| cross | 0.8 | 30/35 | 30/35 |
+| ref | 0.85 | 20/20 | 19/20 |
+| control | 0.8 | **11/25** | 20/25 |
+| memory | 0.8 | 8/10 | 7/10 |
+| knowledge | 0.65 | 15/15 | 15/15 |
+| hard | 0.5 | **0/5** | 5/5 |
+| self | 0.55 | 14/15 | 6/15 |
+| holdout | 0.85 | 45/50 | 45/50 |
+| long | 0.7 | 34/40 | 37/40 |
+
+Every plan was valid in both runs. Long plans ran to 7 steps at a 2.2 s
+median compile; single-app compiles take 0.5–0.6 s.
+
+The first run's reds were fixed in the prompt, each change A/B'd live first:
+- **"yes" to a waiting question came back as an answer, not `confirm`.** A
+  rule line took it from 1/10 to 10/10.
+- **A plan added steps after `think`.** `think` is now always last.
+- **"reset the chess game" became a destructive ask to music.** The
+  "destructive" wording is now scoped to what an ask app keeps, and "the game"
+  always means chess.
+
+Two misses were fixed in code instead of the prompt:
+- **Invented `ask_user` options.** The validator now refuses options that
+  State doesn't name.
+- **Self questions filed as `knowledge`.** A knowledge answer sees the ledger
+  facts and flags `about_you` under a schema. This is why `self` reads 6/15
+  here while S16 is 5/5 end to end.
+
+Known misses:
+- `chess-resign` (1–2/5) and `chess-analysis` (0/5, the glance) are fixes for
+  chess's manifest examples.
+- `refuse-playback` is #36.
+- `amend` compiles to an ask. It falls back to the loop until #74.
+
+### Session evals with the compiler on (#70, 2026-11-06)
+
+`CONDUCTOR_COMPILER=1` covers the gate tier and the frontier tier. The planner
+prompt is final.
+
+| scenario | narrator (#65) | compiled |
+|---|---|---|
+| S1 | 5/5 | 5/5 |
+| S2 | 5/5 | 5/5 |
+| S2r | 5/5 | 5/5 |
+| S5 | 5/5 | 5/5 |
+| S7 | 5/5 | 5/5 |
+| S8 | 5/5 | 5/5 |
+| S9 | 5/5 | 5/5 |
+| S16 | 5/5 | 5/5 |
+| S6 (frontier) | 0/5 | 2/5 |
+| S10 (frontier) | 5/5 | 5/5 |
+
+- Claims were 93/94 backed. The one miss is S4's "playlist download", which
+  is cross-app and runs on the loop.
+- Turn p50s were 1.3–3.2 s.
+- Before the final prompt, S7 read 4/10. The planner offered invented
+  options, then rewrote the request into a search. The options rule and the
+  keep-their-words line fixed it.
+- S3, S4, S11, S13, S14 and S15 stay 0/5. They need cross-app data flow (#72),
+  jobs (#76), undo (#74) or `think` (#78), which fall back to the loop today.
+- S12 is still `unsupported: tool:ask_chess`.

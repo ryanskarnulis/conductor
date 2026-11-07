@@ -57,7 +57,7 @@ KIND_RUN = "run"
 # ``bad_args`` (tool-call arguments that were not a JSON object), ``failed``
 # (no usable answer).
 CallStatus = Literal["ok", "truncated", "bad_args", "failed"]
-CallRole = Literal["planner", "narrator"]
+CallRole = Literal["planner", "narrator", "compiler", "speaker"]
 
 
 def new_run_id() -> str:
@@ -146,6 +146,8 @@ class RunTrace:
     # Where the person is (``Now.surface``) and how the reply was made (#65).
     surface: str | None = None
     narration: dict[str, Any] | None = None
+    # The compiled plan (#70), when the loop compiles turns.
+    plan: dict[str, Any] | None = None
     system_prompt_sha256: str | None = None
     tool_schemas_sha256: str | None = None
     tools_offered: int = 0
@@ -170,6 +172,7 @@ class RunTrace:
             "context": self.context,
             "surface": self.surface,
             "narration": self.narration,
+            "plan": self.plan,
             "stop_reason": result.stop_reason,
             "error": error,
             "reply": result.reply,

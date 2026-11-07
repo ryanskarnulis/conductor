@@ -63,6 +63,7 @@ class _CapturingProvider:
         tools: Sequence[ToolSpec] | None = None,
         enable_thinking: bool = False,
         max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ChatResult:
         self.max_tokens.append(max_tokens)
         return self._turns.pop(0)

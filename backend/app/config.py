@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     # A completed run's reply is the narrator's (#65, app/ai/narrator.py).
     # Off replies with the planner's own words: an A/B switch for the evals.
     conductor_narrator: bool = True
+    # Compiled plans (#70, app/ai/interpreter.py): each turn is compiled to a
+    # typed plan and the interpreter runs single-app plans; the rest falls back
+    # to the loop. On since #70's gates passed (docs/agent-evals.md); off is the
+    # old loop alone, the switch until #75 retires it.
+    conductor_compiler: bool = True
     # Diagnostics (#62), both off by default. One JSONL record per turn
     # (app/ai/trace.py), and the exact bytes of every model call
     # (app/ai/context_capture.py; heavy, a debugging switch).

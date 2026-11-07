@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.ai import confirmation, turn_context
 from app.ai.loop import AgentLoop, AgentRunFailed, LoopActivity, loop_from_settings
+from app.ai.plan import PausedPlan
 from app.ai.providers.llamacpp import provider_from_settings
 from app.ai.state_block import Now
 from app.api import turn_activity
@@ -61,7 +62,9 @@ def get_agent_loop(request: Request) -> Generator[AgentLoop, None, None]:
     provider = provider_from_settings()
     try:
         yield loop_from_settings(
-            provider, fleet_section=getattr(request.app.state, "fleet_section", None)
+            provider,
+            fleet_section=getattr(request.app.state, "fleet_section", None),
+            fleet=getattr(request.app.state, "fleet", None),
         )
     finally:
         provider.close()
@@ -88,6 +91,15 @@ def _stored_turns(db: Session, conversation_id: int) -> list[dict[str, Any]]:
     except Exception as exc:
         logger.warning("stored_turns_failed", error=str(exc), error_type=type(exc).__name__)
         return []
+
+
+def _paused_plan(db: Session, conversation_id: int) -> PausedPlan | None:
+    """Last turn's compiled plan waiting on the person; a failed read is none."""
+    try:
+        return ledger.paused_plan(db, conversation_id)
+    except Exception as exc:
+        logger.warning("paused_plan_failed", error=str(exc), error_type=type(exc).__name__)
+        return None
 
 
 def _get_or_404(db: Session, conversation_id: int) -> Conversation:
@@ -157,6 +169,7 @@ def get_turn_activity(conversation_id: int, db: Session = Depends(get_db)) -> Tu
         tool=activity.tool,
         iteration=activity.iteration,
         elapsed_seconds=round(time.monotonic() - activity.started_at, 1),
+        ack=activity.ack,
     )
 
 
@@ -266,7 +279,11 @@ def post_message(
 
     def report(activity: LoopActivity) -> None:
         turn_activity.update(
-            conversation_id, kind=activity.kind, tool=activity.tool, iteration=activity.iteration
+            conversation_id,
+            kind=activity.kind,
+            tool=activity.tool,
+            iteration=activity.iteration,
+            ack=activity.ack,
         )
 
     stop = turn_activity.begin(conversation_id)
@@ -279,6 +296,8 @@ def post_message(
                 on_activity=report,
                 conversation_id=str(conversation_id),
                 stop=stop,
+                paused=_paused_plan(db, conversation.id),
+                self_facts=lambda: ledger.self_report(db, conversation.id),
             )
     except AgentRunFailed as exc:
         logger.error(
