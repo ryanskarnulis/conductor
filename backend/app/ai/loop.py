@@ -220,13 +220,9 @@ DEFAULT_MAX_TOOL_CALLS = 12
 # ``finish_reason`` of a call the ``max_tokens`` cap cut off.
 _FINISH_LENGTH = "length"
 
-_TOOL_CALL_LIMIT_ERROR = (
-    f"{run_record.NOT_RUN_PREFIX}the run reached its limit of tool calls before this call"
-)
+_TOOL_CALL_LIMIT_ERROR = run_record.TOOL_CALL_LIMIT_ERROR
 _INTERNAL_ERROR = "internal error: the tool call failed unexpectedly"
-_CRASHED_BATCH_ERROR = (
-    f"{run_record.NOT_RUN_PREFIX}an earlier tool call in this turn failed unexpectedly"
-)
+_CRASHED_BATCH_ERROR = run_record.CRASHED_BATCH_ERROR
 
 
 @dataclass(frozen=True)

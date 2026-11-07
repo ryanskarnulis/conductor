@@ -430,3 +430,150 @@ def test_a_read_names_one_thing_it_found_not_every_title() -> None:
         "what did we decide?", "…", [record], surface=None, chat=lambda m, c: text_turn("Steel.")
     )
     assert told.reply == "Steel. For the record: found “garage shelves”, “sweep the floor”."
+
+
+# --- a plan's steps that never ran (#113) ---------------------------------------------------
+
+# How the interpreter records a plan's unrun steps: after a failed step (#70),
+# and when the data flow refuses one (#72).
+AFTER_FAILURE = "not run: an earlier step of the plan didn't finish"
+NO_NAME = "not run: s1 gave no name to pass on"
+OUTSIDE_DELETE = "not run: outside text from s1 can't choose what to delete"
+
+
+def _done_task(title: str = "Water the plants") -> ToolCallRecord:
+    return ToolCallRecord(
+        tool="ask_tasks",
+        arguments={"message": "add it"},
+        result="ok",
+        app_record=_task_record(title),
+    )
+
+
+def _unrun(error: str, app: str = "music", message: str = "delete {s1}") -> ToolCallRecord:
+    return ToolCallRecord(tool=f"ask_{app}", arguments={"message": message}, error=error)
+
+
+def _scripted(*replies: str) -> tuple[narrator.Chat, list[list[dict[str, Any]]]]:
+    seen: list[list[dict[str, Any]]] = []
+    queue = list(replies)
+
+    def chat(messages: list[dict[str, Any]], max_tokens: int) -> Any:
+        seen.append(messages)
+        return text_turn(queue.pop(0))
+
+    return chat, seen
+
+
+def _receipt(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    opening = messages[1]["content"]
+    steps: list[dict[str, Any]] = json.loads(opening.split("Receipts:\n", 1)[1].split("\n\n")[0])[
+        "steps"
+    ]
+    return steps
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (AFTER_FAILURE, "an earlier part of the request didn't finish"),
+        (NO_NAME, "an earlier part gave no name to pass on"),
+        (OUTSIDE_DELETE, "outside text from an earlier part can't choose what to delete"),
+    ],
+)
+def test_an_unrun_plan_step_is_in_the_receipt_in_plain_words(error: str, reason: str) -> None:
+    records = [_done_task(), _unrun(error)]
+    chat, seen = _scripted(
+        f"Added “Water the plants” (say undo to trash it); I didn't delete anything: {reason}."
+    )
+    narration = narrator.narrate("add it, then delete it", None, records, surface=None, chat=chat)
+    steps = _receipt(seen[0])
+    assert steps[1] == {
+        "step": 2,
+        "result": "not_run",
+        "app": "music",
+        "would_have_asked": "delete that",
+        "reason": reason,
+    }
+    assert not re.search(r"\bs\d+\b|step of the plan|\{", " ".join(map(str, steps[1].values())))
+    assert narration.path == "narrated"
+
+
+def test_a_reply_silent_about_the_unrun_step_gets_it_appended() -> None:
+    records = [_done_task(), _unrun(NO_NAME)]
+    chat, _ = _scripted("Added “Water the plants”; say undo to trash it.")
+    narration = narrator.narrate("add it, then delete it", None, records, surface=None, chat=chat)
+    assert narration.path == "appended"
+    assert narration.reply == (
+        "Added “Water the plants”; say undo to trash it. For the record: didn't ask music "
+        "to delete that, since an earlier part gave no name to pass on."
+    )
+    assert not re.search(r"\bs\d+\b", narration.reply or "")
+
+
+def test_a_failed_step_and_the_steps_after_it_are_both_spoken() -> None:
+    failed = ToolCallRecord(
+        tool="ask_tasks", arguments={"message": "add milk"}, error="tasks is down."
+    )
+    skipped = _unrun(AFTER_FAILURE, app="music", message="play something calm")
+    chat, seen = _scripted("Tasks is down, so milk isn't on the list.")
+    narration = narrator.narrate(
+        "add milk, then play something calm", None, [failed, skipped], surface=None, chat=chat
+    )
+    assert [step["result"] for step in _receipt(seen[0])] == ["failed", "not_run"]
+    # "isn't" says something didn't happen, but nothing names the music step.
+    assert narration.reply == (
+        "Tasks is down, so milk isn't on the list. For the record: didn't ask music to "
+        "play something calm, since an earlier part of the request didn't finish."
+    )
+
+
+def test_a_reply_that_names_what_didnt_run_is_left_alone() -> None:
+    records = [_done_task(), _unrun(OUTSIDE_DELETE, message="delete {s1}")]
+    reply = "Added “Water the plants”; say undo to trash it. I didn't delete anything."
+    chat, _ = _scripted(reply)
+    narration = narrator.narrate("add it, then delete it", None, records, surface=None, chat=chat)
+    assert (narration.reply, narration.path) == (reply, "narrated")
+
+
+def test_a_spoken_reply_keeps_two_sentences_with_the_unrun_step() -> None:
+    records = [_done_task(), _unrun(NO_NAME)]
+    chat, _ = _scripted("Added “Water the plants”. Say undo to trash it. All set.")
+    narration = narrator.narrate(
+        "add it, then delete it", None, records, surface="voice", chat=chat
+    )
+    sentences = re.split(r"(?<=[.!?])\s+", narration.reply or "")
+    assert len(sentences) == 2
+    assert sentences[1].startswith("For the record: didn't ask music to delete that")
+
+
+def test_the_fallback_reply_names_the_unrun_step() -> None:
+    def broken(messages: list[dict[str, Any]], max_tokens: int) -> Any:
+        raise ProviderRequestError("llama-server timed out")
+
+    records = [_done_task(), _unrun(NO_NAME)]
+    narration = narrator.narrate("add it, then delete it", None, records, surface=None, chat=broken)
+    assert narration.path == "fallback"
+    assert narration.reply == (
+        "For the record: create task “Water the plants”; didn't ask music to delete that, "
+        "since an earlier part gave no name to pass on (say undo to move it to the trash)."
+    )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "not run: the run reached its limit of tool calls before this call",
+        "not run: an earlier tool call in this turn failed unexpectedly",
+        "not run: you stopped the run before this call",
+        "Invalid arguments: message is required",
+        "Unknown tool ask_weather",
+    ],
+)
+def test_calls_the_loop_never_sent_stay_out(error: str) -> None:
+    records = [_done_task(), ToolCallRecord(tool="ask_music", arguments={}, error=error)]
+    reply = "Added “Water the plants”; say undo to trash it."
+    chat, seen = _scripted(reply)
+    narration = narrator.narrate("add it", None, records, surface=None, chat=chat)
+    assert len(_receipt(seen[0])) == 1
+    assert (narration.reply, narration.path) == (reply, "narrated")
