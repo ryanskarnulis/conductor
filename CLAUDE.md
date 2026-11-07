@@ -148,8 +148,17 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   one model-free path conductor offers a page.
 - **Note turns** (`POST …/notes`) record what the person did in the UI as the
   person's own turn — never an invented assistant reply.
-- **Single-worker constraint:** the in-memory turn-activity registry and rate
-  limiter pin the deployment to one uvicorn worker until #38 (SSE) ships.
+- **Single-worker by design:** conductor runs SQLite on one uvicorn worker,
+  and the in-memory turn-activity registry (the live channel) and rate limiter
+  rely on it; multi-worker safety is not a goal.
+- **The live channel** (#38, `app/api/turn_activity.py`): `GET …/events` is
+  SSE for the turn in flight: a snapshot on connect (so a reconnect loses
+  nothing), then beats, `plan`, `step_started`, `receipt`, `paused` and
+  `turn_ended`. Step events go through one seam (`app/ai/turn_events.py`);
+  a receipt is the step as the ledger journals it (`ledger.live_step`) and
+  lands only once its record exists, and `turn_ended` goes out after the
+  ledger commit. Queues and turn state are bounded; a lagging follower is
+  resynced from a snapshot. `GET …/activity` stays as the poll fallback.
 - **The delegate contract never assumes a text-only client** — voice
   convergence is a master-plan placeholder.
 - **The panel is the accessible truth; the 3D web is decoration** (#88). The

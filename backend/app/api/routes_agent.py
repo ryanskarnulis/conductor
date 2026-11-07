@@ -2,11 +2,13 @@
 
 ``POST /agent/conversations/{id}/messages`` is the one model-calling endpoint:
 it stores the user turn, binds the delegation context (DB-backed thread store,
-per-turn budget, audit driver), runs the master loop synchronously — v1 is
-non-streaming — then stores and returns the assistant turn. While it blocks,
-``GET /agent/conversations/{id}/activity`` reports what the loop is doing
-(``app/api/turn_activity.py``) so the UI can show "asking chess…" progress,
-and ``POST …/cancel`` stops it (#66, ``app/ai/stop.py``).
+per-turn budget, audit driver), runs the master loop synchronously, then
+stores and returns the assistant turn. While it blocks,
+``GET /agent/conversations/{id}/events`` streams what the turn is doing as
+Server-Sent Events (#38) and ``GET …/activity`` answers the same question
+for a poll (``app/api/turn_activity.py``), so the UI can show "asking chess…"
+and each step's receipt as it lands; ``POST …/cancel`` stops it (#66,
+``app/ai/stop.py``).
 
 Deltas from PCC's routes_agent: no ``X-Agent-Actor`` handling — conductor is
 the delegation root (STANDARD.md depth-1), so no other agent may drive this
@@ -16,16 +18,19 @@ binding and the activity endpoint, which PCC's local-tool agent doesn't need.
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import date
-from collections.abc import Generator, Sequence
+from collections.abc import AsyncIterator, Generator, Sequence
 from typing import Any
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi.responses import Response
+from fastapi.sse import EventSourceResponse, format_sse_event
 from sqlalchemy.orm import Session
 
-from app.ai import confirmation, turn_context
+from app.ai import confirmation, turn_context, turn_events
 from app.ai.loop import AgentLoop, AgentRunFailed, LoopActivity, loop_from_settings
 from app.ai.plan import PausedPlan
 from app.ai.providers.llamacpp import provider_from_settings
@@ -173,6 +178,55 @@ def get_turn_activity(conversation_id: int, db: Session = Depends(get_db)) -> Tu
     )
 
 
+@router.get(
+    "/conversations/{conversation_id}/events",
+    response_class=Response,
+    responses={200: {"content": {"text/event-stream": {}}, "description": "The turn's events"}},
+)
+def stream_turn_events(
+    conversation_id: int,
+    request: Request,
+    # Closed before the stream starts: a stream never holds a database connection.
+    db: Session = Depends(get_db, scope="function"),
+) -> EventSourceResponse:
+    """The conversation's turn as it happens, over Server-Sent Events (#38).
+
+    First a ``snapshot`` of the turn in flight (``active: false`` when there is
+    none), then each event as it is published: ``turn_started``, ``activity``
+    (the poll's beat), ``plan`` (the validated plan's steps and where this turn
+    starts in it), ``step_started``, ``receipt`` (the step as the ledger
+    journals it), ``paused`` and ``turn_ended`` (after the ledger committed
+    the turn), each with a rising ``id``. A quiet stream gets a heartbeat
+    comment. The stream ends after ``turn_ended``, or when no turn begins in
+    time; a reconnect starts over from a snapshot. 404s for an unknown
+    conversation. Runs on the event loop and never holds a worker thread.
+    """
+    _get_or_404(db, conversation_id)
+    return EventSourceResponse(
+        _sse(request, conversation_id),
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _sse(request: Request, conversation_id: int) -> AsyncIterator[bytes]:
+    events = turn_activity.follow(conversation_id)
+    try:
+        async for event in events:
+            if isinstance(event, turn_activity.Heartbeat):
+                if await request.is_disconnected():
+                    return
+                yield b": heartbeat\n\n"
+                continue
+            yield format_sse_event(
+                data_str=json.dumps(event.data, default=str),
+                event=event.kind,
+                id=str(event.id),
+                retry=turn_activity.RETRY_MS if event.kind == "snapshot" else None,
+            )
+    finally:
+        await events.aclose()
+
+
 @router.post("/conversations/{conversation_id}/cancel", response_model=RunCancelRead)
 def cancel_turn(
     conversation_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
@@ -287,43 +341,57 @@ def post_message(
         )
 
     stop = turn_activity.begin(conversation_id)
-    try:
-        with use_delegation_context(context):
-            run = loop.run(
-                data.content,
-                context=turn_opening,
-                surface=data.surface,
-                on_activity=report,
-                conversation_id=str(conversation_id),
-                stop=stop,
-                paused=_paused_plan(db, conversation.id),
-                self_facts=lambda: ledger.self_report(db, conversation.id),
-            )
-    except AgentRunFailed as exc:
-        logger.error(
-            "agent_run_failed",
-            conversation_id=conversation_id,
-            stop_reason=exc.result.stop_reason,
-            tool_calls=len(exc.result.tool_calls),
-            error=str(exc),
-        )
-        failed_message = None
-        if exc.result.tool_calls:
-            # Something ran: keep the record. A failure before any call leaves
-            # the user turn alone, as before.
-            failed_message = conversations_service.append_assistant_message(
-                db, conversation, exc.result
-            )
-        # The ledger keeps the turn either way: its words, how it ended, what ran.
-        ledger.close_turn(db, turn, exc.result, failed_message)
-        db.commit()
-        raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
-    finally:
-        turn_activity.end(conversation_id, stop)
 
-    assistant_message = conversations_service.append_assistant_message(db, conversation, run)
-    ledger.close_turn(db, turn, run, assistant_message)
-    db.commit()
+    def publish(kind: str, payload: dict[str, Any]) -> None:
+        turn_activity.publish(conversation_id, stop, kind, payload)
+
+    # How the turn ended, once the ledger has it: the stream's last word,
+    # sent only after the commit, so nothing says the turn ended before its
+    # record exists. An unexpected failure ends it with no stop reason.
+    ended: dict[str, Any] = {}
+    try:
+        try:
+            with use_delegation_context(context), turn_events.publishing(publish):
+                run = loop.run(
+                    data.content,
+                    context=turn_opening,
+                    surface=data.surface,
+                    on_activity=report,
+                    conversation_id=str(conversation_id),
+                    stop=stop,
+                    paused=_paused_plan(db, conversation.id),
+                    self_facts=lambda: ledger.self_report(db, conversation.id),
+                )
+        except AgentRunFailed as exc:
+            logger.error(
+                "agent_run_failed",
+                conversation_id=conversation_id,
+                stop_reason=exc.result.stop_reason,
+                tool_calls=len(exc.result.tool_calls),
+                error=str(exc),
+            )
+            failed_message = None
+            if exc.result.tool_calls:
+                # Something ran: keep the record. A failure before any call leaves
+                # the user turn alone, as before.
+                failed_message = conversations_service.append_assistant_message(
+                    db, conversation, exc.result
+                )
+            # The ledger keeps the turn either way: its words, how it ended, what ran.
+            ledger.close_turn(db, turn, exc.result, failed_message)
+            db.commit()
+            ended.update(
+                stop_reason=exc.result.stop_reason,
+                message_id=failed_message.id if failed_message else None,
+            )
+            raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
+
+        assistant_message = conversations_service.append_assistant_message(db, conversation, run)
+        ledger.close_turn(db, turn, run, assistant_message)
+        db.commit()
+        ended.update(stop_reason=run.stop_reason, message_id=assistant_message.id)
+    finally:
+        turn_activity.end(conversation_id, stop, **ended)
     return MessageExchange(
         user_message=MessageRead.model_validate(user_message),
         assistant_message=MessageRead.model_validate(assistant_message),
