@@ -46,17 +46,10 @@ backend dev `8301`, vite dev `5174`.
 
 Mirrors PCC byte-for-byte where reasonable: Python 3.11+ / FastAPI /
 SQLAlchemy 2.0 typed / Alembic for every schema change / soft deletes /
-strict mypy / ruff (line 100). React + Vite + TS strict. Docker: backend (no
-host port) + nginx frontend on `8300`.
-
-**The look grows from Night-Silk** (#85) into conductor's design system
-([artifact](https://claude.ai/artifact/QWR5kpuitBY2rJYz1eFxN7), #86):
-`styles/silk.css` is a verbatim copy of `../gateway/theme/silk.css` (re-copy
-to fix drift, never edit); `tokens.css` maps conductor's semantic names onto
-it; `conductor.css` holds the design system's additions (motion, scene,
-spacing, radii), generated from its `tokens.json` — change a value there and
-regenerate. Components live in `src/design/` (`cd-` classes in
-`styles/components.css`), the shell in `features/agent/`.
+strict mypy / ruff (line 100). React + Vite + TS strict, Night-Silk tokens
+(`frontend/src/styles/tokens.css` sourced from `../gateway/theme/silk.css` —
+re-copy to fix drift, never edit). Docker: backend (no host port) + nginx
+frontend on `8300`.
 
 ## Rules
 
@@ -105,6 +98,19 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   conductor's `unknown` receipt, never "nothing changed". Journaling runs in
   savepoints and never costs the turn. The state block's recent entities
   come from it.
+- **Compiled plans** (#70, `CONDUCTOR_COMPILER`): the 12B compiles each turn
+  to a typed plan under `json_schema` (`app/ai/plan.py`, `compiler.py`), code
+  validates it (one repair, else the loop takes the turn), and the
+  interpreter (`app/ai/interpreter.py`) runs single-app `ask`/`open`/
+  `ask_user`/`confirm` plans and the direct answers (`app/ai/speaker.py`).
+  Plans have no designed length; 12 steps is a runaway ceiling. Every other
+  kind, cross-app plans and `{sN}` data flow fall back to the loop until
+  their issue lands; the fallen-back plan stays on the ledger. A destructive
+  ask to an app without `confirms` pauses on code's question; `ask_user` and
+  an app's `confirm_required` pause too, and the next turn resumes the same
+  plan. The planner prompt and the ten step kinds stay byte-stable: plan-level
+  evals (`tests/test_plan_evals.py`, `CONDUCTOR_PLAN_EVALS=1`) gate any change
+  to them, to the compiler, or to a manifest.
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
   depth stacks.
 - **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every
@@ -125,8 +131,3 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   limiter pin the deployment to one uvicorn worker until #38 (SSE) ships.
 - **The delegate contract never assumes a text-only client** — voice
   convergence is a master-plan placeholder.
-- **The panel is the accessible truth; the 3D web is decoration** (#88). The
-  Living Web (`src/scene/livingWeb.js`, three.js) is `aria-hidden`, loads as
-  a lazy chunk after first paint, and shows nothing the panel doesn't say in
-  words. Both read one derivation (`turnView.ts` → `sceneState.ts`), and
-  nothing looks done before its receipt says so.

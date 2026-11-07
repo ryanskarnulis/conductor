@@ -18,41 +18,6 @@ export interface ToolCallRecord {
    * for the UI and never sent to the model — it is how a panel can tell what a
    * turn actually did without parsing the reply text for it. */
   app_tools?: string[] | null
-  /** The app's typed record of what its tools did (delegate v1.1): one entry
-   * per tool call. Persisted for the UI, never sent to the model. */
-  app_record?: AppRecordEntry[] | null
-  /** The question the app is waiting on (#68), with its single-use token.
-   * Persisted and shown, never sent to the model. */
-  app_confirm?: AppConfirm | null
-}
-
-/** One entity a tool call changed or found (delegate v1.1 `touched`). The
- * title is the app's text: render it as text, never as markup. */
-export interface TouchedRef {
-  app: string
-  kind: string
-  id: string
-  title?: string | null
-}
-
-/** One entry of an app's typed record (agent-standard delegate-api v1.1). */
-export interface AppRecordEntry {
-  tool: string
-  outcome: 'done' | 'refused' | 'looked_up' | 'not_run' | string
-  touched?: TouchedRef[] | null
-  count?: number | null
-  reason?: string | null
-  undo?: { handle: string; how: string } | { none: string } | null
-}
-
-/** What conductor keeps of an app's `confirm_required` (backend AppConfirm). */
-export interface AppConfirm {
-  app: string
-  thread_id: number
-  token: string
-  tool: string
-  question: string
-  expires_at?: string | null
 }
 
 /** STANDARD.md §3's stop vocabulary, the same strings in every app. */

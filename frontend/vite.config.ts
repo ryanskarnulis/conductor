@@ -35,12 +35,6 @@ export default defineConfig(({ mode }) => {
       // proxies /api in the docker deployment; this is the dev equivalent.
       proxy: { '/api': 'http://127.0.0.1:8301' },
     },
-    build: {
-      // Budget (#88): the entry stays ≤130 kB gzip. three.js and the Living Web
-      // scene are one lazy chunk (~147 kB gzip, ~563 kB raw) loaded after first
-      // paint, so the warning limit sits just above it rather than at Vite's 500.
-      chunkSizeWarningLimit: 600,
-    },
     test: {
       environment: 'jsdom',
       setupFiles: './src/test/setup.ts',

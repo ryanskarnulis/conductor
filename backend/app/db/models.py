@@ -154,12 +154,12 @@ class LedgerTurn(Base, TimestampMixin):
 class LedgerPlan(Base, TimestampMixin):
     """What a turn set out to do.
 
-    ``source`` is ``loop`` today: the plan is whatever the loop's tool calls
-    were, recorded after the fact, so ``body`` is null. The compiler (#70)
-    writes ``compiled`` plans with their typed ``body``; in shadow mode a turn
-    carries both. ``answer`` is a direct answer's kind
-    (``knowledge``/``decline``/``self``/``chat``) when a compiled plan has no
-    steps.
+    ``source`` is ``loop`` when the plan is whatever the loop's tool calls
+    were, recorded after the fact (``body`` null), or ``compiled`` (#70) with
+    its typed ``body``. A compiled plan the interpreter couldn't run yet is
+    kept with ``acted`` false beside the loop plan that took the turn.
+    ``answer`` is a direct answer's kind (``knowledge``/``decline``/``self``/
+    ``chat``) when a compiled plan has no steps.
     """
 
     __tablename__ = "ledger_plans"
@@ -169,7 +169,15 @@ class LedgerPlan(Base, TimestampMixin):
     source: Mapped[str] = mapped_column(default="loop")
     body: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     answer: Mapped[str | None] = mapped_column(default=None)
-    acted: Mapped[bool] = mapped_column(default=True)  # false for a shadow plan
+    acted: Mapped[bool] = mapped_column(default=True)  # false: the loop took the turn
+    # A compiled plan's fate (#70): ran, answered, paused, fell_back or invalid,
+    # with why (the fallback reason, or where it stopped). A paused plan keeps
+    # why it waits, the 0-based step it resumes at, and the app it's about.
+    status: Mapped[str | None] = mapped_column(default=None)
+    note: Mapped[str | None] = mapped_column(default=None)
+    pause: Mapped[str | None] = mapped_column(default=None)
+    resume_at: Mapped[int | None] = mapped_column(default=None)
+    pause_app: Mapped[str | None] = mapped_column(default=None)
 
     turn: Mapped[LedgerTurn] = relationship(back_populates="plans")
     steps: Mapped[list[LedgerStep]] = relationship(back_populates="plan", order_by="LedgerStep.seq")

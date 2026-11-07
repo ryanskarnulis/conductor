@@ -43,8 +43,15 @@ class ScriptedProvider:
         tools: Sequence[ToolSpec] | None = None,
         enable_thinking: bool = False,
         max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ChatResult:
-        self.requests.append({"messages": list(messages), "tools": list(tools or [])})
+        self.requests.append(
+            {
+                "messages": list(messages),
+                "tools": list(tools or []),
+                "response_format": response_format,
+            }
+        )
         assert self._turns, "provider called more times than scripted"
         turn = self._turns.pop(0)
         if isinstance(turn, Exception):

@@ -318,7 +318,11 @@ def live(
 def _seeded_loop() -> Generator[AgentLoop, None, None]:
     provider = eval_seed.seeded_provider()
     try:
-        yield loop_from_settings(provider, fleet_section=getattr(app.state, "fleet_section", None))
+        yield loop_from_settings(
+            provider,
+            fleet_section=getattr(app.state, "fleet_section", None),
+            fleet=getattr(app.state, "fleet", None),
+        )
     finally:
         provider.close()
 

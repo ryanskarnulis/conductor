@@ -53,7 +53,10 @@ def configure_logging(stream: TextIO | None = None) -> None:
         processors=shared_processors + [structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-        cache_logger_on_first_use=True,
+        # Production only: a logger cached on first use keeps the processors of
+        # that moment, so in tests (several app lifespans per session) a later
+        # ``structlog.testing.capture_logs`` would never see its events.
+        cache_logger_on_first_use=settings.app_env == "production",
     )
 
     formatter = structlog.stdlib.ProcessorFormatter(

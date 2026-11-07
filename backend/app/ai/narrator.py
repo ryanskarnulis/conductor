@@ -520,6 +520,21 @@ def _clean(title: str) -> str:
     return title
 
 
+def record_line(records: Sequence[ToolCallRecord], surface: str | None) -> str:
+    """Code's one line for what ran before a question (empty when nothing did)."""
+    return _appendix(_facts(records), spoken=surface in SPOKEN)
+
+
+def fit(text: str, surface: str | None) -> str:
+    """A reply shaped for its surface: spoken ones lose markdown and keep at
+    most two sentences (for the speaker's direct answers, #70)."""
+    spoken = surface in SPOKEN
+    shaped = _shape(text, spoken)
+    if spoken:
+        shaped = " ".join(_sentences(shaped)[:2])
+    return shaped
+
+
 def _shape(text: str, spoken: bool) -> str:
     """Spoken replies: no markdown, one line."""
     if not spoken:
