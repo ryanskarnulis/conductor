@@ -1,7 +1,7 @@
 import type { ToolCallRecord, TurnActivity } from '../../types/agent'
 
 /** Pure helpers turning conductor's tool names (`ask_<app>`, `open_<app>`,
- * `list_agents`) into human labels — shared by the trajectory list and the
+ * `look_<app>`, `list_agents`) into human labels — shared by the trajectory list and the
  * live progress line so both always agree on what "ask_chess" is called. */
 
 /** The app name behind a prefixed tool (`ask_<app>`, `open_<app>`), or null.
@@ -22,6 +22,11 @@ export function openedAppFromTool(tool: string): string | null {
   return appFrom(tool, 'open_')
 }
 
+/** The app behind a `look_<app>` glance read (a plan's `look` step), or null. */
+export function lookedAtFromTool(tool: string): string | null {
+  return appFrom(tool, 'look_')
+}
+
 /** One-line summary of a persisted trajectory entry: "Asked chess",
  * "Opened chess", "Checked the fleet", or a generic fallback. */
 export function describeToolCall(record: ToolCallRecord): string {
@@ -29,6 +34,8 @@ export function describeToolCall(record: ToolCallRecord): string {
   if (asked !== null) return `Asked ${asked}`
   const opened = openedAppFromTool(record.tool)
   if (opened !== null) return `Opened ${opened}`
+  const looked = lookedAtFromTool(record.tool)
+  if (looked !== null) return `Looked at ${looked}`
   if (record.tool === 'list_agents') return 'Checked the fleet'
   return `Ran ${record.tool}`
 }
@@ -41,6 +48,8 @@ export function activityLabel(activity: TurnActivity | null): string {
     if (asked !== null) return `Asking ${asked}…`
     const opened = openedAppFromTool(activity.tool)
     if (opened !== null) return `Opening ${opened}…`
+    const looked = lookedAtFromTool(activity.tool)
+    if (looked !== null) return `Looking at ${looked}…`
     if (activity.tool === 'list_agents') return 'Checking the fleet…'
     return `Running ${activity.tool}…`
   }

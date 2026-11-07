@@ -75,6 +75,25 @@ describe('buildTurns', () => {
     expect(turns[0].receipts[0]).toMatchObject({ verb: 'Queued', entity: '“Honey”' })
   })
 
+  it('shows a look as a look step with a found receipt, and no ask', () => {
+    const turns = buildTurns(
+      [
+        msg({ id: 1, content: 'what is due today?' }),
+        msg({
+          id: 2,
+          role: 'assistant',
+          content: 'Pay rent is due.',
+          stop_reason: 'completed',
+          tool_calls: [{ tool: 'look_tasks', arguments: {}, result: '{}', error: null, app_record: [{ tool: 'glance', outcome: 'looked_up', count: 1, touched: [{ app: 'tasks', kind: 'task', id: '41', title: 'Pay rent' }] }] }],
+        }),
+      ],
+      null,
+      null,
+    )
+    expect(turns[0].steps[0]).toMatchObject({ kind: 'look', app: 'PCC', appKey: 'tasks', state: 'done' })
+    expect(turns[0].receipts[0]).toMatchObject({ verb: 'Found', app: 'PCC', entity: '“Pay rent”' })
+  })
+
   it('marks the step an app is waiting on, and only on the last turn', () => {
     const waiting = buildTurns([msg({ id: 1 }), msg({ id: 2, role: 'assistant', tool_calls: [askTasks({ app_confirm: confirm })] })], null, null)
     expect(waiting[0].steps[0].state).toBe('wait')

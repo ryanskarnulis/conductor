@@ -181,7 +181,13 @@ SELF_REPORT_TURNS = 3
 
 # Plain words for the self-report, so the speaker never reads a tool name or a
 # bare "done" as a claim that something was completed (S16).
-_STEP_WORDS = {"ask": "asked", "open": "opened", "confirm": "said yes to", "local": "looked up"}
+_STEP_WORDS = {
+    "ask": "asked",
+    "look": "looked at",
+    "open": "opened",
+    "confirm": "said yes to",
+    "local": "looked up",
+}
 _OUTCOME_WORDS = {
     "done": "it answered",
     "looked_up": "it answered",
@@ -329,6 +335,9 @@ def step_kind(tool: str, arguments: dict[str, Any]) -> tuple[str, str | None]:
         return "ask", tool.removeprefix("ask_")
     if tool.startswith("open_"):
         return "open", tool.removeprefix("open_")
+    if run_record.is_look(tool):
+        # A glance (#73): the app's name as the plan wrote it (hyphens flatten).
+        return "look", tool.removeprefix(run_record.LOOK_PREFIX)
     if tool == confirmation.CONFIRM_TOOL:
         return "confirm", confirmation.record_app(tool, arguments)
     if tool in run_record.READ_TOOLS:
@@ -405,7 +414,7 @@ def _journal_step(db: Session, plan: LedgerPlan, seq: int, record: ToolCallRecor
     )
     db.add(step)
     db.flush()
-    if app is None or kind not in ("ask", "confirm"):
+    if app is None or kind not in ("ask", "confirm", "look"):
         return
     if record.app_record is not None:
         for entry_seq, entry in enumerate(record.app_record, start=1):

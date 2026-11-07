@@ -18,9 +18,11 @@ targets, policy and budgets; a plan with problems gets one repair, then the
 turn falls back to the loop. :func:`fallback_reason` says whether the
 interpreter can run a valid plan yet: it runs ``ask``/``open``/``ask_user``/
 ``confirm`` plans across apps, with ``{sN}`` data flow between them (#72), and
-the direct answers; every other kind (``look``, ``recall``, ``cancel``,
-``amend``, ``undo``, ``think``) falls back to the loop until its issue lands
-(#73, #74, #78, #80). :func:`reads_only` says which asks may run in parallel.
+the direct answers, and ``look`` (#73: a plain read of an app's glance, offered
+only for apps whose manifest declares one); every other kind (``recall``,
+``cancel``, ``amend``, ``undo``, ``think``) falls back to the loop until its
+issue lands (#74, #78, #80). :func:`reads_only` says which asks may run in
+parallel.
 Pure: no I/O.
 """
 
@@ -44,7 +46,7 @@ StepKind = Literal[
 ]
 
 # What the interpreter runs; the rest fall back to the loop.
-RUNNABLE_KINDS: frozenset[str] = frozenset({"ask", "open", "ask_user", "confirm"})
+RUNNABLE_KINDS: frozenset[str] = frozenset({"ask", "look", "open", "ask_user", "confirm"})
 
 # ``{sN}`` (or ``{sN.field}``): what step N touched, filled in by code (#72).
 REF = re.compile(r"\{(s(?:[1-9]|1[0-2]))(?:\.[a-z_]+)?\}")
@@ -168,7 +170,7 @@ def schema(fleet: Fleet, *, resumable: bool = False) -> dict[str, Any]:
     """
     ask_apps = sorted(app.name for app in fleet.agent_apps())
     open_apps = sorted(app.name for app in fleet.open_apps())
-    all_apps = sorted({*ask_apps, *open_apps})
+    look_apps = sorted(app.name for app in fleet.glance_apps())
     ids = {"type": "string", "enum": list(STEP_IDS)}
 
     def step(kind: str, **fields: dict[str, Any]) -> dict[str, Any]:
@@ -191,8 +193,8 @@ def schema(fleet: Fleet, *, resumable: bool = False) -> dict[str, Any]:
                 destructive={"type": "boolean"},
             )
         )
-    if all_apps:
-        kinds.append(step("look", app={"type": "string", "enum": all_apps}))
+    if look_apps:
+        kinds.append(step("look", app={"type": "string", "enum": look_apps}))
     if open_apps:
         kinds.append(step("open", app={"type": "string", "enum": open_apps}, intent=text))
     kinds += [
@@ -299,8 +301,8 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
                 found.append(f"{step.id} opens {step.app}, which can't be opened")
             if index != len(steps) - 1:
                 found.append("open must be the last step")
-        if isinstance(step, Look) and checks.fleet.get(step.app) is None:
-            found.append(f"{step.id} looks at {step.app}, which isn't in the fleet")
+        if isinstance(step, Look):
+            found += _look_problems(step, checks.fleet)
         if isinstance(step, AskUser):
             if index != 0:
                 found.append("ask_user must be the first step")
@@ -323,6 +325,25 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
                 "put them in one request"
             )
     return found
+
+
+def _look_problems(step: Look, fleet: Fleet) -> list[str]:
+    """A look needs an app with a glance. When it has none, the repair says
+    what to do instead: the planner writes the words an ask needs, so code
+    never invents them."""
+    app = fleet.get(step.app)
+    if app is None:
+        return [f"{step.id} looks at {step.app}, which isn't in the fleet"]
+    if app.has_glance:
+        return []
+    instead = (
+        f"ask {step.app} instead"
+        if app.has_agent
+        else f"open {step.app} instead"
+        if app.has_open
+        else "leave it out"
+    )
+    return [f"{step.id} looks at {step.app}, which has no glance to read; {instead}"]
 
 
 # A step named without braces ("the album from step s1"), which code can't fill.
@@ -406,7 +427,9 @@ def _lost_refs(steps: list[Step]) -> list[str]:
 def fallback_reason(plan: Plan, *, confirm_app: str | None = None) -> str | None:
     """Why the interpreter can't run this valid plan yet, or ``None`` if it can.
 
-    Cross-app plans run (#72): writes in order, one at a time. ``{sN}`` runs
+    Cross-app plans run (#72): writes in order, one at a time. A ``look`` runs
+    (#73) but gives nothing to ``{sN}``: a glance is several things, not a
+    name, so a ref to one falls back. ``{sN}`` runs
     when step N can give a name: an ``ask`` (its receipt's title) or the
     ``ask_user`` (the person's answer). ``confirm_app`` is the app a
     ``confirm`` step answers, when it's an app's question; kept for the

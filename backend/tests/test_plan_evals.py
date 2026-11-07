@@ -21,6 +21,7 @@ one group; ``CONDUCTOR_EVAL_REPORT=path`` appends one JSON line per sample.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import statistics
@@ -35,7 +36,7 @@ from app.ai import compiler
 from app.ai import plan as plans
 from app.ai.provider import ChatResult, ProviderError
 from app.ai.providers.llamacpp import provider_from_settings
-from app.fleet.manifests import Fleet, discover_fleet
+from app.fleet.manifests import Fleet, GlanceSpec, discover_fleet
 from tests.evalstats import Decision, decide, wilson_interval
 from tests.plan_cases import CASES, HOLDOUT, LONG, Case, empty_state
 
@@ -79,7 +80,32 @@ def fleet() -> Fleet:
             f"fleet discovery found {sorted(names)}; is {WORKSPACE_ROOT} the workspace root? "
             "From a worktree, set CONDUCTOR_EVAL_FLEET_DIR=~/Documents/workspace"
         )
-    return found
+    return _with_glances(found)
+
+
+# The glance lines the planner prompt carried as a placeholder until apps
+# declared their own (#73). An app whose manifest has no `glance:` yet (PCC#504,
+# music#82, chess#536 are building them) gets its line here, so the plan cases
+# that expect a `look` keep measuring; a manifest that declares one wins.
+EVAL_GLANCES: dict[str, str] = {
+    "tasks": "today's and overdue tasks, and today's Focus",
+    "music": "running and recent download jobs with progress, and how many songs wait to be sorted",
+    "chess": (
+        "where the current game stands (whose move, move count) and the last finished "
+        "game's result; it doesn't analyze positions"
+    ),
+}
+
+
+def _with_glances(found: Fleet) -> Fleet:
+    return Fleet(
+        apps=tuple(
+            dataclasses.replace(app, glance=GlanceSpec(holds=EVAL_GLANCES[app.name]))
+            if app.glance is None and app.name in EVAL_GLANCES
+            else app
+            for app in found.apps
+        )
+    )
 
 
 def _compile(case: Case, fleet: Fleet, prompt: str) -> tuple[compiler.Compiled, float]:

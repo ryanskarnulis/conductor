@@ -29,7 +29,7 @@ from app.fleet.manifests import Fleet, discover_fleet
 from app.fleet.tools import build_delegate_tools
 from app.main import app
 from app.services import ledger
-from tests.fake_world import World, client_factory, write_fixture_fleet
+from tests.fake_world import FakeGlances, World, client_factory, write_fixture_fleet
 from tests.scripted_provider import ScriptedProvider, text_turn
 
 
@@ -120,11 +120,14 @@ def test_what_v1_runs_and_what_falls_back(fleet: Fleet) -> None:
 
     assert reason(steps(ask("tasks", "add milk"), ask("tasks", "add eggs"))) is None
     assert reason({"answer": "chat"}) is None
-    assert reason(steps({"do": "look", "app": "tasks"})) == "kind:look"
-    # #72: cross-app plans and data flow from an ask run; look still waits on #73.
+    assert reason(steps({"do": "recall", "query": "the fence project"})) == "kind:recall"
+    # #73: a look runs, but gives nothing to {sN}: a glance is not a name.
+    assert reason(steps({"do": "look", "app": "tasks"})) is None
+    assert reason(steps({"do": "look", "app": "tasks"}, ask("music", "grab {s1}"))) == "data_flow"
+    # #72: cross-app plans and data flow from an ask run.
     assert reason(steps(ask("music", "grab Swim"), ask("tasks", "sort it"))) is None
     assert reason(steps(ask("music", "grab Swim"), ask("tasks", "sort {s1}"))) is None
-    assert reason(steps(ask("tasks", "add a"), {"do": "look", "app": "music"})) == "kind:look"
+    assert reason(steps(ask("tasks", "add a"), {"do": "undo", "target": "last"})) == "kind:undo"
     assert reason(steps({"do": "confirm", "answer": "yes"}, ask("tasks", "{s1}"))) == "data_flow"
     asked = steps(
         {"do": "ask_user", "question": "which?", "options": []}, ask("tasks", "move {s1}")
@@ -184,12 +187,19 @@ def test_the_planner_prompt_lists_the_fleet_and_never_caps_steps(fleet: Fleet) -
 
 
 @pytest.fixture
-def run_with(client: TestClient, fleet: Fleet, world: World) -> Generator[Any, None, None]:
+def glances() -> FakeGlances:
+    return FakeGlances()
+
+
+@pytest.fixture
+def run_with(
+    client: TestClient, fleet: Fleet, world: World, glances: FakeGlances
+) -> Generator[Any, None, None]:
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
 
     def run(provider: ScriptedProvider, words: str) -> dict[str, Any]:
         app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-            provider, fleet=fleet, narrate=True
+            provider, fleet=fleet, narrate=True, glance=glances
         )
         response = client.post(
             f"/api/agent/conversations/{conversation}/messages", json={"content": words}
@@ -230,13 +240,13 @@ def test_a_single_app_plan_runs_and_is_on_the_ledger(
 
 def test_a_plan_v1_cant_run_falls_back_to_the_loop(run_with: Any, db_session: Session) -> None:
     provider = ScriptedProvider(
-        [plan_turn(steps({"do": "look", "app": "tasks"})), text_turn("Nothing due today.")]
+        [plan_turn(steps({"do": "recall", "query": "today"})), text_turn("Nothing due today.")]
     )
     reply = run_with(provider, "what's due today?")
     assert reply["content"] == "Nothing due today."
     assert provider.requests[1]["tools"]  # the loop's own call, with tools
     compiled, loop_plan = _plans(db_session)
-    assert (compiled.status, compiled.note, compiled.acted) == ("fell_back", "kind:look", False)
+    assert (compiled.status, compiled.note, compiled.acted) == ("fell_back", "kind:recall", False)
     assert (loop_plan.source, loop_plan.acted) == ("loop", True)
 
 
@@ -251,7 +261,9 @@ def test_no_valid_plan_after_a_repair_falls_back(run_with: Any, db_session: Sess
     ("answer", "spoken", "expected"),
     [
         ("decline", None, speaker.DECLINE),
-        ("chat", "Any time.", "Any time."),
+        ("chat", '{"about_you": false, "reply": "Any time."}', "Any time."),
+        # The planner files "what did you just do?" under chat some of the time (#73).
+        ("chat", '{"about_you": true, "reply": "I added the task."}', "I added the task."),
         (
             "knowledge",
             '{"about_you": false, "reply": "About nine minutes."}',
@@ -750,3 +762,28 @@ def test_a_lost_ref_gets_the_repair(fleet: Fleet) -> None:
     )
     assert _problems(three, fleet) == []
     assert _problems(named, fleet) == []  # a name the person said is no lost ref
+
+
+def test_a_chat_answer_sees_the_facts_and_the_structured_about_you_check(run_with: Any) -> None:
+    """The planner files "what did you just do?" under chat some of the time:
+    the speaker must be able to answer it from the ledger's facts (#73)."""
+    run_with(
+        ScriptedProvider(
+            [
+                plan_turn(steps(ask("tasks", "add a task to water the plants"))),
+                text_turn("Added it."),
+            ]
+        ),
+        "add a task to water the plants",
+    )
+    provider = ScriptedProvider(
+        [
+            plan_turn({"answer": "chat"}),
+            text_turn('{"about_you": true, "reply": "I added “water the plants”."}'),
+        ]
+    )
+    reply = run_with(provider, "what did you just do?")
+    assert reply["content"] == "I added “water the plants”."
+    speaker_call = provider.requests[1]
+    assert speaker_call["response_format"]["json_schema"]["name"] == "answer"
+    assert "water the plants" in speaker_call["messages"][-1]["content"]

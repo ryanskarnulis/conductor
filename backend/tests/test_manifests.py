@@ -314,3 +314,65 @@ def test_a_malformed_actions_prefix_costs_the_prefix_and_nothing_else(tmp_path: 
     assert music is not None and music.agent is not None
     assert music.agent.actions is None
     assert music.has_agent, "the app still delegates"
+
+
+# --- glance (#73) ---------------------------------------------------------------------
+
+
+def test_a_glance_block_is_parsed_with_its_default_path(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "pcc",
+        _PCC_MANIFEST
+        + """\
+glance:
+  holds: >
+    Today's and overdue tasks,
+    the Focus plan.
+""",
+    )
+    tasks = discover_fleet(tmp_path).get("tasks")
+    assert tasks is not None and tasks.glance is not None
+    assert tasks.glance.holds == "Today's and overdue tasks, the Focus plan."
+    assert tasks.glance.path == "/api/agent/glance"
+    assert tasks.glance_url == "http://127.0.0.1:8100/api/agent/glance"
+    assert tasks.agent is not None  # independent of the agent block
+
+
+def test_a_glance_path_can_be_declared_and_the_host_is_rewritten(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "chess",
+        _OPEN_CHESS_MANIFEST + 'glance:\n  holds: "The last game."\n  path: /api/glance\n',
+    )
+    chess = discover_fleet(tmp_path, upstream_host="host.docker.internal").get("chess")
+    assert chess is not None and chess.agent is None and chess.open is not None
+    assert chess.glance_url == "http://host.docker.internal:8000/api/glance"
+    assert chess.has_glance
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "glance: nope\n",
+        "glance:\n  path: /x\n",  # no holds
+        'glance:\n  holds: "  "\n',
+        'glance:\n  holds: "ok"\n  path: api/glance\n',  # not rooted
+        "glance:\n  holds: [1, 2]\n",
+    ],
+)
+def test_a_malformed_glance_costs_the_app_its_look_and_nothing_else(
+    tmp_path: Path, block: str
+) -> None:
+    _write(tmp_path, "pcc", _PCC_MANIFEST + block)
+    tasks = discover_fleet(tmp_path).get("tasks")
+    assert tasks is not None and tasks.glance is None and not tasks.has_glance
+    assert tasks.agent is not None
+    with pytest.raises(ValueError):
+        tasks.glance_url  # noqa: B018
+
+
+def test_no_glance_block_means_no_look(tmp_path: Path) -> None:
+    _write(tmp_path, "pcc", _PCC_MANIFEST)
+    fleet = discover_fleet(tmp_path)
+    assert fleet.glance_apps() == ()

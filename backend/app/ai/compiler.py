@@ -30,20 +30,6 @@ logger = structlog.get_logger(__name__)
 # Room for a dozen steps of JSON with long requests.
 MAX_TOKENS = 1500
 
-# Until apps publish a glance (agent-standard#21, #73), these say what `look`
-# would read; an app without a line gets the generic one.
-_GLANCES: dict[str, str] = {
-    "tasks": "today's and overdue tasks, and today's Focus",
-    "music": (
-        "running and recent download jobs with progress, and how many songs wait to be sorted"
-    ),
-    "chess": (
-        "where the current game stands (whose move, move count) and the last finished "
-        "game's result; it doesn't analyze positions"
-    ),
-}
-_GENERIC_GLANCE = "a fixed summary of what's current in the app"
-
 # A model call: messages, a completion cap and a response format in, one turn out.
 PlannerChat = Callable[[list[dict[str, Any]], int, dict[str, Any]], ChatResult]
 
@@ -60,16 +46,30 @@ def _app_lines(fleet: Fleet) -> str:
             spec_description, examples, verbs = app.agent.description, app.agent.examples, "ask"
         elif app.open is not None:
             spec_description, examples, verbs = app.open.description, app.open.examples, "open"
+        elif app.glance is not None:
+            # Readable and nothing else: a look is all the planner can do here.
+            lines.append(f"- {app.name} (look): {app.title}\n  Glance: {_holds(app.glance.holds)}.")
+            continue
         else:
             continue
-        glance = _GLANCES.get(app.name, _GENERIC_GLANCE)
         quoted = "; ".join(f'"{example}"' for example in examples)
+        if app.glance is None:
+            # No glance, no `look`: the planner is neither offered nor told of one.
+            lines.append(
+                f"- {app.name} ({verbs}): {spec_description}\n  Asks that go here: {quoted}"
+            )
+            continue
         lines.append(
             f"- {app.name} ({verbs}, look): {spec_description}\n"
-            f"  Glance: {glance}.\n"
+            f"  Glance: {_holds(app.glance.holds)}.\n"
             f"  Asks that go here: {quoted}"
         )
     return "\n".join(lines)
+
+
+def _holds(holds: str) -> str:
+    """The manifest's ``glance.holds`` as a clause the prompt can close with a period."""
+    return holds.rstrip(". ")
 
 
 _PROMPT = """\

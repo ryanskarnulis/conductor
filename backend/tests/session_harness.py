@@ -350,6 +350,13 @@ class WorldHolder:
         assert self._factory is not None, "no world bound: call Driver.begin first"
         return self._factory(fleet_app)
 
+    def glance(self, fleet_app: Any) -> dict[str, Any]:
+        """The ``GlanceReader`` behind a plan's ``look``: the bound world's
+        glance, from its state now, recorded as a read of that app. A session
+        eval never reaches a real app."""
+        assert self.world is not None, "no world bound: call Driver.begin first"
+        return self.world.glance(fleet_app.name)
+
 
 _CANCEL_ROUTE = re.compile(r"^/api/agent/conversations/\{[^}]+\}/(?:cancel|stop)$")
 

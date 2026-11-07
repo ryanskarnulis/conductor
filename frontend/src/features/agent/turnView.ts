@@ -10,7 +10,7 @@ import type {
   ToolCallRecord,
   TurnActivity,
 } from '../../types/agent'
-import { activityLabel, appFromTool, openedAppFromTool } from './delegateCalls'
+import { activityLabel, appFromTool, lookedAtFromTool, openedAppFromTool } from './delegateCalls'
 import { queuedPlanSteps, type TurnStream } from './turnStream'
 
 /** The shell's view of a conversation, derived from today's persisted turns
@@ -105,6 +105,11 @@ function stepFrom(call: StepSource, waiting: boolean): ShellTurn['steps'][number
   if (call.tool === 'confirm') {
     const app = typeof call.arguments.app === 'string' ? call.arguments.app : ''
     return { appKey: app || null, kind: 'confirm', app: appLabel(app || 'conductor'), text: 'yes', state: failed ? 'failed' : 'done' }
+  }
+  const looked = lookedAtFromTool(call.tool)
+  if (looked !== null) {
+    const appKey = call.tool.slice('look_'.length)
+    return { appKey, kind: 'look', app: appLabel(looked), text: `look at ${looked}`, state: failed ? 'failed' : 'done', detail: failed ? (call.error ?? undefined) : undefined }
   }
   if (call.tool === 'list_agents') return { appKey: null, kind: 'look', app: 'conductor', text: 'check the fleet', state: failed ? 'failed' : 'done' }
   return { appKey: null, kind: 'local', app: 'conductor', text: call.tool, state: failed ? 'failed' : 'done' }
@@ -201,7 +206,13 @@ export function buildTurns(
       note: !orphan && reply === null,
       steps: calls.map((call) => stepFrom(call, isLast && waitingOn !== null)),
       receipts: calls.flatMap((call) => {
-        const app = appFromTool(call.tool) ? call.tool.slice(4) : call.tool === 'confirm' ? String(call.arguments.app ?? '') : null
+        const app = appFromTool(call.tool)
+          ? call.tool.slice(4)
+          : lookedAtFromTool(call.tool)
+            ? call.tool.slice('look_'.length)
+            : call.tool === 'confirm'
+              ? String(call.arguments.app ?? '')
+              : null
         if (!app) return []
         return (call.app_record ?? []).map((entry) => receiptFrom(entry, app)).filter((r): r is NonNullable<typeof r> => r !== null)
       }),
