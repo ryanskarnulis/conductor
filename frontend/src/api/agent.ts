@@ -64,3 +64,10 @@ export async function getTurnActivity(conversationId: number): Promise<TurnActiv
   const res = await apiClient(`/api/agent/conversations/${conversationId}/activity`)
   return (await res.json()) as TurnActivity
 }
+
+/** Stop the conversation's in-flight turn (#66). Idempotent; the blocked
+ * `postMessage` then answers `cancelled` with the record of what ran. */
+export async function cancelTurn(conversationId: number): Promise<{ cancel_requested: boolean }> {
+  const res = await apiClient(`/api/agent/conversations/${conversationId}/cancel`, { method: 'POST' })
+  return (await res.json()) as { cancel_requested: boolean }
+}

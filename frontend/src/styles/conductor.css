@@ -1,0 +1,70 @@
+/* Conductor design-system tokens (#86), layered on Night-Silk.
+ *
+ * Generated from the Conductor design system's tokens.json
+ * (https://claude.ai/artifact/QWR5kpuitBY2rJYz1eFxN7): only the tokens silk.css
+ * and tokens.css don't already define. Change a value there and regenerate;
+ * never edit silk.css (a verbatim gateway copy). Motion and scene values live
+ * here too so CSS and src/design/motion.ts read one set of numbers. */
+
+:root {
+  --bg-deep: #05070c;
+  --glass: rgba(10, 13, 20, 0.74);
+  --on-glow: #0a0c12;
+  --glow-faint: rgba(155, 231, 255, 0.07);
+  --info-tint: rgba(143, 190, 242, 0.08);
+  --info-border: rgba(143, 190, 242, 0.35);
+  --on-status: #0a0c12;
+  --warden-accent: #00c3ff;
+  --icon-pawn: #f6f3ec;
+  --icon-note: #040405;
+  --icon-check: #1fcf62;
+  --icon-check-glow: #22e06a;
+  --icon-outline-dark: #000000;
+  --icon-outline-light: #ffffff;
+
+  /* spacing */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 12px;
+  --space-6: 14px;
+  --space-7: 16px;
+  --space-8: 18px;
+
+  /* radius */
+  --radius-sm: 6px;
+  --radius-step: 10px;
+  --radius-chat: 11px;
+  --radius-bubble: 13px;
+  --radius-panel: 16px;
+  --radius-pill: 999px;
+
+  /* duration */
+  --dur-receipt: 180ms;
+  --dur-receipt-travel: 1000ms;
+  --dur-queue-stagger: 300ms;
+  --dur-panel-fade: 500ms;
+  --dur-scene-fade: 600ms;
+  --dur-wait-pulse: 1600ms;
+  --dur-hover: 250ms;
+  --dur-ring: 1100ms;
+
+  /* easing */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: ease;
+
+  /* scene */
+  --web-radius: 4.3;
+  --web-spokes: 34;
+  --web-spiral-turns: 24;
+  --strand-pending-reach: 80%;
+  --glitch-max-rate: 3;
+  --camera-fov: 32;
+  --dpr-cap-desktop: 2;
+  --dpr-cap-phone: 1.5;
+  --icon-scale: 1.6;
+
+  /* type: JetBrains Mono joins silk's mono stack for step kinds, refs and the ledger */
+  --font-mono: "JetBrains Mono", var(--mono);
+}

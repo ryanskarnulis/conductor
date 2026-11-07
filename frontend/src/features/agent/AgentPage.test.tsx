@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getConversation, getTurnActivity, listConversations, postMessage } from '../../api/agent'
+import { cancelTurn, getConversation, getTurnActivity, listConversations, postMessage } from '../../api/agent'
 import { getWorklist } from '../../api/sort'
 import type { AgentMessage, ConversationDetail } from '../../types/agent'
 import { AgentPage } from './AgentPage'
@@ -13,6 +13,7 @@ vi.mock('../../api/sort', () => ({
 }))
 
 vi.mock('../../api/agent', () => ({
+  cancelTurn: vi.fn(),
   createConversation: vi.fn(),
   deleteConversation: vi.fn(),
   getConversation: vi.fn(),
@@ -26,6 +27,7 @@ const mockGet = vi.mocked(getConversation)
 const mockPost = vi.mocked(postMessage)
 const mockActivity = vi.mocked(getTurnActivity)
 const mockWorklist = vi.mocked(getWorklist)
+const mockCancel = vi.mocked(cancelTurn)
 
 function message(overrides: Partial<AgentMessage>): AgentMessage {
   return {
@@ -227,9 +229,11 @@ describe('AgentPage', () => {
     renderAt('/c/1')
 
     expect(await screen.findByText('Nothing is due today.')).toBeInTheDocument()
-    expect(screen.getByText('Asked tasks')).toBeInTheDocument()
-    expect(screen.getByText(/Asked chess/)).toBeInTheDocument()
-    expect(screen.getByText('chess is rate-limiting requests right now.')).toBeInTheDocument()
+    // Each delegate call is a plan step: kind, app (tasks shows as PCC), what
+    // was asked, and its status as a word — a failure carries its reason.
+    const steps = screen.getByRole('list', { name: 'Plan steps' })
+    expect(steps).toHaveTextContent("askPCCwhat's due today?done")
+    expect(steps).toHaveTextContent('askchessstatus?failed · chess is rate-limiting requests right now.')
   })
 
   it('sends a message, shows the live activity beat, then the refetched thread', async () => {
@@ -258,7 +262,10 @@ describe('AgentPage', () => {
 
     // Optimistic user bubble + the polled "asking chess" beat with elapsed time.
     expect(await screen.findByText('and how is the game going?')).toBeInTheDocument()
-    expect(await screen.findByRole('status')).toHaveTextContent('Asking chess… · 15s')
+    expect(await screen.findByText(/Asking chess… · 15s/)).toBeInTheDocument()
+    // Presence names the same beat, and Send has become Stop.
+    expect(screen.getAllByRole('status').map((el) => el.textContent)).toContain('Asking chess')
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
 
     const followup: ConversationDetail = {
       ...detail,
@@ -277,7 +284,77 @@ describe('AgentPage', () => {
     resolveRun(undefined as never)
 
     expect(await screen.findByText('Chess says you are up a pawn.')).toBeInTheDocument()
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Asking chess…/)).not.toBeInTheDocument()
+  })
+
+  it('shows an app\'s pending question as a confirmation card and answers it by saying yes', async () => {
+    const waiting = message({
+      id: 2,
+      role: 'assistant',
+      content: 'PCC wants to check: trash the Kitchen project and its 12 tasks?',
+      stop_reason: 'completed',
+      tool_calls: [
+        {
+          tool: 'ask_tasks',
+          arguments: { message: 'wipe the kitchen project' },
+          result: 'needs confirmation',
+          error: null,
+          app_record: [{ tool: 'trash_project', outcome: 'not_run', reason: 'needs confirmation' }],
+          app_confirm: { app: 'tasks', thread_id: 3, token: 'tok', tool: 'trash_project', question: 'Trash the Kitchen project and its 12 tasks?' },
+        },
+      ],
+    })
+    mockGet.mockResolvedValue({ ...detail, messages: [message({ content: 'wipe the kitchen project' }), waiting] })
+    mockPost.mockReturnValue(new Promise(() => {}))
+    renderAt('/c/1')
+
+    const card = await screen.findByRole('group', { name: 'Confirmation' })
+    expect(card).toHaveTextContent('Waiting on you · PCC')
+    expect(card).toHaveTextContent('Trash the Kitchen project and its 12 tasks?')
+    expect(screen.getByRole('list', { name: 'Plan steps' })).toHaveTextContent('waiting on you')
+    expect(screen.getAllByRole('status').map((el) => el.textContent)).toContain('Waiting on you')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, do it' }))
+    expect(mockPost).toHaveBeenCalledWith(1, 'yes')
+  })
+
+  it('shows what the apps did, from their typed records', async () => {
+    const done = message({
+      id: 2,
+      role: 'assistant',
+      content: 'Added “Water the plants” for tomorrow.',
+      stop_reason: 'completed',
+      tool_calls: [
+        {
+          tool: 'ask_tasks',
+          arguments: { message: 'add a task to water the plants tomorrow' },
+          result: 'ok',
+          error: null,
+          app_record: [
+            { tool: 'create_task', outcome: 'done', touched: [{ app: 'tasks', kind: 'task', id: '1290', title: 'Water the plants' }], undo: { handle: 'trash:task:1290', how: 'move it to the trash' } },
+          ],
+        },
+      ],
+    })
+    mockGet.mockResolvedValue({ ...detail, messages: [message({ content: 'add a task to water the plants tomorrow' }), done] })
+    renderAt('/c/1')
+
+    const receipts = await screen.findByRole('list', { name: 'Receipts' })
+    expect(receipts).toHaveTextContent('Created · PCC · “Water the plants”')
+  })
+
+  it('turns Send into Stop while a turn runs, and Stop cancels it', async () => {
+    mockPost.mockReturnValue(new Promise(() => {}))
+    mockCancel.mockResolvedValue({ cancel_requested: true })
+    renderAt('/c/1')
+    await screen.findByText('Nothing is due today.')
+
+    fireEvent.change(screen.getByLabelText('Message conductor'), { target: { value: 'sort my whole library' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }))
+
+    expect(mockCancel).toHaveBeenCalledWith(1)
+    expect(screen.queryByRole('button', { name: 'Send message' })).not.toBeInTheDocument()
   })
 
   // Some apps are places the user goes: a turn that ends in `open_<app>` sends
@@ -341,7 +418,7 @@ describe('AgentPage', () => {
 
         // The reply lands and is readable before the tab goes anywhere.
         expect(await screen.findByText("Board's up — go.")).toBeInTheDocument()
-        expect(screen.getByText('Opened chess')).toBeInTheDocument()
+        expect(screen.getByRole('list', { name: 'Plan steps' })).toHaveTextContent("openchesslet's play chessdone")
         expect(assign).not.toHaveBeenCalled()
 
         await vi.advanceTimersByTimeAsync(1_200)

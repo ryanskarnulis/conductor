@@ -46,10 +46,17 @@ backend dev `8301`, vite dev `5174`.
 
 Mirrors PCC byte-for-byte where reasonable: Python 3.11+ / FastAPI /
 SQLAlchemy 2.0 typed / Alembic for every schema change / soft deletes /
-strict mypy / ruff (line 100). React + Vite + TS strict, Night-Silk tokens
-(`frontend/src/styles/tokens.css` sourced from `../gateway/theme/silk.css` —
-re-copy to fix drift, never edit). Docker: backend (no host port) + nginx
-frontend on `8300`.
+strict mypy / ruff (line 100). React + Vite + TS strict. Docker: backend (no
+host port) + nginx frontend on `8300`.
+
+**The look grows from Night-Silk** (#85) into conductor's design system
+([artifact](https://claude.ai/artifact/QWR5kpuitBY2rJYz1eFxN7), #86):
+`styles/silk.css` is a verbatim copy of `../gateway/theme/silk.css` (re-copy
+to fix drift, never edit); `tokens.css` maps conductor's semantic names onto
+it; `conductor.css` holds the design system's additions (motion, scene,
+spacing, radii), generated from its `tokens.json` — change a value there and
+regenerate. Components live in `src/design/` (`cd-` classes in
+`styles/components.css`), the shell in `features/agent/`.
 
 ## Rules
 
@@ -118,3 +125,8 @@ frontend on `8300`.
   limiter pin the deployment to one uvicorn worker until #38 (SSE) ships.
 - **The delegate contract never assumes a text-only client** — voice
   convergence is a master-plan placeholder.
+- **The panel is the accessible truth; the 3D web is decoration** (#88). The
+  Living Web (`src/scene/livingWeb.js`, three.js) is `aria-hidden`, loads as
+  a lazy chunk after first paint, and shows nothing the panel doesn't say in
+  words. Both read one derivation (`turnView.ts` → `sceneState.ts`), and
+  nothing looks done before its receipt says so.
