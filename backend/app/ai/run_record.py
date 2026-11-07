@@ -45,6 +45,10 @@ READ_TOOLS = frozenset({"list_agents"})
 # dispatched. The loop builds those texts from it, so a reworded one cannot
 # start reading as a refusal.
 NOT_RUN_PREFIX = "not run: "
+# The loop's own "not run" answers, for calls it never sent (the tool-call cap,
+# the rest of a batch after a crash). A plan's unrun steps carry other reasons.
+TOOL_CALL_LIMIT_ERROR = f"{NOT_RUN_PREFIX}the run reached its limit of tool calls before this call"
+CRASHED_BATCH_ERROR = f"{NOT_RUN_PREFIX}an earlier tool call in this turn failed unexpectedly"
 # The loop's prefix for schema-invalid arguments (``AgentLoop._dispatch``),
 # and the registry's for a tool name it does not know (``UnknownToolError``).
 INVALID_ARGUMENTS_PREFIX = "Invalid arguments: "

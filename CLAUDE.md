@@ -96,8 +96,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
 - **The planner decides, the narrator speaks** (#65). A completed run's reply
   is a tool-less call on a typed receipt of what ran (`app/ai/narrator.py`);
   the persona lives only there. Code guarantees the facts (titles, counts,
-  undo, quoted outside text, two sentences on voice); handoffs and an app's
-  confirm question pass through verbatim.
+  undo, a plan's unrun steps and why, quoted outside text, two sentences on
+  voice); handoffs and an app's confirm question pass through verbatim.
 - **The ledger** (#69, `app/services/ledger.py`) is the record of what
   happened: a turn opens with the person's words before the loop runs and
   closes with its plan, one step per call and the apps' receipts. Every app
