@@ -1000,6 +1000,40 @@ def titles(receipts: Iterable[Receipt]) -> list[str]:
     return [receipt.title for receipt in receipts]
 
 
+# --- glances -----------------------------------------------------------------------
+
+
+class FakeGlances:
+    """A ``GlanceReader`` (``app.fleet.glance``) over canned glances: what each
+    app's endpoint would answer, or the failure it would give. Records every
+    app it was asked for, so a test can see a look read and an ask not made."""
+
+    def __init__(self) -> None:
+        self.payloads: dict[str, dict[str, Any]] = {
+            "tasks": {
+                "as_of": "2026-11-07T09:00:00Z",
+                "due_today": [
+                    {"app": "tasks", "kind": "task", "id": "41", "title": "Pay rent"},
+                    {"app": "tasks", "kind": "task", "id": "42", "title": "Water the plants"},
+                ],
+                "overdue": 2,
+                "focus": {"app": "tasks", "kind": "task", "id": "44", "title": "Call Sam"},
+                "next_due": "2026-11-08",
+            },
+            "chess": {"as_of": "2026-11-07T09:00:00Z", "last_game": {"result": "you won"}},
+        }
+        self.failures: dict[str, Exception] = {}
+        self.asked: list[str] = []
+        self._lock = threading.Lock()
+
+    def __call__(self, fleet_app: Any) -> dict[str, Any]:
+        with self._lock:
+            self.asked.append(fleet_app.name)
+        if fleet_app.name in self.failures:
+            raise self.failures[fleet_app.name]
+        return self.payloads[fleet_app.name]
+
+
 # --- a fleet to discover ---------------------------------------------------------
 
 # The fleet the scripted run discovers: the three apps the scenarios use, in
@@ -1014,6 +1048,8 @@ FIXTURE_MANIFESTS = {
           api: /api/agent
           confirms: true
           examples: ["what's due today"]
+        glance:
+          holds: "Today's and overdue tasks, the Focus plan, and the next due date."
         """,
     "music": """\
         name: music
@@ -1023,6 +1059,8 @@ FIXTURE_MANIFESTS = {
           description: "Downloads songs and sorts the library."
           api: /api/agent
           examples: ["download this song"]
+        glance:
+          holds: "Running and recent download jobs with progress, and how many songs wait to be sorted."
         """,
     "chess": """\
         name: chess
@@ -1033,6 +1071,8 @@ FIXTURE_MANIFESTS = {
           path: /
           intent_param: intent
           examples: ["let's play chess"]
+        glance:
+          holds: "Where the current game stands (whose move, move count) and the last finished game's result; it doesn't analyze positions."
         """,
 }
 

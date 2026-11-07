@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ToolCallRecord, TurnActivity } from '../../types/agent'
-import { activityLabel, appFromTool, describeToolCall, elapsedSuffix } from './delegateCalls'
+import { activityLabel, appFromTool, describeToolCall, elapsedSuffix, lookedAtFromTool } from './delegateCalls'
 
 function record(overrides: Partial<ToolCallRecord>): ToolCallRecord {
   return { tool: 'ask_chess', arguments: {}, result: 'ok', error: null, ...overrides }
@@ -26,6 +26,16 @@ describe('appFromTool', () => {
   it('returns null for non-delegate tools', () => {
     expect(appFromTool('list_agents')).toBeNull()
     expect(appFromTool('ask_')).toBeNull()
+  })
+})
+
+describe('lookedAtFromTool', () => {
+  it('extracts the app behind a glance read and nothing else', () => {
+    expect(lookedAtFromTool('look_tasks')).toBe('tasks')
+    expect(lookedAtFromTool('look_')).toBeNull()
+    expect(lookedAtFromTool('ask_tasks')).toBeNull()
+    expect(describeToolCall(record({ tool: 'look_tasks' }))).toBe('Looked at tasks')
+    expect(activityLabel(beat({ kind: 'tool', tool: 'look_tasks' }))).toBe('Looking at tasks…')
   })
 })
 

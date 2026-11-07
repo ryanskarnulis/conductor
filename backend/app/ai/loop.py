@@ -79,6 +79,7 @@ from app.ai.provider import (
     tool_result_message,
 )
 from app.config import get_settings
+from app.fleet.glance import GlanceReader
 from app.fleet.manifests import Fleet
 from app.tools import registry, runtime
 from app.tools.registry import ToolError, UnknownToolError
@@ -320,6 +321,7 @@ class AgentLoop:
         tracer: run_trace.Tracer | None = None,
         narrate: bool = False,
         fleet: Fleet | None = None,
+        glance: GlanceReader | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be >= 1")
@@ -343,7 +345,7 @@ class AgentLoop:
         # the interpreter runs what it can; the rest falls back to the loop.
         from app.ai.interpreter import Interpreter  # noqa: PLC0415
 
-        self._interpreter = Interpreter(self, fleet) if fleet is not None else None
+        self._interpreter = Interpreter(self, fleet, glance) if fleet is not None else None
 
     def run(
         self,
