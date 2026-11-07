@@ -5,15 +5,19 @@ import type {
   AgentStopReason,
   AppConfirm,
   AppRecordEntry,
+  LiveReceipt,
+  PlanBodyStep,
   ToolCallRecord,
   TurnActivity,
 } from '../../types/agent'
 import { activityLabel, appFromTool, openedAppFromTool } from './delegateCalls'
+import { queuedPlanSteps, type TurnStream } from './turnStream'
 
 /** The shell's view of a conversation, derived from today's persisted turns
  * (messages, their delegate calls and the apps' typed records) plus the live
- * activity poll. Pure: the page and the 3D scene both read this, so they can
- * never disagree about what happened. */
+ * channel: the stream's steps and receipts (#38), or the poll's beat. Pure:
+ * the page and the 3D scene both read this, so they can never disagree about
+ * what happened. */
 
 /** How an app is named on screen. `tasks` is PCC's fleet name. */
 export function appLabel(app: string): string {
@@ -82,7 +86,9 @@ export function receiptFrom(entry: AppRecordEntry, app: string): (ReceiptData & 
   }
 }
 
-function stepFrom(call: ToolCallRecord, waiting: boolean): ShellTurn['steps'][number] {
+type StepSource = Pick<ToolCallRecord, 'tool' | 'arguments' | 'error'> & { app_confirm?: unknown }
+
+function stepFrom(call: StepSource, waiting: boolean): ShellTurn['steps'][number] {
   const asked = appFromTool(call.tool)
   const opened = openedAppFromTool(call.tool)
   const failed = call.error !== null
@@ -104,6 +110,56 @@ function stepFrom(call: ToolCallRecord, waiting: boolean): ShellTurn['steps'][nu
   return { appKey: null, kind: 'local', app: 'conductor', text: call.tool, state: failed ? 'failed' : 'done' }
 }
 
+/** A landed step as the record it is: the same derivation as a stored turn. */
+function recordOf(receipt: LiveReceipt): StepSource & { app_record: AppRecordEntry[] } {
+  return {
+    tool: receipt.tool,
+    arguments: receipt.arguments,
+    error: receipt.error,
+    app_confirm: receipt.confirm,
+    app_record: receipt.receipts.filter((entry) => entry.source === 'app'),
+  }
+}
+
+/** A plan step no call has started yet. */
+function queuedFrom(step: PlanBodyStep, waiting: boolean): ShellTurn['steps'][number] {
+  const app = typeof step.app === 'string' ? step.app : null
+  const text =
+    step.do === 'ask' ? step.request : step.do === 'open' ? step.intent : step.do === 'ask_user' ? step.question : step.do === 'confirm' ? step.answer : undefined
+  return {
+    appKey: app ? app.replace(/-/g, '_') : null,
+    kind: step.do,
+    app: appLabel(app ?? 'conductor'),
+    text: typeof text === 'string' && text ? text : step.do,
+    state: waiting ? 'wait' : 'queued',
+  }
+}
+
+/** The in-flight turn's steps from the stream: each landed step from its
+ * receipt, a started one as running, and the plan's remaining steps as
+ * queued. Nothing is shown done before its receipt arrived. */
+export function streamSteps(stream: TurnStream): ShellTurn['steps'] {
+  const waitingOnApp = stream.paused?.reason === 'app_confirm'
+  const steps = stream.steps.map((step) => {
+    if (step.receipt) return stepFrom(recordOf(step.receipt), waitingOnApp)
+    return { ...stepFrom({ tool: step.tool ?? '', arguments: step.arguments ?? {}, error: null }, false), state: 'run' as const }
+  })
+  const paused = stream.paused && stream.paused.reason !== 'app_confirm' ? stream.paused.step : null
+  return [...steps, ...queuedPlanSteps(stream).map((step) => queuedFrom(step, step.id === paused))]
+}
+
+/** The receipt chips the stream's landed steps carry. */
+export function streamReceipts(stream: TurnStream): ShellTurn['receipts'] {
+  return stream.steps.flatMap((step) => {
+    const receipt = step.receipt
+    if (!receipt?.app || (receipt.kind !== 'ask' && receipt.kind !== 'confirm')) return []
+    const app = receipt.app
+    return recordOf(receipt)
+      .app_record.map((entry) => receiptFrom(entry, app))
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+  })
+}
+
 /** The question the conversation's last turn leaves waiting, if any — the
  * frontend twin of backend `confirmation.pending`: a later call to the same
  * app in that turn voids it. */
@@ -120,8 +176,14 @@ export function pendingConfirm(messages: AgentMessage[]): (PendingConfirmView & 
 }
 
 /** Turns, oldest first: each user message with the assistant reply that
- * answered it (a note has none). The in-flight send is appended as live. */
-export function buildTurns(messages: AgentMessage[], pendingText: string | null, activity: TurnActivity | null): ShellTurn[] {
+ * answered it (a note has none). The in-flight send is appended as live: its
+ * steps and receipts from the stream when there is one, else the poll's beat. */
+export function buildTurns(
+  messages: AgentMessage[],
+  pendingText: string | null,
+  activity: TurnActivity | null,
+  stream: TurnStream | null = null,
+): ShellTurn[] {
   const turns: ShellTurn[] = []
   const waitingOn = pendingConfirm(messages)
   for (let i = 0; i < messages.length; i++) {
@@ -149,10 +211,12 @@ export function buildTurns(messages: AgentMessage[], pendingText: string | null,
     })
     if (reply && !orphan) i++
   }
-  if (pendingText !== null) {
+  if (pendingText !== null && stream !== null && (stream.steps.length > 0 || stream.plan !== null)) {
+    turns.push({ key: 'pending', said: pendingText, note: false, steps: streamSteps(stream), receipts: streamReceipts(stream), reply: null, stopReason: null, live: true })
+  } else if (pendingText !== null) {
     const steps: ShellTurn['steps'] = []
     if (activity?.kind === 'tool' && activity.tool) {
-      const step = stepFrom({ tool: activity.tool, arguments: {}, result: null, error: null }, false)
+      const step = stepFrom({ tool: activity.tool, arguments: {}, error: null }, false)
       steps.push({ ...step, state: 'run', text: activityLabel(activity).replace(/…$/, '') })
     }
     turns.push({ key: 'pending', said: pendingText, note: false, steps, receipts: [], reply: null, stopReason: null, live: true })

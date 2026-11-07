@@ -18,6 +18,11 @@ export class ApiTimeoutError extends Error {
 const BASE_URL =
   import.meta.env.VITE_API_URL ?? `http://${window.location.hostname}:8301`
 
+/** The absolute URL of an API path, for clients that aren't `fetch` (EventSource). */
+export function apiUrl(path: string): string {
+  return `${BASE_URL}${path}`
+}
+
 // Every request aborts eventually so a hung backend can't leave a permanent
 // spinner.
 const DEFAULT_TIMEOUT_MS = 30_000
