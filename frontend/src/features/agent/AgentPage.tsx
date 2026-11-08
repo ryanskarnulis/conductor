@@ -32,6 +32,9 @@ import { playText } from '../../voice/tts'
 import type { AgentStopReason } from '../../types/agent'
 import { ConductorMark } from './ConductorMark'
 import { activityLabel, elapsedSuffix } from './delegateCalls'
+import { JobCards, JobNotes } from './JobCards'
+import { groupJobNotes, jobCards } from './jobStream'
+import { useJobs } from './useJobs'
 import { nextSceneState, type SceneState } from './sceneState'
 import { ShellScene } from './ShellScene'
 import { SortPanel } from '../sort/SortPanel'
@@ -164,7 +167,7 @@ export function AgentPage() {
 
   const { conversations, loading: listLoading, error: listError, refresh, create, remove } = useConversations()
   const onExchange = useCallback(() => void refresh(), [refresh])
-  const { detail, loading, error, pendingText, handoff, send, note } = useConversation(
+  const { detail, loading, error, pendingText, handoff, send, note, refresh: refreshThread } = useConversation(
     activeId !== null && Number.isFinite(activeId) ? activeId : null,
     onExchange,
   )
@@ -188,6 +191,10 @@ export function AgentPage() {
   const [held, setHeld] = useState<TurnStream | null>(null)
   const onTurnEnded = useCallback((ended: TurnStream) => setHeld(ended.paused !== null ? ended : null), [])
   const live = useTurnActivity(activeId, sending, onTurnEnded)
+  // Jobs the conversation started (#90): followed while no send is in flight,
+  // each a card until its note lands in the thread.
+  const jobs = useJobs(activeId !== null && Number.isFinite(activeId) ? activeId : null, !sending, refreshThread)
+  const cards = useMemo(() => jobCards(jobs.state, jobs.asks, new Set(messages.map((m) => m.id))), [jobs.state, jobs.asks, messages])
   const activity = live?.activity ?? null
   const stream = live?.stream ?? null
   const phone = usePhone()
@@ -202,7 +209,9 @@ export function AgentPage() {
 
   const turns = useMemo(() => buildTurns(messages, pendingText, activity, stream, held), [messages, pendingText, activity, stream, held])
   const confirm = sending ? null : pendingConfirm(messages)
-  const latest = turns.length > 0 ? turns[turns.length - 1] : null
+  // A job's note lands in the thread but is never the turn the page is about.
+  const latestAt = turns.findLastIndex((turn) => !turn.jobNote)
+  const latest = latestAt >= 0 ? turns[latestAt] : null
   const pause = !sending && latest ? latest.pause : null
   const presence = presenceFor(sending, activity, confirm !== null || pause !== null)
 
@@ -210,8 +219,8 @@ export function AgentPage() {
   const sceneRef = useRef<SceneState>(nextSceneState(null, null, 'idle', null, 0))
   const confirmApp = confirm?.raw.app ?? (pause?.kind === 'confirm' ? pause.appKey : null)
   useEffect(() => {
-    sceneRef.current = nextSceneState(sceneRef.current, latest, presence.state, confirmApp, performance.now())
-  }, [latest, presence.state, confirmApp])
+    sceneRef.current = nextSceneState(sceneRef.current, latest, presence.state, confirmApp, performance.now(), cards)
+  }, [latest, presence.state, confirmApp, cards])
   const getSceneState = useCallback(() => sceneRef.current, [])
 
   // Voice-output toggle (fleet UX rule: voice in → voice out, typed in → silent).
@@ -415,16 +424,27 @@ export function AgentPage() {
                   </p>
                 )}
                 {loading && <div className="page-loading">Loading conversation…</div>}
-                {turns.map((turn, index) => (
-                  <TurnView
-                    key={turn.key}
-                    turn={turn}
-                    latest={index === turns.length - 1}
-                    confirm={index === turns.length - 1 && confirm ? confirm : null}
-                    busy={sending}
-                    onAnswer={answer}
-                  />
-                ))}
+                {groupJobNotes(turns).map((item) =>
+                  item.kind === 'notes' ? (
+                    <JobNotes key={item.key} turns={item.turns} />
+                  ) : (
+                    <TurnView
+                      key={item.turn.key}
+                      turn={item.turn}
+                      latest={item.index === latestAt}
+                      confirm={item.index === latestAt && confirm ? confirm : null}
+                      busy={sending}
+                      onAnswer={answer}
+                    />
+                  ),
+                )}
+                <JobCards
+                  cards={cards}
+                  announce={jobs.state.announce}
+                  errors={jobs.errors}
+                  onCancel={(card) => void jobs.cancel(card.app, card.ref)}
+                />
+
                 {sending && (
                   <p className="shell-working" role="status">
                     <span className="agent-working-dots" aria-hidden="true">

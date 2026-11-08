@@ -1045,8 +1045,8 @@ class Strand {
     an.mat.color.set(col).multiplyScalar(k); an.ring.scale.setScalar(ring);
     const m = an.core.material; m.emissiveIntensity = an.core.userData.ei * (state === 'done' && age >= 180 ? 1.6 : state === 'failed' ? .5 : 1);
     an.core.rotation.y = Math.sin(T * .55 + an.p.x) * .38 * mo; an.core.rotation.x = .38;   /* a slow turn, tipped toward the camera */
-    const job = LW.S.job; an.prog.visible = state === 'job' && !!job;
-    if (an.prog.visible) { const p = job.n / job.of; if (p !== this.prog) { this.prog = p; an.prog.geometry.dispose(); an.prog.geometry = new THREE.TorusGeometry(.44, .02, 8, 96, Math.PI * 2 * p); } }
+    const job = LW.S.jobs && LW.S.jobs[this.app]; an.prog.visible = state === 'job' && !!job && job.of > 0;   /* this app's jobs only: a ring needs a known total */
+    if (an.prog.visible) { const p = Math.max(.02, Math.min(1, job.n / job.of)); if (p !== this.prog) { this.prog = p; an.prog.geometry.dispose(); an.prog.geometry = new THREE.TorusGeometry(.44, .02, 8, 96, Math.PI * 2 * p); } }
   }
   update(c, info, clock) {
     const sp = active, R = this.rope, mo = c.motion;
@@ -1184,7 +1184,7 @@ function frame(now) {
   if (ss.focus) strand.anchor = AIDX[ss.focus];
   strand.mode = ss.mode || 'run'; strand.rope = strands[ss.focus || 'music'].rope;
   ctx.voice = ctx.state === 'speak' || ctx.state === 'listen' ? (ctx.motion ? voiceEnv(ctx.tReal) : .5) : 0;
-  ctx.jobProgress = S.job ? S.job.n / S.job.of : 0;
+  ctx.jobProgress = S.job && S.job.of > 0 ? S.job.n / S.job.of : 0;
   ctx.recall = S.recall ? { state: S.recall.state, age: clock - S.recall.since, since: S.recall.since } : null;
   applyView(dt); frameCamera(dt, S);
   /* eyes: the cursor, projected in front of him; while he works, the app he works on */

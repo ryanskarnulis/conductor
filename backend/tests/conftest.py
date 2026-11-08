@@ -119,6 +119,7 @@ def client(
     the same engine (cleanup over an empty fleet, so nothing leaves the test)."""
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[routes_agent.get_thread_store] = lambda: DbThreadStore(session_factory)
+    app.dependency_overrides[routes_agent.get_session_factory] = lambda: session_factory
     app.dependency_overrides[routes_agent.get_thread_cleanup] = lambda: SubagentThreadCleanup(
         Fleet(apps=()), session_factory
     )

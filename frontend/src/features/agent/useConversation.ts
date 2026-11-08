@@ -22,6 +22,8 @@ interface UseConversation {
    * the sort panel files through the app directly, and the thread still has to
    * show that the question was answered. */
   note: (content: string) => Promise<void>
+  /** Read the thread again: a job's note (#90) was posted without a send. */
+  refresh: () => Promise<void>
 }
 
 /** Human-readable failure line for a `postMessage` run. */
@@ -147,5 +149,16 @@ export function useConversation(
     [conversationId, onExchange],
   )
 
-  return { detail, loading, error, pendingText, handoff, send, note }
+  const refresh = useCallback(async (): Promise<void> => {
+    if (conversationId === null) return
+    try {
+      const fresh = await getConversation(conversationId)
+      setLoaded({ id: conversationId, value: fresh })
+      onExchange?.()
+    } catch {
+      // The thread stays as it was; the next event reads it again.
+    }
+  }, [conversationId, onExchange])
+
+  return { detail, loading, error, pendingText, handoff, send, note, refresh }
 }
