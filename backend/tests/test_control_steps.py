@@ -158,7 +158,10 @@ def test_undo_picks_the_last_plan_unless_the_target_names_an_older_one() -> None
     assert control.pick(view, "that") == [last, other]
     assert control.pick(view, "the task Call the vet") == [older]
     assert control.pick(view, "tasks:task:41") == [older]
-    assert control.pick(view, "task 53") == [other]
+    # The planner naming one thing of the last plan doesn't narrow "undo that"...
+    assert control.pick(view, "task 53", "undo that") == [last, other]
+    # ...the person naming it does.
+    assert control.pick(view, "task 53", "undo the pay rent task") == [other]
     # A word that is no name never reaches back: a read last means nothing to undo.
     assert control.pick(Ledgered(last_plan=10, receipts=(older,)), "last") == []
 
@@ -487,3 +490,14 @@ def test_cancelling_an_undos_question_leaves_it_undoable(
     dropped = run_with(ScriptedProvider([plan_turn(amend("only the task"))]), "just the task")
     assert dropped["content"] == control.CANT_AMEND_UNDO
     assert [w.kind for w in world.writes()] == ["queue", "create"]
+
+
+def test_a_vague_line_about_the_undo_doesnt_stand_in_for_what_couldnt_be_undone(
+    run_with: Any,
+) -> None:
+    _s3(run_with)
+    run_with(ScriptedProvider([plan_turn(UNDO)]), "undo that")
+    vague = "Moved it to the trash. The other undo was not performed."
+    done = run_with(ScriptedProvider([plan_turn(YES), text_turn(vague)]), "yes")
+    assert done["content"].startswith(vague)
+    assert "didn't ask music to undo “Honey”, since a download can't be undone" in done["content"]

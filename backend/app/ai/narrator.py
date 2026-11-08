@@ -538,7 +538,11 @@ def _unrun_fact(record: ToolCallRecord, reason: str) -> _Fact:
         say = f"didn't ask {app} to {asked[0].lower()}{asked[1:]}, since {reason}"
     else:
         say = f"didn't get to {app}, since {reason}"
-    words = tuple(word for word in _norm(asked).split() if len(word) >= 4 and word != "that")
+    # "that" stands for an unfilled ref, and "undo" for every undo note (#74):
+    # neither names what didn't happen.
+    words = tuple(
+        word for word in _norm(asked).split() if len(word) >= 4 and word not in ("that", "undo")
+    )
     return _Fact("unrun", app, say, alternatives=words)
 
 

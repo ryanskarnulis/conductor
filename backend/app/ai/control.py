@@ -113,7 +113,7 @@ def run(
     if isinstance(step, plans.Amend):
         return amend(interp, state, turn, step, paused=paused, pending=pending)
     assert isinstance(step, plans.Undo)
-    return undo(interp, state, turn, step, view, position=0)
+    return undo(interp, state, turn, step, view, position=0, words=state.words)
 
 
 # --- cancel ----------------------------------------------------------------------------------
@@ -271,18 +271,20 @@ def undo(
     position: int,
     gate_app: str | None = None,
     handled: Sequence[int] = (),
+    words: str = "",
 ) -> AgentRunResult:
     """Undo what ``step.target`` names (the last plan, by default).
 
     ``position`` is the step's index in the plan (where a pause resumes),
     ``gate_app`` the app the person just said yes to at code's gate, and
     ``handled`` the receipts the yes this turn just redeemed: the undo goes on
-    with what's left.
+    with what's left. ``words`` are the person's own, when this turn is the
+    undo they asked for.
     """
     ledgered = view()
     if ledgered is None:
         return _say(interp, state, NO_RECORD)
-    chosen = pick(ledgered, step.target)
+    chosen = pick(ledgered, step.target, words)
     if not chosen and not handled:
         turn.note = "undo: nothing to undo"
         return _say(
@@ -382,14 +384,30 @@ def undo_waiting(
     return (step, index, pending.undoes) if isinstance(step, plans.Undo) else None
 
 
-def pick(ledgered: Ledgered, target: str) -> list[UndoReceipt]:
-    """The receipts a target means: the ones it names (the newest plan with
-    any), else the last plan's. Nothing older is ever picked unnamed."""
-    named = [receipt for receipt in ledgered.receipts if names(target, receipt)]
-    if named:
-        newest = named[0].plan_id
-        return [receipt for receipt in named if receipt.plan_id == newest]
-    return [receipt for receipt in ledgered.receipts if receipt.plan_id == ledgered.last_plan]
+def pick(ledgered: Ledgered, target: str, words: str = "") -> list[UndoReceipt]:
+    """The receipts an undo means.
+
+    The last plan's, all of them, unless the person's own ``words`` name some
+    of them ("undo the milk task"): the planner's target pointing at one
+    thing in State doesn't narrow "undo that". An older plan's only when the
+    target names something in it and nothing in the last plan: nothing older
+    is ever picked unnamed.
+    """
+    last = [receipt for receipt in ledgered.receipts if receipt.plan_id == ledgered.last_plan]
+    said = [receipt for receipt in last if words and names(words, receipt)]
+    if said:
+        return said
+    if any(names(target, receipt) for receipt in last):
+        return last
+    older = [
+        receipt
+        for receipt in ledgered.receipts
+        if receipt.plan_id != ledgered.last_plan and names(target, receipt)
+    ]
+    if older:
+        newest = older[0].plan_id
+        return [receipt for receipt in older if receipt.plan_id == newest]
+    return last
 
 
 def names(target: str, receipt: UndoReceipt) -> bool:
