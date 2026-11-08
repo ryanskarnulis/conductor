@@ -109,7 +109,7 @@ def job(conversation_id: int, payload: dict[str, Any]) -> None:
 
 
 def resumed(
-    reason: Literal["ask_user", "gate", "app_confirm"],
+    reason: Literal["ask_user", "gate", "app_confirm", "proposal"],
     *,
     step: str | None = None,
     answer: str | None = None,

@@ -26,6 +26,14 @@ jobs still to note (:func:`watched_jobs`), files each poll's report
 note: the ``noted_at`` claim, the assistant message and a ``job`` turn whose
 step carries the job's final receipts, in one transaction, so a note is
 posted once across restarts and races, and the job's writes have receipts.
+
+**Thinks** (#78) are jobs conductor owns (``app = "conductor"``): the think
+step's receipt files the row like an app's job; the thinker records each try
+(:func:`think_started`), each interruption as a ``not_run`` receipt on the
+think step (:func:`think_interrupted`, so the tries survive a restart), and
+posts the one note with :func:`note_think`. A proposal rides that note's
+``job`` turn as a ``think`` plan paused on ``proposal``: :func:`paused_plan`
+offers it while nothing the person said came after it.
 """
 
 from __future__ import annotations
@@ -40,7 +48,7 @@ from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
-from app.ai import confirmation, memory, narrator, run_record
+from app.ai import confirmation, memory, narrator, run_record, think
 from app.ai.loop import AgentRunResult, ToolCallRecord
 from app.ai.plan import Ledgered, PausedPlan, RunningJob, Touched, TurnPlan, UndoReceipt
 from app.ai.state_block import Entity
@@ -165,24 +173,46 @@ def close_turn(
     )
 
 
+# How many job notes in a row :func:`paused_plan` looks past for the person's turn.
+_NOTES_SCANNED = 20
+
+
 def paused_plan(db: Session, conversation_id: int) -> PausedPlan | None:
     """Last turn's compiled plan, if it is waiting on the person (#70).
 
     Only the newest turn's plan can resume: anything said or done since (a
     note included) lets the question lapse, as an app's question does. A
-    job's note (#76) is neither, so it doesn't.
+    job's note (#76) is neither, so it doesn't; but a think's proposal (#78)
+    posted since is the newest question, and it is the one a yes answers.
     """
-    last = db.execute(
-        select(LedgerTurn)
-        .where(
-            LedgerTurn.conversation_id == conversation_id,
-            LedgerTurn.status == "ended",
-            # A job's note (#76) is neither said nor done by the person.
-            LedgerTurn.kind != JOB_TURN,
+    turns = (
+        db.execute(
+            select(LedgerTurn)
+            .where(
+                LedgerTurn.conversation_id == conversation_id,
+                LedgerTurn.status == "ended",
+            )
+            .order_by(LedgerTurn.id.desc())
+            .limit(_NOTES_SCANNED)
         )
-        .order_by(LedgerTurn.id.desc())
-        .limit(1)
-    ).scalar_one_or_none()
+        .scalars()
+        .all()
+    )
+    last: LedgerTurn | None = None
+    for turn in turns:
+        if turn.kind != JOB_TURN:
+            last = turn
+            break
+        for plan in turn.plans:
+            if (
+                plan.pause == "proposal"
+                and plan.status == "paused"
+                and plan.body is not None
+                and plan.resume_at is not None
+            ):
+                return PausedPlan(
+                    body=plan.body, reason="proposal", resume_at=plan.resume_at, plan_id=plan.id
+                )
     if last is None or last.kind != "message":
         return None
     for plan in last.plans:
@@ -260,6 +290,10 @@ def self_report(db: Session, conversation_id: int) -> str:
         if not steps and turn.kind != JOB_TURN:
             lines.append("- nothing ran; you answered directly")
         for step in steps:
+            if step.kind == think.KIND:
+                problem = think.subject(str(step.arguments.get("problem") or ""))
+                lines.append(f"- handed {problem} to the thinking model, in the background")
+                continue
             verb = _STEP_WORDS.get(step.kind, step.kind)
             outcome = _OUTCOME_WORDS.get(step.outcome, step.outcome)
             if step.kind == "recall":
@@ -279,6 +313,9 @@ def self_report(db: Session, conversation_id: int) -> str:
         if turn.stop_reason and turn.stop_reason != "completed" and turn.kind != JOB_TURN:
             lines.append(f"- the turn ended {turn.stop_reason}")
     for job in running_jobs(db, conversation_id, limit=5):
+        if job.app == think.APP:
+            lines.append(f"Running: {think.running_line(job.ref, job.title, job.status)}")
+            continue
         total = f" of {job.total}" if job.total is not None else ""
         lines.append(f"Running: {job.app} job {job.ref}, {job.status}, {job.done}{total} done")
     if not lines:
@@ -413,6 +450,9 @@ def running_job_lines(db: Session, conversation_id: int) -> list[str]:
     """The state block's running jobs (#76), from the watcher's latest reads."""
     lines = []
     for job in running_jobs(db, conversation_id, limit=5):
+        if job.app == think.APP:
+            lines.append(think.running_line(job.ref, job.title, job.status))
+            continue
         what = narrator.job_subject(job.app, job.title, job.untrusted)
         outside = " (outside text)" if job.title and job.untrusted else ""
         progress = narrator.job_progress(job.done, job.total)
@@ -575,6 +615,9 @@ def step_kind(tool: str, arguments: dict[str, Any]) -> tuple[str, str | None]:
         return "look", tool.removeprefix(run_record.LOOK_PREFIX)
     if tool == confirmation.CONFIRM_TOOL:
         return "confirm", confirmation.record_app(tool, arguments)
+    if tool == think.TOOL:
+        # A think (#78): conductor's own background job.
+        return "think", think.APP
     if run_record.is_job_cancel(tool):
         # A cancel sent to a running job (#76): a write with its own receipt.
         return "cancel", tool.removeprefix(run_record.JOB_CANCEL_PREFIX)
@@ -663,7 +706,7 @@ def _journal_step(db: Session, plan: LedgerPlan, seq: int, record: ToolCallRecor
         for entry_seq, entry in enumerate(record.app_record or [], start=1):
             _journal_recall(db, step, entry_seq, entry)
         return
-    if app is None or kind not in ("ask", "confirm", "look", "cancel"):
+    if app is None or kind not in ("ask", "confirm", "look", "cancel", "think"):
         return
     if record.app_record is not None:
         for entry_seq, entry in enumerate(record.app_record, start=1):
@@ -1086,3 +1129,207 @@ def receipts_for(db: Session, turn_id: int) -> Sequence[LedgerReceipt]:
         .scalars()
         .all()
     )
+
+
+# --- thinks (#78) -------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ThinkJob:
+    """What the thinker needs to run a think: its problem and what its inputs
+    found (the think step's arguments), the person's words, when they asked,
+    and the tries cut off so far."""
+
+    id: int
+    ref: str
+    status: str
+    problem: str
+    given: list[dict[str, Any]]
+    asked: str
+    asked_at: datetime
+    conversation_id: int | None
+    surface: str | None
+    interruptions: int
+    polled_at: datetime | None
+    # The problem carries outside text (a title filled in from an app).
+    untrusted: bool = False
+
+
+def think_job(db: Session, job_id: int) -> ThinkJob | None:
+    row = db.get(LedgerJob, job_id)
+    if row is None or row.app != think.APP:
+        return None
+    step = db.get(LedgerStep, row.started_by_step_id) if row.started_by_step_id else None
+    turn = step.plan.turn if step is not None else None
+    arguments = step.arguments if step is not None else {}
+    given = arguments.get("given")
+    return ThinkJob(
+        id=row.id,
+        ref=row.ref,
+        status=row.status,
+        problem=str(arguments.get("problem") or row.title or ""),
+        given=list(given) if isinstance(given, list) else [],
+        asked=turn.words if turn is not None else "",
+        asked_at=_aware(turn.created_at if turn is not None else row.created_at),
+        conversation_id=turn.conversation_id if turn is not None else None,
+        surface=turn.surface if turn is not None else None,
+        interruptions=_interruptions(db, row),
+        polled_at=_aware(row.polled_at) if row.polled_at else None,
+        untrusted=row.untrusted,
+    )
+
+
+def _interruptions(db: Session, row: LedgerJob) -> int:
+    return len(
+        db.execute(
+            select(LedgerReceipt.id).where(
+                LedgerReceipt.job_id == row.id,
+                LedgerReceipt.app == think.APP,
+                LedgerReceipt.outcome == "not_run",
+            )
+        ).all()
+    )
+
+
+def think_started(db: Session, job_id: int, now: datetime) -> bool:
+    """A try begins: the row says ``working``. ``False`` (nothing written)
+    when the job was noted or cancelled meanwhile."""
+    row = db.get(LedgerJob, job_id)
+    if row is None or row.noted_at is not None or row.status == "canceled":
+        return False
+    row.status, row.polled_at = "working", now
+    db.flush()
+    return True
+
+
+def think_interrupted(db: Session, job_id: int, reason: str, now: datetime) -> int:
+    """A try was cut off (the GPU went to other work, or conductor restarted):
+    a ``not_run`` receipt on the think step says so, and the row waits as
+    ``interrupted``. How many tries have been cut off now."""
+    row = db.get(LedgerJob, job_id)
+    if row is None or row.noted_at is not None:
+        return 0
+    row.status, row.polled_at = "interrupted", now
+    if row.started_by_step_id is not None:
+        last = db.execute(
+            select(LedgerReceipt.seq)
+            .where(LedgerReceipt.step_id == row.started_by_step_id)
+            .order_by(LedgerReceipt.seq.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        db.add(
+            LedgerReceipt(
+                step_id=row.started_by_step_id,
+                seq=(last or 0) + 1,
+                source="conductor",
+                app=think.APP,
+                tool=think.TOOL,
+                outcome="not_run",
+                reason=f"interrupted: {_clip(reason, 200)}",
+                job_id=row.id,
+            )
+        )
+    db.flush()
+    return _interruptions(db, row)
+
+
+ThinkEnd = Literal["proposed", "answered", "failed", "gave_up", "cancelled"]
+_THINK_STATUS = {
+    "proposed": "completed",
+    "answered": "completed",
+    "failed": "failed",
+    "gave_up": "failed",
+    "cancelled": "canceled",
+}
+
+
+def note_think(
+    db: Session,
+    job_id: int,
+    text: str,
+    *,
+    how: ThinkEnd,
+    proposal: dict[str, Any] | None = None,
+    summary: str | None = None,
+    now: datetime,
+) -> int | None:
+    """Post a think's one note, as :func:`note_job` does an app job's: claim
+    ``noted_at`` (only if unclaimed), store the message and a ``job`` turn,
+    in the caller's commit. A ``proposal`` (a plan body) rides the turn as a
+    ``think`` plan paused on ``proposal``, and the message is an exchange
+    (:data:`app.ai.think.PROPOSAL`): the next thing the person says answers
+    it. ``None`` (nothing written) when the note was already posted or there
+    is no conversation to post into. A think writes nothing, so no receipt
+    claims it did."""
+    claimed = db.execute(
+        update(LedgerJob)
+        .where(LedgerJob.id == job_id, LedgerJob.noted_at.is_(None))
+        .values(noted_at=now)
+    )
+    if not _rowcount(claimed):
+        return None
+    row = db.get(LedgerJob, job_id)
+    assert row is not None
+    db.refresh(row)
+    row.status, row.polled_at = _THINK_STATUS[how], now
+    started = db.get(LedgerStep, row.started_by_step_id) if row.started_by_step_id else None
+    turn = started.plan.turn if started is not None else None
+    conversation = db.get(Conversation, turn.conversation_id) if turn is not None else None
+    if conversation is None or conversation.deleted_at is not None:
+        db.flush()
+        logger.info("think_note_skipped", job_id=job_id, why="no live conversation")
+        return None
+    message = ConversationMessage(
+        conversation_id=conversation.id,
+        role=ConversationRole.assistant,
+        content=text,
+        stop_reason=think.PROPOSAL if proposal is not None else narrator.JOB_NOTE,
+    )
+    conversation.updated_at = now
+    db.add(message)
+    db.flush()
+    row.note_message_id = message.id
+    note_turn = LedgerTurn(
+        conversation_id=conversation.id,
+        assistant_message_id=message.id,
+        kind=JOB_TURN,
+        words=f"{think.APP} {row.ref} {how}",
+        surface=turn.surface if turn is not None else None,
+        status="ended",
+        stop_reason=row.status,
+        ended_at=now,
+    )
+    db.add(note_turn)
+    db.flush()
+    plan = LedgerPlan(turn_id=note_turn.id, source=JOB_TURN, status="ran")
+    db.add(plan)
+    db.flush()
+    db.add(
+        LedgerStep(
+            plan_id=plan.id,
+            seq=1,
+            kind=JOB_STEP,
+            app=think.APP,
+            tool=f"job_{think.APP}",
+            arguments={"ref": row.ref},
+            outcome="done" if how in ("proposed", "answered") else "failed",
+            result=text,
+            error=None if how in ("proposed", "answered", "cancelled") else how,
+        )
+    )
+    if proposal is not None:
+        db.add(
+            LedgerPlan(
+                turn_id=note_turn.id,
+                source=think.KIND,
+                body=proposal,
+                acted=True,
+                status="paused",
+                note=_clip(summary or "", 500) or None,
+                pause="proposal",
+                resume_at=0,
+            )
+        )
+    db.flush()
+    logger.info("think_noted", job_id=job_id, ref=row.ref, how=how, message_id=message.id)
+    return message.id

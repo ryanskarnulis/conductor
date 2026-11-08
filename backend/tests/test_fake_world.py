@@ -70,6 +70,17 @@ def test_tasks_move_survives_an_stt_slip(world: World) -> None:
     assert "dentist appointment" in reply.text
 
 
+def test_tasks_takes_a_list_of_moves_one_per_line(world: World) -> None:
+    TasksApp(world).handle(
+        1,
+        "- move clear out old bikes to monday\n- reschedule sweep the floor to friday",
+    )
+    assert [(r.kind, r.title) for r in world.receipts] == [
+        ("update", "clear out old bikes"),
+        ("update", "sweep the floor"),
+    ]
+
+
 def test_tasks_reads_write_nothing(world: World) -> None:
     app = TasksApp(world)
     for message in ("what's due today?", "what's overdue?", "garage shelves"):

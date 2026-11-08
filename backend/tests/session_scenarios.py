@@ -34,6 +34,7 @@ from tests.session_harness import (
     Say,
     Scenario,
     Session,
+    Settle,
     StopAfter,
 )
 
@@ -522,19 +523,29 @@ def _s14(session: Session) -> None:
     assert not session.writes(propose), "wrote before the plan was confirmed"
     go = session.turn("go")
     week_end = session.world.today + timedelta(days=7)
-    planned = [
-        _task_for(session, r)
-        for r in session.writes(go)
-        if r.kind == "create" and r.detail.get("project") == "Garage"
-    ]
-    dated = [t for t in planned if t.due and session.world.today <= t.due <= week_end]
+    # New garage tasks or existing ones put on days this week (#78: the 26B
+    # often schedules the garage tasks already there): either is the plan.
+    planned = {
+        task.id: task
+        for task in (
+            _task_for(session, r) for r in session.writes(go) if r.kind in ("create", "update")
+        )
+        if task.project == "Garage"
+    }
+    dated = [t for t in planned.values() if t.due and session.world.today <= t.due <= week_end]
     assert len(dated) >= 3, f"{len(dated)} dated garage tasks this week"
 
 
 S14 = Scenario(
     "S14",
     "plan my week around the garage project: a concrete plan, confirmed before writing",
-    (Say("plan my week around the garage project", label="propose"), Say("yes", label="go")),
+    # A think (#78) answers at once and posts its proposal later: the person
+    # waits for it before saying yes. Today's loop asks in the turn.
+    (
+        Say("plan my week around the garage project", label="propose"),
+        Settle(),
+        Say("yes", label="go"),
+    ),
     (_s14,),
     script=lambda w: [
         _ask("tasks", "what's in the garage project?"),

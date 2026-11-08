@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from app.ai import narrator, run_record, turn_events
+from app.ai import narrator, run_record, think, turn_events
 from app.ai import plan as plans
 from app.ai.plan import RunningJob, TurnPlan
 from app.fleet.jobs import FINISHED, JobError, JobGone, JobRead
@@ -118,7 +118,12 @@ def _cancel_one(interp: Interpreter, state: _Run, job: RunningJob) -> str:
     app = interp._fleet.get(job.app)
     record = ToolCallRecord(tool=tool, arguments=arguments)
     line: str
-    if app is None or app.agent is None:
+    if job.app == think.APP:
+        answer = cancel_think(job.ref, job.title, job.untrusted)
+        line = f"Stopped thinking over {think.subject(job.title)}. Nothing was changed."
+        record.result = line
+        record.app_record = [cancel_receipt(job, answer)]
+    elif app is None or app.agent is None:
         record.error = f"{run_record.NOT_RUN_PREFIX}conductor can't reach {job.app}"
         line = f"I can't reach {job.app} to stop {subject}."
     else:
@@ -152,6 +157,16 @@ def _cancelled_line(app: str, subject: str, answer: JobRead) -> str:
         lead = subject[:1].upper() + subject[1:]
         return f"{lead} had already {ended.get(answer.status, 'ended')}: {progress}."
     return f"Asked {app} to stop {subject}: {progress} when I asked. I'll post a note when it ends."
+
+
+def cancel_think(ref: str, title: str | None, untrusted: bool) -> JobRead:
+    """Stop conductor's own think (#78): no app to ask, so the thinker's flag
+    is set (a try in flight is cut off, none starts) and the answer is code's,
+    in the jobs contract's shape, so the receipt and note paths are shared."""
+    think.request_cancel(ref)
+    return JobRead(
+        ref=ref, status="canceled", title=title, untrusted=untrusted, cancel_requested=True
+    )
 
 
 def card_note(app: str, subject: str, answer: JobRead) -> str:

@@ -17,6 +17,7 @@ import pytest
 from app.ai.provider import (
     ProviderRequestError,
     ProviderResponseError,
+    Sampling,
     ToolCallArgumentsError,
     ToolSpec,
 )
@@ -177,3 +178,62 @@ def test_thinking_defaults_off_and_optional_fields_omitted() -> None:
     assert "tools" not in payload
     assert "tool_choice" not in payload
     assert "max_tokens" not in payload
+
+
+# --- the think lane's streamed calls (#78) ---------------------------------------------
+
+
+def _sse(*chunks: dict[str, Any]) -> list[bytes]:
+    return [f"data: {json.dumps(chunk)}\n\n".encode() for chunk in chunks] + [b"data: [DONE]\n\n"]
+
+
+def _streaming(
+    lines: Callable[[LlamaCppProvider], Any],
+) -> tuple[LlamaCppProvider, list[httpx.Request]]:
+    requests: list[httpx.Request] = []
+    holder: dict[str, LlamaCppProvider] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=lines(holder["provider"]))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = LlamaCppProvider(
+        "http://test/v1",
+        "gemma-4-26b-a4b",
+        client=client,
+        sampling=Sampling(temperature=0.5, top_p=0.9, top_k=40),
+        stream=True,
+    )
+    holder["provider"] = provider
+    return provider, requests
+
+
+def test_a_streamed_call_assembles_the_answer_and_drops_the_thought() -> None:
+    chunks = _sse(
+        {"choices": [{"delta": {"reasoning_content": "let me think"}}]},
+        {"choices": [{"delta": {"content": '{"summary": '}}]},
+        {"choices": [{"delta": {"content": '"x"}'}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12}},
+    )
+    provider, requests = _streaming(lambda _p: iter(chunks))
+    result = provider.chat([{"role": "user", "content": "hi"}], enable_thinking=True)
+    assert result.content == '{"summary": "x"}'
+    assert result.finish_reason == "stop"
+    assert result.usage is not None and result.usage.completion_tokens == 3
+    payload = json.loads(requests[0].content)
+    assert payload["stream"] is True
+    assert (payload["temperature"], payload["top_p"], payload["top_k"]) == (0.5, 0.9, 40)
+    assert payload["chat_template_kwargs"] == {"enable_thinking": True}
+
+
+def test_abort_cuts_a_streamed_call_off_between_chunks() -> None:
+    def lines(provider: LlamaCppProvider) -> Any:
+        yield b'data: {"choices": [{"delta": {"reasoning_content": "hmm"}}]}\n\n'
+        provider.abort()  # a turn needs the GPU, from another thread
+        yield b'data: {"choices": [{"delta": {"content": "late"}}]}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    provider, _ = _streaming(lines)
+    with pytest.raises(ProviderRequestError, match="cut off"):
+        provider.chat([{"role": "user", "content": "hi"}])

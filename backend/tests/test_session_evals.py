@@ -48,6 +48,7 @@ from app.db.session import get_db
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
 from app.services.job_watcher import JobWatcher
+from app.services.thinker import Thinker, think_provider_from_settings
 from app.tools import registry
 from tests import eval_seed
 from tests.eval_db import database_wiper
@@ -64,7 +65,21 @@ from tests.fake_world import World, write_fixture_fleet
 from tests.receipt_claims import Tally
 from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
 from tests.session_harness import LoopDriver, Sample, Scenario, WorldHolder, run_sample, sample_line
-from tests.session_scenarios import S2, S3, S4, S5, S6, S9, S10, S11, S12, S15, S16, SCENARIOS
+from tests.session_scenarios import (
+    S2,
+    S3,
+    S4,
+    S5,
+    S6,
+    S9,
+    S10,
+    S11,
+    S12,
+    S14,
+    S15,
+    S16,
+    SCENARIOS,
+)
 
 _LIVE = os.environ.get("CONDUCTOR_AGENT_EVALS") == "1"
 _FRONTIER = os.environ.get("CONDUCTOR_FRONTIER_EVALS") == "1"
@@ -93,12 +108,24 @@ def _watching(
     session_factory: sessionmaker[DbSession],
     holder: WorldHolder,
     provider: Callable[[], ChatProvider | None],
+    think_provider: Callable[[], ChatProvider | None] | None = None,
 ) -> Callable[[], None]:
     """The job watcher (#76) over the eval's database and the world's jobs
-    endpoint; the returned ``settle`` is one pass of it with every job due,
-    run when the harness reads what arrived unprompted (time has passed)."""
+    endpoint, with the thinker (#78) when a ``think_provider`` is given; the
+    returned ``settle`` is one pass of it with every job due (a think runs to
+    its end), run when the harness reads what arrived unprompted or the
+    person waits (time has passed)."""
+    thinker = (
+        Thinker(session_factory, app.state.fleet, provider=think_provider)
+        if think_provider is not None and get_settings().conductor_think
+        else None
+    )
     watcher = JobWatcher(
-        session_factory, app.state.fleet, reader=holder.read_job, provider=provider
+        session_factory,
+        app.state.fleet,
+        reader=holder.read_job,
+        provider=provider,
+        thinker=thinker,
     )
     app.state.job_watcher = watcher
 
@@ -149,8 +176,9 @@ class _ScriptedRun:
     ) -> None:
         self.client = client
         self.provider = ScriptedProvider([])
-        # A job's note is narrated by the same scripted model, after the turns.
-        settle = _watching(session_factory, holder, lambda: self.provider)
+        # A job's note is narrated by the same scripted model, after the turns,
+        # and a think's proposal (#78) comes from it too, when the person waits.
+        settle = _watching(session_factory, holder, lambda: self.provider, lambda: self.provider)
         app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
             self.provider,
             fleet_section=getattr(app.state, "fleet_section", None),
@@ -228,6 +256,34 @@ COMPILED_SCRIPTS: dict[str, Callable[[World], list[Any]]] = {
         _S4_NOTE,
     ],
     S10.id: lambda w: [_plan(_ask_step("music", "sort my whole library"))],
+    # The think detaches with code's reply; the 26B's proposal posts while the
+    # person waits; their yes runs it (#78).
+    S14.id: lambda w: [
+        _plan({"do": "think", "problem": "plan my week around the garage project", "inputs": []}),
+        text_turn(
+            json.dumps(
+                {
+                    "summary": "3 garage tasks, Monday to Friday",
+                    "steps": [
+                        {
+                            "id": "s1",
+                            **_ask_step(
+                                "tasks",
+                                "Add these tasks to the Garage project:\n- buy the steel rack "
+                                "on monday\n- assemble the shelves on wednesday\n- sweep the "
+                                "garage floor on friday",
+                            ),
+                        }
+                    ],
+                }
+            )
+        ),
+        _plan({"do": "confirm", "answer": "yes"}),
+        text_turn(
+            "Added buy the steel rack (Mon), assemble the shelves (Wed) and sweep the garage "
+            "floor (Fri)."
+        ),
+    ],
     # Memory (#80). S5 on a fresh world: nothing on record, said plainly.
     S5.id: lambda w: [
         _plan({"do": "recall", "query": "garage shelves decision"}),
@@ -259,7 +315,7 @@ COMPILED_SCRIPTS: dict[str, Callable[[World], list[Any]]] = {
 }
 
 
-@pytest.mark.parametrize("scenario", [S4, S5, S6, S10, S11, S15], ids=lambda s: s.id)
+@pytest.mark.parametrize("scenario", [S4, S5, S6, S10, S11, S14, S15], ids=lambda s: s.id)
 def test_compiled_golden_script_passes(scenario: Scenario, compiled: _ScriptedRun) -> None:
     sample = compiled.run(scenario, COMPILED_SCRIPTS[scenario.id](World()))
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
@@ -460,7 +516,8 @@ def live(
             tool_names=_tool_names,
             reset=rate_limit._reset,
             fresh_db=database_wiper(db_session),
-            settle=_watching(session_factory, holder, provider),
+            # A think (#78) runs on the real 26B, unseeded, when S14 waits.
+            settle=_watching(session_factory, holder, provider, think_provider_from_settings),
         )
 
 

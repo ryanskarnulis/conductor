@@ -30,7 +30,15 @@ from fastapi.responses import Response
 from fastapi.sse import EventSourceResponse, format_sse_event
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.ai import confirmation, job_control, narrator, turn_context, turn_events
+from app.ai import (
+    confirmation,
+    foreground,
+    job_control,
+    narrator,
+    think,
+    turn_context,
+    turn_events,
+)
 from app.ai.plan import RunningJob
 from app.ai.loop import AgentLoop, AgentRunFailed, LoopActivity, loop_from_settings
 from app.ai.plan import PausedPlan
@@ -325,16 +333,20 @@ def cancel_job(
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
     app = fleet.get(job.app)
-    if app is None or app.agent is None:
+    if job.app == think.APP:
+        # Conductor's own think (#78): the thinker stops it, no app to ask.
+        answer = job_control.cancel_think(job.ref, job.title, job.untrusted)
+    elif app is None or app.agent is None:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY, detail=f"conductor can't reach {job.app}"
         )
-    try:
-        answer = canceller(app, job.ref)
-    except JobGone as exc:
-        raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
-    except JobError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    else:
+        try:
+            answer = canceller(app, job.ref)
+        except JobGone as exc:
+            raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+        except JobError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     running = RunningJob(
         app=job.app,
         ref=job.ref,
@@ -487,6 +499,8 @@ def post_message(
         )
 
     stop = turn_activity.begin(conversation_id)
+    # The GPU is the person's while their turn runs: a think yields (#78).
+    foreground.entered()
 
     def publish(kind: str, payload: dict[str, Any]) -> None:
         turn_activity.publish(conversation_id, stop, kind, payload)
@@ -539,6 +553,7 @@ def post_message(
         db.commit()
         ended.update(stop_reason=run.stop_reason, message_id=assistant_message.id)
     finally:
+        foreground.left()
         turn_activity.end(conversation_id, stop, **ended)
     return MessageExchange(
         user_message=MessageRead.model_validate(user_message),

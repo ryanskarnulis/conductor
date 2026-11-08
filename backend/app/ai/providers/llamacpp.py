@@ -17,6 +17,7 @@ needs analysis (the model profile's guidance).
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from collections.abc import Sequence
@@ -32,6 +33,7 @@ from app.ai.provider import (
     ChatResult,
     ProviderRequestError,
     ProviderResponseError,
+    Sampling,
     ToolCall,
     ToolCallArgumentsError,
     ToolSpec,
@@ -108,9 +110,20 @@ class LlamaCppProvider:
         timeout_seconds: float = 300.0,
         client: httpx.Client | None = None,
         capture: ContextCapture | None = None,
+        sampling: Sampling | None = None,
+        stream: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
+        # The model's sampling profile; the 12B's unless a caller brings its
+        # own (the 26B's ``think``, #78).
+        self._sampling = sampling or Sampling(_TEMPERATURE, _TOP_P, _TOP_K)
+        # Streamed calls (the ``think`` lane, #78) can be cut off between
+        # chunks: closing a blocked non-streamed read from another thread
+        # doesn't unblock it, and llama-swap holds the GPU for a request
+        # until it ends, so a turn would wait out the whole thought.
+        self._stream = stream
+        self._abort = threading.Event()
         # Context capture (#62): ``None``, the default, sends one request per
         # call and records nothing.
         self._capture = capture
@@ -128,6 +141,14 @@ class LlamaCppProvider:
 
     def close(self) -> None:
         self._client.close()
+
+    def abort(self) -> None:
+        """Cut off a call in flight from another thread (a ``think`` yielding
+        the GPU, #78). A streamed call stops reading at its next chunk and
+        closes the connection, so llama-swap ends the request and llama-server
+        stops generating for a client that left; the call raises. The provider
+        is spent."""
+        self._abort.set()
 
     def __enter__(self) -> LlamaCppProvider:
         return self
@@ -151,6 +172,8 @@ class LlamaCppProvider:
         )
         if response_format is not None:
             payload["response_format"] = response_format
+        if self._stream:
+            return self._result(self._post_stream(payload))
         stamp = self._begin_capture()
         if stamp is None:
             return self._result(self._post(payload, None))
@@ -178,11 +201,11 @@ class LlamaCppProvider:
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": list(messages),
-            "temperature": _TEMPERATURE,
-            "top_p": _TOP_P,
+            "temperature": self._sampling.temperature,
+            "top_p": self._sampling.top_p,
             # llama-server accepts these OpenAI extensions as plain body fields
             # (no SDK extra_body indirection needed).
-            "top_k": _TOP_K,
+            "top_k": self._sampling.top_k,
             "chat_template_kwargs": {"enable_thinking": enable_thinking},
         }
         if max_tokens is not None:
@@ -209,7 +232,8 @@ class LlamaCppProvider:
             response = self._client.send(request)
             if wire is not None:
                 wire.response = response
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, RuntimeError) as exc:
+            # A RuntimeError is a client closed under the call (``abort``).
             log.error("llm_request_failed", error=str(exc))
             raise ProviderRequestError(f"llama-server request failed: {exc}") from exc
         duration_ms = round((time.monotonic() - started) * 1000)
@@ -235,6 +259,62 @@ class LlamaCppProvider:
             completion_tokens=completion.usage.completion_tokens if completion.usage else None,
         )
         return completion
+
+    def _post_stream(self, payload: dict[str, Any]) -> _WireCompletion:
+        """One streamed call, read chunk by chunk until done or aborted; the
+        answer text and the finish reason assembled into one completion.
+        Reasoning deltas are read (they keep the stream moving while the
+        model thinks) and dropped, as in a plain call."""
+        log = logger.bind(llm_call_id=uuid.uuid4().hex[:8], model=self._model)
+        log.info("llm_request", messages=len(payload["messages"]), tools=0, stream=True)
+        started = time.monotonic()
+        content: list[str] = []
+        finish: str | None = None
+        usage: Usage | None = None
+        try:
+            with self._client.stream(
+                "POST", f"{self._base_url}/chat/completions", json={**payload, "stream": True}
+            ) as response:
+                if response.status_code != 200:
+                    response.read()
+                    log.error("llm_request_failed", status=response.status_code)
+                    raise ProviderRequestError(
+                        f"llama-server returned {response.status_code}: {response.text[:500]}"
+                    )
+                for line in response.iter_lines():
+                    if self._abort.is_set():
+                        raise ProviderRequestError("llama-server request cut off: aborted")
+                    if not line.startswith("data:"):
+                        continue
+                    data = line.removeprefix("data:").strip()
+                    if data == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    if isinstance(chunk.get("usage"), dict):
+                        usage = Usage.model_validate(chunk["usage"])
+                    for choice in chunk.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        if isinstance(delta.get("content"), str):
+                            content.append(delta["content"])
+                        if choice.get("finish_reason"):
+                            finish = choice["finish_reason"]
+        except (httpx.HTTPError, RuntimeError) as exc:
+            log.error("llm_request_failed", error=str(exc))
+            raise ProviderRequestError(f"llama-server request failed: {exc}") from exc
+        except (json.JSONDecodeError, ValidationError) as exc:
+            log.error("llm_response_invalid", error=str(exc))
+            raise ProviderResponseError(f"llama-server stream failed validation: {exc}") from exc
+        log.info(
+            "llm_response",
+            duration_ms=round((time.monotonic() - started) * 1000),
+            finish_reason=finish,
+            tool_calls=0,
+            completion_tokens=usage.completion_tokens if usage else None,
+        )
+        message = _WireMessage(content="".join(content) or None)
+        return _WireCompletion(
+            choices=[_WireChoice(message=message, finish_reason=finish)], usage=usage
+        )
 
     def _begin_capture(self) -> CallStamp | None:
         if self._capture is None:

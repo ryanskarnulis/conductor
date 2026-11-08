@@ -7,6 +7,7 @@ from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.ai import foreground, think
 from app.api import rate_limit, routes_agent, turn_activity
 from app.config import get_settings
 from app.db.models import Base
@@ -84,6 +85,9 @@ def _reset_rate_limiter() -> None:
 @pytest.fixture(autouse=True)
 def _reset_turn_activity() -> None:
     turn_activity._reset()
+    # Turns in flight and cancelled thinks (#78) are process-wide too.
+    foreground._reset()
+    think._reset()
 
 
 @pytest.fixture

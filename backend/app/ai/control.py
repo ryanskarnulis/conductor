@@ -63,6 +63,10 @@ CHANGED_NOTHING = "The last thing I did didn't change anything, so there's nothi
 NO_RECORD = "I can't read my record of what I did right now, so I haven't undone anything."
 CANT_AMEND_UNDO = "I can't change an undo partway, so I've dropped it; say undo again to redo it."
 CANT_UNDO = "None of that can be undone."
+CANT_AMEND_PROPOSAL = (
+    "I can't edit a plan I proposed, so I've set it aside and nothing changed. "
+    "Ask again with the change and I'll think it over."
+)
 _UNDO_STOPPED = f"{run_record.NOT_RUN_PREFIX}an earlier part of the undo didn't finish"
 
 # How many things one undo request or note names before it counts the rest.
@@ -189,6 +193,13 @@ def amend(
     if paused is None:
         assert pending is not None
         return _amend_question(interp, state, turn, pending, change)
+    if paused.reason == "proposal":
+        # A think's proposal (#78) runs only as the person saw it: a change
+        # sets it aside, never edits it into something they didn't see.
+        _lapse()
+        turn.ends, turn.ends_as = paused.plan_id, "set_aside"
+        turn.note = "amend: a proposal can't be edited; set it aside"
+        return _say(interp, state, CANT_AMEND_PROPOSAL)
     body = plans.load(paused.body)
     assert isinstance(body, plans.StepPlan)
     steps = list(body.steps)
