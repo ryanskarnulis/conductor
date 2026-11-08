@@ -1,9 +1,10 @@
 """The ledger (#69): one exact record of what happened.
 
-The only write path for the ``ledger_*`` tables. A turn is opened before the
-loop runs (the person's words, ``running``) and closed after it with the plan
-it ran: for today's loop, one ``loop`` plan whose steps are its tool calls,
-each with the receipts from the app's typed record (delegate v1.1). Receipts
+The only write path for the ``ledger_*`` tables. A turn is opened before it
+runs (the person's words, ``running``) and closed after it with the compiled
+plan it ran, one step per call, each with the receipts from the app's typed
+record (delegate v1.1). Rows from before #75 may also hold a ``loop`` plan
+(the retired loop's tool calls) beside a compiled one that ``fell_back``. Receipts
 fill the entity registry from their ``touched`` refs and the job store from
 their ``job`` reports.
 
@@ -49,7 +50,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.ai import confirmation, memory, narrator, run_record, think
-from app.ai.loop import AgentRunResult, ToolCallRecord
+from app.ai.runtime import AgentRunResult, ToolCallRecord
 from app.ai.plan import Ledgered, PausedPlan, RunningJob, Touched, TurnPlan, UndoReceipt
 from app.ai.state_block import Entity
 from app.db.models import (
@@ -135,7 +136,11 @@ def close_turn(
     run: AgentRunResult,
     assistant_message: ConversationMessage | None = None,
 ) -> None:
-    """End ``turn`` with the plan the loop ran: its steps and their receipts."""
+    """End ``turn`` with the plan it ran: its steps and their receipts.
+
+    A control step split off the plan (#75) is a plan of its own, first, with
+    the turn's first records as its steps; ``seq`` stays each record's place
+    in the turn, as the live channel numbered it."""
     if turn is None:
         return
 
@@ -146,17 +151,31 @@ def close_turn(
         turn.ended_at = utcnow()
         if assistant_message is not None:
             turn.assistant_message_id = assistant_message.id
-        compiled = None if run.plan is None else _compiled_plan(turn, run.plan)
-        if compiled is not None:
-            db.add(compiled)
-            _end_waiting_plan(db, turn, run.plan)
-        if compiled is not None and compiled.acted:
-            plan = compiled  # the compiled plan acted: its steps are the turn's calls
-        else:
-            plan = LedgerPlan(turn_id=turn.id, source="loop")
-            db.add(plan)
+        records = list(enumerate(run.tool_calls, start=1))
+        if run.plan is None:
+            # A turn that failed before it had a plan: nothing ran to journal
+            # but, defensively, any record still gets a plan row.
+            if records:
+                bare = LedgerPlan(turn_id=turn.id, source="compiled", status="ran")
+                db.add(bare)
+                db.flush()
+                for seq, record in records:
+                    _journal_step(db, bare, seq, record)
+                db.flush()
+            return
+        if run.plan.first is not None:
+            first = _compiled_plan(turn, run.plan.first)
+            db.add(first)
+            _end_waiting_plan(db, turn, run.plan.first)
+            db.flush()
+            for seq, record in records[: run.plan.first_steps]:
+                _journal_step(db, first, seq, record)
+            records = records[run.plan.first_steps :]
+        plan = _compiled_plan(turn, run.plan)
+        db.add(plan)
+        _end_waiting_plan(db, turn, run.plan)
         db.flush()
-        for seq, record in enumerate(run.tool_calls, start=1):
+        for seq, record in records:
             _journal_step(db, plan, seq, record)
         db.flush()
 
@@ -605,7 +624,7 @@ def recent_entities(db: Session, conversation_id: int, *, limit: int = 10) -> li
 
 
 def step_kind(tool: str, arguments: dict[str, Any]) -> tuple[str, str | None]:
-    """A loop tool call as a step kind and the app it spoke to."""
+    """A step's call as a step kind and the app it spoke to."""
     if tool.startswith("ask_"):
         return "ask", tool.removeprefix("ask_")
     if tool.startswith("open_"):

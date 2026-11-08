@@ -2,7 +2,8 @@
 
 "Actually, stop", "make it the first twenty" and "undo that" act on what's
 waiting or on what just ran, not on an app. Each runs as a plan of its own
-(:func:`app.ai.plan.fallback_reason`); the interpreter hands it here.
+(#75: one inside a longer plan is split off and runs first); the interpreter
+hands it here.
 
 - **cancel** ends the plan waiting on the person: paused on ``ask_user``, on
   code's own question (the gate), or on an app's ``confirm_required``. The
@@ -52,7 +53,7 @@ from app.fleet.tools import ask_tool_name
 
 if TYPE_CHECKING:
     from app.ai.interpreter import Interpreter, _Run
-    from app.ai.loop import AgentRunResult, ToolCallRecord
+    from app.ai.runtime import AgentRunResult, ToolCallRecord
 
 logger = structlog.get_logger(__name__)
 
@@ -250,8 +251,8 @@ def _app_of(step: plans.Ask | plans.Undo, paused: PausedPlan) -> str | None:
 def _amend_question(
     interp: Interpreter, state: _Run, turn: TurnPlan, pending: PendingConfirm, change: str
 ) -> AgentRunResult:
-    """An app's question from a turn the loop ran: the app gets what it was
-    asked, changed (no compiled plan was waiting)."""
+    """An app's question with no compiled plan waiting on it: the app gets
+    what it was asked, changed."""
     if pending.request is None or pending.undoes:
         turn.note = "amend: the app's question can't be changed"
         return _say(interp, state, NOTHING_TO_CHANGE)
@@ -347,7 +348,7 @@ def undo(
         _add(state, note)
     if not asks:
         if handled:
-            return interp._finish(state, turn, [], 1)
+            return interp._finish(state, turn, [])
         lead = f"Already undone: {_what(already)}." if already else CANT_UNDO
         line = narrator.record_line(state.records, state.trace.surface)
         return _say(interp, state, f"{lead} {line}".strip())
@@ -371,13 +372,13 @@ def undo(
             turn_events.paused("app_confirm", question=question, app=ask.app, step=step.id)
             turn.status, turn.pause = "paused", "app_confirm"
             turn.resume_at, turn.pause_app = position + 1, ask.app
-            return interp._finish(state, turn, [], 1)
+            return interp._finish(state, turn, [])
         if not interp._went_well(record):
             turn.note = f"undo stopped at {ask.app}"
             for later in asks[index + 1 :]:
                 _add(state, _unrun(later.app, later.request, _UNDO_STOPPED))
             break
-    return interp._finish(state, turn, [], 1)
+    return interp._finish(state, turn, [])
 
 
 def undo_waiting(
@@ -509,7 +510,7 @@ def _add(state: _Run, record: ToolCallRecord) -> None:
 
 
 def _unrun(app: str, message: str, error: str) -> ToolCallRecord:
-    from app.ai.loop import ToolCallRecord  # noqa: PLC0415
+    from app.ai.runtime import ToolCallRecord  # noqa: PLC0415
 
     return ToolCallRecord(tool=ask_tool_name(app), arguments={"message": message}, error=error)
 
@@ -524,9 +525,7 @@ def _lapse() -> None:
 
 def _say(interp: Interpreter, state: _Run, reply: str) -> AgentRunResult:
     """Code's own reply for a control step: plain facts, no model call."""
-    return interp._loop._finish(
-        "completed", narrator.fit(reply, state.trace.surface), state.records, 1, state.messages
-    )
+    return interp.say(state, reply)
 
 
 def _join(parts: Sequence[str]) -> str:

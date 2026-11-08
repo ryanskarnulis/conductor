@@ -22,7 +22,8 @@ from sqlalchemy.orm import Session
 from app.ai import compiler, narrator, run_record
 from app.ai import glance as glances_view
 from app.ai import plan as plans
-from app.ai.loop import AgentLoop, ToolCallRecord
+from app.ai.interpreter import Interpreter
+from app.ai.runtime import ToolCallRecord
 from app.api import routes_agent
 from app.db.models import LedgerPlan
 from app.fleet import glance as glance_reader
@@ -168,8 +169,8 @@ def run_with(
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
 
     def run(provider: ScriptedProvider, words: str, reader: Any = None) -> dict[str, Any]:
-        app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-            provider, fleet=fleet, narrate=True, glance=reader or glances
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+            provider, fleet, narrate=True, glance=reader or glances
         )
         response = client.post(
             f"/api/agent/conversations/{conversation}/messages", json={"content": words}
@@ -416,9 +417,9 @@ def test_a_look_after_a_stop_never_reads(
 
     stop = Stop()
     stop.request()
-    interpreter = Interpreter(AgentLoop(ScriptedProvider([]), fleet=fleet), fleet, glances)
+    interpreter = Interpreter(ScriptedProvider([]), fleet, glance=glances)
     with use_stop(stop):
-        record, _, _ = interpreter._call(ToolCall(id="1", name="look_tasks", arguments={}), "a")
+        record = interpreter._call(ToolCall(id="1", name="look_tasks", arguments={}), "a")
     assert glances.asked == [] and run_record.classify(record) == "not_run"
 
 

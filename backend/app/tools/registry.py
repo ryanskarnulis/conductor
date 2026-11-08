@@ -4,9 +4,9 @@ The single source of truth for the agent's tools — names, descriptions,
 argument schemas, dispatch. Names come from ``__name__``, descriptions from the
 docstring, and argument models plus JSON Schemas from the same ``func_metadata``
 machinery FastMCP uses, so every consumer validates and advertises exactly the
-same contract. The in-app loop (``app/ai/loop.py``) advertises :func:`tool_specs`
-to the provider and dispatches via :func:`call_tool`; a later slice adds the MCP
-server as a second consumer of the same registry.
+same contract. The turn runtime (``app/ai/runtime.py``) dispatches plan steps
+through :func:`call_tool`; the MCP server is the other consumer of the same
+registry.
 
 The registry starts **empty**. Conductor's real tools are one delegate per
 fleet app, built from each app's ``app.yaml`` block and registered in a later

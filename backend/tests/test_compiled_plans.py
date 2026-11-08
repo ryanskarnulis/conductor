@@ -2,8 +2,9 @@
 
 The model is scripted (``ScriptedProvider``): the compiler's call returns plan
 JSON, the narrator's and the speaker's return text. The apps are the session
-evals' fake fleet (``fake_world.py``), reached through the real route, loop,
-delegate tools and ledger.
+evals' fake fleet (``fake_world.py``), reached through the real route,
+interpreter, delegate tools and ledger. Since #75 every turn is a plan: what
+couldn't run gets one more repair, then code's question or honest line.
 """
 
 from __future__ import annotations
@@ -20,8 +21,10 @@ from sqlalchemy.orm import Session
 
 from app.ai import compiler, dataflow, speaker
 from app.ai import plan as plans
-from app.ai.loop import AgentLoop, LoopActivity
-from app.ai.provider import ChatResult, ProviderRequestError
+from app.ai import interpreter as interpreter_module
+from app.ai.interpreter import Interpreter
+from app.ai.runtime import Activity
+from app.ai.provider import ChatResult, ProviderRequestError, ProviderResponseError
 from app.api import routes_agent
 from app.db.models import LedgerPlan, LedgerTurn
 from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
@@ -114,28 +117,33 @@ def test_twelve_steps_run_and_thirteen_are_a_runaway(fleet: Fleet) -> None:
     assert "over the ceiling of 12" in _problems(steps(*looks * 13), fleet)[0]
 
 
-def test_what_v1_runs_and_what_falls_back(fleet: Fleet) -> None:
-    def reason(body: dict[str, Any]) -> str | None:
-        return plans.fallback_reason(plans.load(body))
+def test_what_runs_and_what_needs_another_repair(fleet: Fleet) -> None:
+    def found(body: dict[str, Any]) -> list[str]:
+        return plans.unrunnable(plans.load(body))
 
-    assert reason(steps(ask("tasks", "add milk"), ask("tasks", "add eggs"))) is None
-    assert reason({"answer": "chat"}) is None
+    assert found(steps(ask("tasks", "add milk"), ask("tasks", "add eggs"))) == []
+    assert found({"answer": "chat"}) == []
     # #80: recall runs over the ledger, and names what it resolved for {sN}.
-    assert reason(steps({"do": "recall", "query": "the fence project"})) is None
+    assert found(steps({"do": "recall", "query": "the fence project"})) == []
     recalled = steps({"do": "recall", "query": "that Caribou song"}, ask("music", "file {s1}"))
-    assert reason(recalled) is None
+    assert found(recalled) == []
     # #73: a look runs, but gives nothing to {sN}: a glance is not a name.
-    assert reason(steps({"do": "look", "app": "tasks"})) is None
-    assert reason(steps({"do": "look", "app": "tasks"}, ask("music", "grab {s1}"))) == "data_flow"
+    assert found(steps({"do": "look", "app": "tasks"})) == []
+    (looked,) = found(steps({"do": "look", "app": "tasks"}, ask("music", "grab {s1}")))
+    assert "s2 uses {s1}, but s1 is a look and gives no name to pass on" in looked
     # #72: cross-app plans and data flow from an ask run.
-    assert reason(steps(ask("music", "grab Swim"), ask("tasks", "sort it"))) is None
-    assert reason(steps(ask("music", "grab Swim"), ask("tasks", "sort {s1}"))) is None
-    assert reason(steps(ask("tasks", "add a"), {"do": "undo", "target": "last"})) == "kind:undo"
-    assert reason(steps({"do": "confirm", "answer": "yes"}, ask("tasks", "{s1}"))) == "data_flow"
+    assert found(steps(ask("music", "grab Swim"), ask("tasks", "sort it"))) == []
+    assert found(steps(ask("music", "grab Swim"), ask("tasks", "sort {s1}"))) == []
+    # #75: a control step in a longer plan runs (split off first): nothing to repair.
+    assert found(steps(ask("tasks", "add a"), {"do": "undo", "target": "last"})) == []
+    assert (
+        "s1 is a confirm"
+        in found(steps({"do": "confirm", "answer": "yes"}, ask("tasks", "{s1}")))[0]
+    )
     asked = steps(
         {"do": "ask_user", "question": "which?", "options": []}, ask("tasks", "move {s1}")
     )
-    assert reason(asked) is None
+    assert found(asked) == []
 
 
 def test_the_ack_says_what_is_about_to_happen() -> None:
@@ -201,8 +209,8 @@ def run_with(
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
 
     def run(provider: ScriptedProvider, words: str) -> dict[str, Any]:
-        app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-            provider, fleet=fleet, narrate=True, glance=glances
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+            provider, fleet, narrate=True, glance=glances
         )
         response = client.post(
             f"/api/agent/conversations/{conversation}/messages", json={"content": words}
@@ -241,23 +249,163 @@ def test_a_single_app_plan_runs_and_is_on_the_ledger(
     assert compiled.steps[0].receipts[0].outcome == "done"
 
 
-def test_a_plan_v1_cant_run_falls_back_to_the_loop(run_with: Any, db_session: Session) -> None:
-    # A glance names nothing for {s1} (#73), so this plan can't run yet.
+def test_a_ref_no_step_can_name_gets_one_more_repair(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    # A glance names nothing for {s1} (#73): the planner sees why, once more (#75).
     looked = steps({"do": "look", "app": "tasks"}, ask("tasks", "move {s1} to friday"))
-    provider = ScriptedProvider([plan_turn(looked), text_turn("Nothing due today.")])
+    provider = ScriptedProvider(
+        [plan_turn(looked), plan_turn(steps({"do": "look", "app": "tasks"})), text_turn("Two.")]
+    )
     reply = run_with(provider, "what's due today?")
-    assert reply["content"] == "Nothing due today."
-    assert provider.requests[1]["tools"]  # the loop's own call, with tools
-    compiled, loop_plan = _plans(db_session)
-    assert (compiled.status, compiled.note, compiled.acted) == ("fell_back", "data_flow", False)
-    assert (loop_plan.source, loop_plan.acted) == ("loop", True)
+    assert reply["content"].startswith("Two.")
+    repair = provider.requests[1]["messages"]
+    assert repair[-2]["content"] == json.dumps(looked)
+    assert repair[-1]["content"].startswith("Code still can't run that plan: s2 uses {s1}")
+    assert all(not request["tools"] for request in provider.requests)  # no loop, no tools
+    (compiled,) = _plans(db_session)
+    assert (compiled.source, compiled.status, compiled.acted) == ("compiled", "ran", True)
+    assert compiled.body == steps({"do": "look", "app": "tasks"})
+    assert world.writes() == []
 
 
-def test_no_valid_plan_after_a_repair_falls_back(run_with: Any, db_session: Session) -> None:
-    provider = ScriptedProvider([text_turn("nope"), text_turn("still nope"), text_turn("Hi.")])
-    assert run_with(provider, "hello")["content"] == "Hi."
-    compiled, _ = _plans(db_session)
-    assert (compiled.status, compiled.acted, compiled.body) == ("invalid", False, None)
+def test_no_runnable_plan_after_the_repairs_is_said_never_guessed(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    provider = ScriptedProvider([text_turn("nope"), text_turn("still nope"), text_turn("no")])
+    reply = run_with(provider, "do the thing with the stuff")
+    assert reply["content"] == interpreter_module.UNPLANNED
+    assert len(provider.requests) == 3  # the compile, its repair, and one more round
+    assert reply["tool_calls"] is None
+    assert world.writes() == [] and world.reads == []
+    (compiled,) = _plans(db_session)
+    assert (compiled.status, compiled.acted, compiled.body) == ("invalid", True, None)
+    assert compiled.note is not None and compiled.note.startswith("not a plan")
+
+
+def test_a_data_flow_plan_that_stays_unrunnable_runs_nothing(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    looked = plan_turn(steps({"do": "look", "app": "tasks"}, ask("tasks", "move {s1} to friday")))
+    provider = ScriptedProvider([looked, looked])
+    reply = run_with(provider, "move what's due today to friday")
+    assert reply["content"] == interpreter_module.UNPLANNED
+    assert world.writes() == [] and world.reads == []
+    (compiled,) = _plans(db_session)
+    assert compiled.status == "invalid" and "gives no name" in (compiled.note or "")
+
+
+def test_tries_that_disagree_on_the_app_get_codes_question(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    def misnumbered(app_name: str, request: str) -> str:
+        return json.dumps({"steps": [{"id": "s2", **ask(app_name, request)}]})
+
+    provider = ScriptedProvider(
+        [
+            text_turn(misnumbered("music", "grab Odessa")),
+            text_turn(misnumbered("tasks", "add Odessa")),
+            text_turn(misnumbered("music", "grab Odessa")),
+        ]
+    )
+    reply = run_with(provider, "Odessa")
+    assert reply["content"] == 'Do you mean "grab Odessa" in music, or "add Odessa" in tasks?'
+    assert world.writes() == [] and world.reads == []
+    assert ledger.paused_plan(db_session, run_with.conversation) is None
+
+
+def test_the_clarifying_question_names_apps_only_when_requests_run_long() -> None:
+    long = "x" * 70
+
+    def raw(app_name: str, request: str) -> str:
+        return json.dumps(steps(ask(app_name, request)))
+
+    question = interpreter_module.clarifying([raw("music", long), raw("tasks", "add it")])
+    assert question == "Do you mean that for music or for tasks?"
+    # A plan across both apps is no disagreement; neither is one app twice.
+    both = json.dumps(steps(ask("music", "grab Swim"), ask("tasks", "sort {s1}")))
+    assert interpreter_module.clarifying([both, raw("music", "grab Swim")]) is None
+    assert interpreter_module.clarifying([raw("music", "a"), raw("music", "b")]) is None
+    assert interpreter_module.clarifying(["nope", '{"answer": "chat"}']) is None
+
+
+def test_a_reply_the_server_couldnt_validate_gets_one_more_round(
+    run_with: Any, world: World
+) -> None:
+    provider = ScriptedProvider(
+        [
+            ProviderResponseError("llama-server response failed validation"),
+            plan_turn(steps(ask("tasks", "add a task to water the plants"))),
+            text_turn("Added “water the plants”."),
+        ]
+    )
+    reply = run_with(provider, "add a task to water the plants")
+    assert [w.kind for w in world.writes()] == ["create"]
+    assert reply["content"].startswith("Added “water the plants”.")
+
+
+def test_a_control_step_inside_a_plan_runs_first_then_the_rest(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    mixed = steps(ask("tasks", "add a task to water the plants"), {"do": "cancel", "target": "x"})
+    provider = ScriptedProvider([plan_turn(mixed), text_turn("Added “water the plants”.")])
+    reply = run_with(provider, "add a task to water the plants, and cancel that other thing")
+    assert reply["content"].startswith(
+        "There's nothing waiting to cancel. Added “water the plants”."
+    )
+    assert [w.kind for w in world.writes()] == ["create"]
+    first, rest = _plans(db_session)
+    assert first.body == {"steps": [{"id": "s2", "do": "cancel", "target": "x"}]}
+    assert first.steps == []
+    assert rest.body == steps(ask("tasks", "add a task to water the plants"))
+    assert [(s.seq, s.kind, s.app) for s in rest.steps] == [(1, "ask", "tasks")]
+    # The narrator saw only the rest's records, never the control step's line.
+    assert "nothing waiting" not in provider.requests[1]["messages"][1]["content"]
+
+
+def test_the_rest_waits_when_the_control_step_left_a_question(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    run_with(
+        ScriptedProvider(
+            [plan_turn(steps(ask("tasks", "add a task to water the plants"))), text_turn("Ok.")]
+        ),
+        "add a task to water the plants",
+    )
+    mixed = steps({"do": "undo", "target": "last"}, ask("tasks", "add a task to buy milk"))
+    reply = run_with(ScriptedProvider([plan_turn(mixed)]), "undo that and add milk instead")
+    # tasks asks its own question about the undo; adding milk waits, and is said.
+    assert reply["content"].startswith('Trash "water the plants"?')
+    assert "didn't ask tasks to add a task to buy milk" in reply["content"]
+    assert [w.kind for w in world.writes()] == ["create"]
+    undo, rest = _plans(db_session)[-2:]
+    assert (undo.status, undo.pause, undo.pause_app) == ("paused", "app_confirm", "tasks")
+    assert [s.outcome for s in rest.steps] == ["not_run"]
+    assert ledger.paused_plan(db_session, run_with.conversation) is not None
+
+
+def test_the_rest_depends_on_what_was_cancelled(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    gated = steps(ask("music", "delete the album download", destructive=True))
+    run_with(ScriptedProvider([plan_turn(gated)]), "delete the album download")
+    mixed = steps({"do": "confirm", "answer": "yes"}, {"do": "cancel", "target": "the delete"})
+    reply = run_with(ScriptedProvider([plan_turn(mixed)]), "cancel that, yes")
+    assert reply["content"].startswith("Okay, cancelled:")
+    assert "depended on what was cancelled" in reply["content"]
+    assert world.writes() == []
+    first, rest = _plans(db_session)[-2:]
+    assert first.body == {"steps": [{"id": "s2", "do": "cancel", "target": "the delete"}]}
+    assert rest.note is not None and "depended on what was cancelled" in rest.note
+
+
+def test_two_control_steps_in_one_plan_are_asked_for_one_at_a_time(
+    run_with: Any, world: World
+) -> None:
+    both = steps({"do": "undo", "target": "last"}, {"do": "cancel", "target": "x"})
+    reply = run_with(ScriptedProvider([plan_turn(both)]), "undo and cancel")
+    assert reply["content"] == interpreter_module.ONE_CONTROL
+    assert world.writes() == []
 
 
 @pytest.mark.parametrize(
@@ -370,16 +518,16 @@ def test_an_apps_own_question_takes_a_confirm_step(
 
 
 def test_the_ack_goes_out_before_any_app_is_asked(fleet: Fleet, world: World) -> None:
-    beats: list[LoopActivity] = []
+    beats: list[Activity] = []
     provider = ScriptedProvider(
         [plan_turn(steps(ask("tasks", "add a task to water the plants"))), text_turn("Added.")]
     )
-    loop = AgentLoop(provider, fleet=fleet, narrate=True)
+    conductor = Interpreter(provider, fleet, narrate=True)
     context = DelegationContext(
         master_conversation_id="1", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
     )
     with use_delegation_context(context):
-        result = loop.run("add a task to water the plants", on_activity=beats.append)
+        result = conductor.run("add a task to water the plants", on_activity=beats.append)
     acked = [i for i, beat in enumerate(beats) if beat.ack]
     asked = [i for i, beat in enumerate(beats) if beat.tool == "ask_tasks"]
     assert beats[acked[0]].ack == "On it, asking tasks."
@@ -392,7 +540,7 @@ def test_a_dead_model_while_compiling_is_a_502_with_the_turn_kept(
 ) -> None:
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
     provider = ScriptedProvider([ProviderRequestError("llama-server unreachable")])
-    app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(provider, fleet=fleet)
+    app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(provider, fleet)
     response = client.post(
         f"/api/agent/conversations/{conversation}/messages", json={"content": "hi"}
     )

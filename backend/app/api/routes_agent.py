@@ -1,8 +1,9 @@
-"""Agent chat API: conversations, history, and the message → loop round trip.
+"""Agent chat API: conversations, history, and the message → turn round trip.
 
 ``POST /agent/conversations/{id}/messages`` is the one model-calling endpoint:
 it stores the user turn, binds the delegation context (DB-backed thread store,
-per-turn budget, audit driver), runs the master loop synchronously, then
+per-turn budget, audit driver), runs the turn (compiled plan, #75)
+synchronously, then
 stores and returns the assistant turn. While it blocks,
 ``GET /agent/conversations/{id}/events`` streams what the turn is doing as
 Server-Sent Events (#38) and ``GET …/activity`` answers the same question
@@ -12,7 +13,7 @@ and each step's receipt as it lands; ``POST …/cancel`` stops it (#66,
 
 Deltas from PCC's routes_agent: no ``X-Agent-Actor`` handling — conductor is
 the delegation root (STANDARD.md depth-1), so no other agent may drive this
-API and every run carries the loop's own identity; plus the delegation-context
+API and every run carries conductor's own identity; plus the delegation-context
 binding and the activity endpoint, which PCC's local-tool agent doesn't need.
 """
 
@@ -40,7 +41,8 @@ from app.ai import (
     turn_events,
 )
 from app.ai.plan import RunningJob
-from app.ai.loop import AgentLoop, AgentRunFailed, LoopActivity, loop_from_settings
+from app.ai.interpreter import Interpreter, conductor_from_settings
+from app.ai.runtime import Activity, AgentRunFailed
 from app.ai.plan import PausedPlan
 from app.ai.providers.llamacpp import provider_from_settings
 from app.ai.state_block import Now
@@ -76,16 +78,19 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 
-def get_agent_loop(request: Request) -> Generator[AgentLoop, None, None]:
-    """The loop over the configured provider, carrying the fleet prompt layer
-    the lifespan rendered; tests override this dependency."""
+def get_conductor(request: Request) -> Generator[Interpreter, None, None]:
+    """The turn runtime over the configured provider and the fleet the
+    lifespan discovered (503 before discovery); tests override this
+    dependency."""
+    fleet: Fleet | None = getattr(request.app.state, "fleet", None)
+    if fleet is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="the fleet has not been discovered yet",
+        )
     provider = provider_from_settings()
     try:
-        yield loop_from_settings(
-            provider,
-            fleet_section=getattr(request.app.state, "fleet_section", None),
-            fleet=getattr(request.app.state, "fleet", None),
-        )
+        yield conductor_from_settings(provider, fleet)
     finally:
         provider.close()
 
@@ -286,8 +291,8 @@ def cancel_turn(
 ) -> RunCancelRead:
     """Stop the conversation's in-flight turn (#66); **404** for an unknown thread.
 
-    Idempotent and never blocks: it sets the turn's Stop and returns. The loop
-    stops at its next boundary (a provider call or tool dispatch) and the
+    Idempotent and never blocks: it sets the turn's Stop and returns. The turn
+    stops at its next boundary (a model call or a step) and the
     turn's own ``POST …/messages`` answers 200 ``cancelled``, its reply the
     code-kept record of what ran. A delegate call in flight gets the app's
     cancel after the response, best-effort. With nothing running the answer
@@ -419,7 +424,7 @@ def post_note(
 
     Some answers are given by clicking rather than by talking — filing a song
     from the sort panel, which reaches the app through
-    ``app/api/routes_fleet.py`` and never passes through conductor's loop. The
+    ``app/api/routes_fleet.py`` and never passes through a conductor turn. The
     act happened, so the thread has to show it: a transcript with a question in
     it and no answer under it is a worse record than none, and the next turn's
     model context would contradict what is on screen.
@@ -446,13 +451,13 @@ def post_message(
     conversation_id: int,
     data: MessageCreate,
     db: Session = Depends(get_db),
-    loop: AgentLoop = Depends(get_agent_loop),
+    conductor: Interpreter = Depends(get_conductor),
     thread_store: ThreadStore = Depends(get_thread_store),
 ) -> MessageExchange:
-    """Store the user turn, run the master loop, store and return the assistant turn.
+    """Store the user turn, run it, store and return the assistant turn.
 
-    The user message is committed *before* the loop runs: a run can take
-    minutes (each iteration may wrap a subagent's full loop) and a provider
+    The user message is committed *before* the turn runs: a turn can take
+    minutes (each step may wrap an app agent's full loop) and a provider
     failure — surfaced as 502 — must not swallow what the user said. A failed
     run (:class:`AgentRunFailed`: 502 for the provider, 500 for a crash) is
     stored as a truthful partial turn before the error goes out, so a write an
@@ -489,13 +494,9 @@ def post_message(
         pending_confirm=confirmation.pending(turns),
     )
 
-    def report(activity: LoopActivity) -> None:
+    def report(activity: Activity) -> None:
         turn_activity.update(
-            conversation_id,
-            kind=activity.kind,
-            tool=activity.tool,
-            iteration=activity.iteration,
-            ack=activity.ack,
+            conversation_id, kind=activity.kind, tool=activity.tool, ack=activity.ack
         )
 
     stop = turn_activity.begin(conversation_id)
@@ -512,7 +513,7 @@ def post_message(
     try:
         try:
             with use_delegation_context(context), turn_events.publishing(publish):
-                run = loop.run(
+                run = conductor.run(
                     data.content,
                     context=turn_opening,
                     surface=data.surface,

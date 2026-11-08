@@ -70,7 +70,7 @@ _NOT_SENT_ERRORS: tuple[type[httpx.HTTPError], ...] = (
 # audit actor for all mutations in the run (in place of its default
 # `agent:loop`); apps honor only recognized delegate actors, so this is the one
 # identity conductor may stamp. It is constant regardless of who drives
-# conductor (its own loop, or the MCP host).
+# conductor (its own turns, or the MCP host).
 CONDUCTOR_ACTOR = "agent:conductor"
 
 # Trace headers (#62). Conductor sends the turn and hop ids on every request of

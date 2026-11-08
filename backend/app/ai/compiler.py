@@ -3,8 +3,9 @@
 One planner call under ``json_schema`` decoding (:func:`app.ai.plan.schema`),
 then the validator (:func:`app.ai.plan.problems`). A plan with problems gets
 one repair: the planner sees its plan and code's objections and writes it
-again. A plan that is still invalid, or JSON that isn't a plan, is no plan:
-the loop takes the turn (:class:`Compiled` says why).
+again. A plan that is still invalid, or JSON that isn't a plan, is no plan
+(:class:`Compiled` says why); the interpreter gives it one more round
+(:func:`repair_turn`, #75), then answers in code's words, never a guess.
 
 The prompt is spike D1's v2 (#56: 88% on the 12B, 99.6% valid first try),
 built from the fleet's manifests and byte-identical turn to turn, so the
@@ -224,3 +225,67 @@ def compile_turn(
             ]
     logger.warning("plan_invalid", problems=compiled.problems)
     return compiled
+
+
+def repair_turn(
+    chat: PlannerChat,
+    *,
+    system_prompt: str,
+    context: str | None,
+    words: str,
+    fleet: Fleet,
+    checks: plans.Checks,
+    previous: Compiled,
+    found: list[str],
+) -> Compiled:
+    """One more repair round (#75), after :func:`compile_turn` gave no plan the
+    interpreter can run: the last reply and code's objections (the
+    validator's, or :func:`app.ai.plan.unrunnable`'s) go back once more. A
+    turn with no reply to show (the server's answer wasn't a completion)
+    asks again from the top. Returns ``previous`` with this round's reply and
+    problems added, and the plan if this one can run.
+
+    Provider failures propagate, as in :func:`compile_turn`.
+    """
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "plan",
+            "strict": True,
+            "schema": plans.schema(fleet, resumable=checks.resumable),
+        },
+    }
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message(context, words)},
+    ]
+    if previous.raw:
+        messages += [
+            {"role": "assistant", "content": previous.raw[-1]},
+            {
+                "role": "user",
+                "content": (
+                    "Code still can't run that plan: "
+                    + "; ".join(found)
+                    + ". Reply with the corrected plan as JSON only."
+                ),
+            },
+        ]
+    result = chat(messages, MAX_TOKENS, response_format)
+    raw = result.content or ""
+    previous.raw.append(raw)
+    previous.repaired = True
+    previous.plan = None
+    plan: plans.Plan | None
+    try:
+        plan = plans.parse(raw)
+    except ValueError as exc:
+        previous.problems = [f"not a plan: {str(exc).splitlines()[0][:200]}"]
+        return previous
+    problems = plans.problems(plan, checks) or plans.unrunnable(plan)
+    previous.problems = problems
+    if not problems:
+        previous.plan = plan
+    else:
+        logger.warning("plan_unrepaired", problems=problems)
+    return previous

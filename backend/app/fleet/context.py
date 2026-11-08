@@ -1,13 +1,13 @@
 """Per-run delegation state: the thread map, the call budget, and the audit hook.
 
 A :class:`DelegationContext` is bound (via a contextvar or, for the MCP server,
-a process-global fallback) around a run of conductor's loop. The ``ask_<app>``
+a process-global fallback) around a conductor turn. The ``ask_<app>``
 tools read it to answer three questions:
 
 - **Which subagent thread should this app's call reuse?** The context holds a
   :class:`ThreadStore` keyed by ``(master_conversation_id, app_name)`` so a
   follow-up to the same app in the same master conversation carries context
-  app-side. The store is an interface (the persistence seam): the HTTP loop
+  app-side. The store is an interface (the persistence seam): the HTTP route
   binds the DB-backed :class:`app.fleet.thread_store.DbThreadStore`, the MCP
   server a process-lifetime :class:`InMemoryThreadStore` — nothing else
   changes between them.
@@ -36,7 +36,7 @@ from app.tools.registry import ToolError
 
 logger = structlog.get_logger(__name__)
 
-# Driver identities: who is running conductor's loop this call. The delegate
+# Driver identities: who is running this conductor turn. The delegate
 # client always presents `agent:conductor` downstream regardless; this is
 # conductor's own audit tag for the run.
 LOOP_DRIVER = "agent:loop"
@@ -47,7 +47,7 @@ class ThreadStore(Protocol):
     """Maps ``(master_conversation_id, app_name)`` to a subagent thread id.
 
     The persistence seam — the tools only ever touch this interface, so which
-    store backs a run (the DB for the HTTP loop, memory for the MCP server) is
+    store backs a run (the DB for the HTTP route, memory for the MCP server) is
     entirely the binder's choice.
     """
 
@@ -62,7 +62,7 @@ class InMemoryThreadStore:
     """Process-lifetime :class:`ThreadStore` — the MCP server's session store.
 
     A pruned thread 404s and the tool recreates it, so a store that doesn't
-    survive restart is contract-compliant; the HTTP loop uses the DB-backed
+    survive restart is contract-compliant; the HTTP route uses the DB-backed
     ``DbThreadStore`` (``app/fleet/thread_store.py``) behind the same
     interface instead.
     """
@@ -82,12 +82,12 @@ class InMemoryThreadStore:
 
 @dataclass
 class DelegationContext:
-    """The delegation state for one master conversation / loop run."""
+    """The delegation state for one master conversation / turn."""
 
     master_conversation_id: str
     thread_store: ThreadStore
     # Per-turn per-app cap; <= 0 disables the budget (used by the MCP server,
-    # whose driver is itself a trusted agent, not conductor's shallow loop).
+    # whose driver is itself a trusted agent, not conductor's own turns).
     calls_per_turn_per_app: int
     # Conductor's own audit tag for this run's driver.
     driver: str = LOOP_DRIVER
@@ -141,7 +141,7 @@ class DelegationContext:
         return pending
 
     def reset_turn(self) -> None:
-        """Clear the per-turn call counters (a fresh master loop run)."""
+        """Clear the per-turn call counters (a fresh turn)."""
         self._calls_this_turn.clear()
 
     def audit_delegate_call(
@@ -178,7 +178,7 @@ class NoDelegationContextError(RuntimeError):
     """A delegate tool ran with no delegation context bound — a wiring bug."""
 
 
-# Request-scoped binding (Slice 4's HTTP loop wraps each run in this); the MCP
+# Request-scoped binding (the HTTP route wraps each turn in this); the MCP
 # server has no per-request scope, so it registers a process-global fallback.
 _current: ContextVar[DelegationContext | None] = ContextVar(
     "current_delegation_context", default=None

@@ -7,7 +7,7 @@ app-side even after conductor comes back up. (A stale mapping is harmless — a
 pruned subagent thread 404s and the delegate tool recreates it.)
 
 Each operation opens its own short session from the given factory and commits
-immediately: the master loop run holds no transaction open while a delegate
+immediately: a turn holds no transaction open while a delegate
 call is in flight, so a minutes-long subagent turn never pins a SQLite write
 lock against the route's session.
 """

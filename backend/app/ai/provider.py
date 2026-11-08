@@ -1,7 +1,7 @@
 """The provider seam: the chat contract and its transport-agnostic types.
 
 Nothing above this line knows which model or backend answers a completion — the
-loop (``app/ai/loop.py``) depends only on the :class:`ChatProvider` protocol and
+turn runtime (``app/ai/runtime.py``) depends only on the :class:`ChatProvider` protocol and
 these shared types; the concrete llama.cpp client lives in
 ``app/ai/providers/llamacpp.py`` behind it, and tests substitute a scripted fake
 at the same shape. The types here are the wire-neutral vocabulary both sides
@@ -35,8 +35,8 @@ class ProviderResponseError(ProviderError):
 class ToolCallArgumentsError(ProviderResponseError):
     """The model emitted tool-call arguments that aren't a JSON object.
 
-    The tool name is carried so the loop can feed a targeted correction back;
-    the turn can't round-trip into history, so it never becomes a tool result.
+    The tool name is carried for the log; conductor's own calls offer no tools
+    since #75, so it only reaches the planner as a reply that isn't a plan.
     """
 
     def __init__(self, tool_name: str, detail: str) -> None:
@@ -120,7 +120,7 @@ def tool_result_message(tool_call_id: str, content: str) -> dict[str, Any]:
 
 
 class ChatProvider(Protocol):
-    """What the loop needs from a provider — matched by ``LlamaCppProvider``."""
+    """What a turn needs from a provider — matched by ``LlamaCppProvider``."""
 
     def chat(
         self,

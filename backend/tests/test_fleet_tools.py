@@ -1,4 +1,4 @@
-"""Delegate tools, list_agents, the prompt fleet layer, and the loop path.
+"""Delegate tools, list_agents, and the path through a compiled turn.
 
 All fakes — no live delegate calls. The ask_<app> tools are exercised against a
 scriptable fake client so the contract behaviors (thread reuse, 404
@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Generator, Sequence
-from datetime import date, datetime
+from datetime import datetime
+from typing import Any
 
 import httpx
 import pytest
 import structlog
 
-from app.ai.loop import AgentLoop, build_system_prompt
+from app.ai.interpreter import Interpreter
 from app.fleet.context import (
     DelegationContext,
     InMemoryThreadStore,
@@ -33,16 +34,16 @@ from app.fleet.delegate import (
     ToolCallRead,
 )
 from app.fleet.manifests import AgentSpec, Fleet, FleetApp, OpenSpec
-from app.fleet.tools import (
-    MAX_INTENT_LENGTH,
-    build_delegate_tools,
-    render_fleet_section,
-)
+from app.fleet.tools import MAX_INTENT_LENGTH, build_delegate_tools
 from app.tools import registry
 from app.tools.registry import ToolError
 from tests.scripted_provider import ScriptedProvider
 from tests.scripted_provider import text_turn as _text
-from tests.scripted_provider import tool_calls_turn as _calls
+
+
+def _plan(app_name: str, request: str) -> Any:
+    step = {"id": "s1", "do": "ask", "app": app_name, "request": request, "destructive": False}
+    return _text(json.dumps({"steps": [step]}))
 
 
 def _fleet() -> Fleet:
@@ -336,21 +337,20 @@ def test_the_apps_own_tools_are_recorded_structurally(
 def test_a_dispatched_delegate_call_carries_what_the_app_ran(
     bound_context: DelegationContext,
 ) -> None:
-    """End to end through the loop: the record the UI reads, off one turn."""
+    """End to end through a compiled turn: the record the UI reads."""
     exchange = _exchange(
         content="filed 5 into Dubstep",
         tool_calls=[ToolCallRead(tool="sort_music", arguments={}, result="{}")],
     )
-    build_delegate_tools(_fleet(), _factory(FakeClient([], send_effects=[exchange])))
-    provider = ScriptedProvider(
-        [_calls(("ask_tasks", {"message": "sort my music"})), _text("all filed")]
-    )
+    fleet = _fleet()
+    build_delegate_tools(fleet, _factory(FakeClient([], send_effects=[exchange])))
+    provider = ScriptedProvider([_plan("tasks", "sort my music")])
 
-    run = AgentLoop(provider).run("sort my music")
+    run = Interpreter(provider, fleet).run("sort my music")
 
     (record,) = run.tool_calls
     assert record.app_tools == ["sort_music"]
-    # And it stays out of what the model was shown.
+    # And it stays out of the result text, apart from the activity note.
     assert "sort_music" not in (record.result or "").replace("[tasks did: sort_music]", "")
 
 
@@ -611,64 +611,12 @@ def test_list_agents_reports_fleet_from_manifests() -> None:
     assert listing["inert_apps"] == ["odysseus"]
 
 
-# --- prompt fleet layer --------------------------------------------------------
+# --- a turn's path -------------------------------------------------------------
 
 
-def test_render_fleet_section_lists_tools_and_examples() -> None:
-    section = render_fleet_section(_fleet())
-    assert "ask_chess" in section
-    assert "ask_tasks" in section
-    assert "Plays chess." in section
-    # Examples are present as routing hints.
-    assert "move my knight to f3" in section
-    # Open tools are listed too, as a handoff rather than a delegation.
-    assert "open_arcade" in section
-    assert "Opens the arcade in the browser." in section
-    assert "fire up the arcade" in section
-    assert "hand the user OVER" in section
-    # Only the app with neither block is named as un-actionable.
-    assert "odysseus" in section
-
-
-def test_render_fleet_section_empty_without_tool_bearing_apps() -> None:
-    fleet = Fleet(apps=(FleetApp("odysseus", "Odysseus", "127.0.0.1:7000", agent=None),))
-    assert render_fleet_section(fleet) == ""
-
-
-def test_render_fleet_section_lists_an_open_only_fleet() -> None:
-    # No agents at all: the section is still worth rendering — conductor can
-    # hand the user over even when it can delegate to nothing.
-    arcade = _fleet().get("arcade")
-    assert arcade is not None
-    section = render_fleet_section(Fleet(apps=(arcade,)))
-    assert "open_arcade" in section
-
-
-def test_system_prompt_composes_base_glitch_fleet_then_date() -> None:
-    section = render_fleet_section(_fleet())
-    prompt = build_system_prompt(date(2026, 7, 11), fleet_section=section)
-
-    base_at = prompt.index("Act only through your tools")
-    glitch_at = prompt.index("you are Glitch")
-    fleet_at = prompt.index("Your fleet")
-    date_at = prompt.index("Today's date is 2026-07-11.")
-    assert base_at < glitch_at < fleet_at < date_at
-    # Routing examples ride in the prompt, not in tool docstrings.
-    assert "move my knight to f3" in prompt
-
-
-def test_system_prompt_without_fleet_section_is_unchanged() -> None:
-    prompt = build_system_prompt(date(2026, 7, 11))
-    assert "Your fleet" not in prompt
-    assert prompt.rstrip().endswith("Today's date is 2026-07-11.")
-
-
-# --- loop-level path -----------------------------------------------------------
-
-
-def test_loop_delegates_via_context_then_answers() -> None:
-    """Scripted provider calls ask_chess, then answers — the full path through
-    the DelegationContext with a fake client."""
+def test_a_plan_delegates_via_context_and_keeps_the_reply() -> None:
+    """A plan that asks chess, then code's reply — the full path through the
+    DelegationContext with a fake client."""
     log: list[tuple[object, ...]] = []
     exchange = _exchange(
         content="e4 played",
@@ -676,15 +624,9 @@ def test_loop_delegates_via_context_then_answers() -> None:
     )
     fleet = _fleet()
     build_delegate_tools(fleet, _factory(FakeClient(log, send_effects=[exchange])))
-    section = render_fleet_section(fleet)
 
-    provider = ScriptedProvider(
-        [
-            _calls(("ask_chess", {"message": "play e4"})),
-            _text("done — e4 is on the board."),
-        ]
-    )
-    loop = AgentLoop(provider, fleet_section=section)
+    provider = ScriptedProvider([_plan("chess", "play e4")])
+    conductor = Interpreter(provider, fleet)
 
     context = DelegationContext(
         master_conversation_id="master-1",
@@ -692,18 +634,20 @@ def test_loop_delegates_via_context_then_answers() -> None:
         calls_per_turn_per_app=3,
     )
     with use_delegation_context(context):
-        result = loop.run("play e4 in chess")
+        result = conductor.run("play e4 in chess")
 
     assert result.stop_reason == "completed"
-    assert result.reply == "done — e4 is on the board."
     assert [record.tool for record in result.tool_calls] == ["ask_chess"]
-    assert result.tool_calls[0].error is None
-    # The delegated reply + activity note was fed back to the model as a tool result.
-    tool_feedback = provider.requests[1]["messages"][-1]
-    assert tool_feedback["role"] == "tool"
-    assert "e4 played" in tool_feedback["content"]
-    assert "[chess did: make_move]" in tool_feedback["content"]
-    # The system prompt carried the fleet layer.
+    (record,) = result.tool_calls
+    assert record.error is None
+    # The delegated reply + activity note is the step's result; with no typed
+    # record (a v1 app) code's reply says it in the app's words.
+    assert "e4 played" in (record.result or "")
+    assert "[chess did: make_move]" in (record.result or "")
+    assert result.reply == "chess said: e4 played"
+    # The planner prompt carries the fleet's routing examples, not tool docstrings.
     system_prompt = provider.requests[0]["messages"][0]["content"]
-    assert "Your fleet" in system_prompt
+    assert "- chess (ask): Plays chess." in system_prompt
+    assert "move my knight to f3" in system_prompt
+    assert provider.requests[0]["tools"] == []
     assert context.thread_for("chess") == 1

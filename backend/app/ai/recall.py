@@ -36,7 +36,7 @@ from datetime import datetime
 from typing import Any
 
 from app.ai import run_record
-from app.ai.loop import ToolCallRecord
+from app.ai.runtime import ToolCallRecord
 
 # The person's earlier requests: each cut to this many characters, and the
 # newest kept until this many in all (PCC's and chess's numbers).
