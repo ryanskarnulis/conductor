@@ -46,6 +46,8 @@ from app.services.thinker import Thinker, _Cut, think_provider_from_settings
 
 _LIVE = os.environ.get("CONDUCTOR_THINK_EVALS") == "1"
 _RUNS = int(os.environ.get("CONDUCTOR_THINK_EVAL_RUNS", "10"))
+# A think left running holds the GPU for minutes: fewer runs of that arm.
+_NO_YIELD_RUNS = int(os.environ.get("CONDUCTOR_THINK_EVAL_NO_YIELD_RUNS", "3"))
 WORKSPACE_ROOT = Path(
     os.environ.get("CONDUCTOR_EVAL_FLEET_DIR", str(Path(__file__).resolve().parents[3]))
 )
@@ -146,14 +148,15 @@ def test_foreground_latency_during_a_think(session_factory: sessionmaker[Session
     for _ in range(_RUNS):
         results["warm"].append(foreground_call())
     for arm in ("yield", "no_yield"):
-        # A think left running can hold the GPU for a minute or more: fewer runs.
-        for _ in range(_RUNS if arm == "yield" else max(3, _RUNS // 2)):
+        for _ in range(_RUNS if arm == "yield" else _NO_YIELD_RUNS):
             foreground._reset()
             seconds, ending = during_think(yield_gpu=arm == "yield")
             results[arm].append(seconds)
             endings[arm].append(ending)
     foreground._reset()
     for arm, values in results.items():
+        if not values:
+            continue
         print(
             f"[contention] {arm}: n={len(values)} p50={_pct(values, 0.5):.2f}s "
             f"p95={_pct(values, 0.95):.2f}s max={max(values):.2f}s "

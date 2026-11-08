@@ -18,8 +18,9 @@ yes runs it as a normal plan through the interpreter, and a no or anything
 else lets it lapse.
 
 The GPU is exclusive, and the person comes first: a think yields to a
-conversation turn (:mod:`app.ai.foreground`) and to any other model call that
-stops the 26B, is marked ``interrupted``, and tries again after
+conversation turn (:mod:`app.ai.foreground`; its streamed call is cut off),
+and a failed call (the 26B stopped under it) counts the same. It is marked
+``interrupted`` and tries again after
 :data:`QUIET` with no turn, at most :data:`MAX_TRIES` times; then code's
 honest :func:`gave_up_text`. A proposal is never claimed unless one was made.
 

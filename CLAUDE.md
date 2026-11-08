@@ -190,8 +190,12 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   confirm card) and nothing in it runs without the person's yes. Yes runs it
   as a normal plan (gates and apps' questions still ask); no, an amend or
   anything else sets it aside. **It yields the GPU**: no try starts during a
-  turn, one in flight is cut off when a turn starts (`app/ai/foreground.py`)
-  or the 26B is stopped under it; it is `interrupted` (a `not_run` receipt)
+  turn, and one in flight is cut off when a turn starts
+  (`app/ai/foreground.py`). The call streams so the cut-off closes it between
+  chunks: llama-swap finishes an in-flight request before it swaps, so
+  without that a turn waits out the whole thought (~2 min measured). Another
+  app's model call still waits behind a think (no cross-app priority yet). A
+  cut-off or failed call is `interrupted` (a `not_run` receipt)
   and retried after 60 s with no turn, 3 tries, then code's honest "couldn't
   finish". Never claim a proposal that wasn't made.
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so

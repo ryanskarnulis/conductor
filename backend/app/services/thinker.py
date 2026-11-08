@@ -16,9 +16,13 @@ hands it here (:meth:`Thinker.tick`) instead of polling an app. One try:
 **It yields.** The GPU is exclusive (``../llama-swap/config.yaml``), and the
 person comes first. A try never starts while a conversation turn runs
 (:mod:`app.ai.foreground`), and one in flight is cut off (the provider's
-``abort``) the moment a turn starts; another app's model call stops the 26B
-outright, which the call sees as a provider error. Either way the try is
-``interrupted`` (a ``not_run`` receipt on the think step) and tried again
+``abort``) the moment a turn starts. The call streams, so the cut-off closes
+it between chunks: llama-swap finishes an in-flight request before it swaps,
+and a blocked non-streamed read can't be closed from another thread, so
+without streaming the turn waited out the whole thought (~2 min, measured in
+``docs/agent-evals.md``). Another app's model call is not seen here and waits
+behind a think. A call that fails (the 26B stopped, a timeout) counts the
+same. Either way the try is ``interrupted`` (a ``not_run`` receipt on the think step) and tried again
 only after :data:`app.ai.think.QUIET` with no turn and no try, at most
 :data:`app.ai.think.MAX_TRIES` times in all; then code's note says it
 couldn't finish. A proposal is never claimed unless one was made.
@@ -73,6 +77,7 @@ def think_provider_from_settings() -> LlamaCppProvider:
         timeout_seconds=settings.conductor_think_timeout_seconds,
         capture=context_capture_from_settings(),
         sampling=think.PROFILE,
+        stream=True,
     )
 
 

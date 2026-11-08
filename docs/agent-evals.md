@@ -476,3 +476,79 @@ Gate tier, 5 samples each, compiler on, planner prompt and schema unchanged:
   35/35, ref 19/20, control 22/25, memory 8/10, knowledge 15/15, hard 2/5,
   self 9/15, holdout 47/50, long 40/40). The planner prompt and step kinds
   didn't change.
+
+### Escalation: `think` on the local 26B (#78, 2026-11-08)
+
+A `think` step runs as a background job on gemma-4-26b-a4b (thinking on,
+`json_schema` on the answer, its own prompt and sampling). Its proposal posts
+as the job's note and runs only on a yes. The session harness's `Settle` step
+lets the think finish before the person says yes (in evals the watcher's
+`sweep(force=True)` runs it to its end). The 12B planner prompt and step kinds
+didn't change.
+
+**S14 (frontier), "plan my week around the garage project", then "yes".** 10
+samples per arm. The check counts garage tasks put on days this week by the
+"yes" turn, new or rescheduled. Before this change it counted only new
+tasks, and the 26B mostly reschedules the three garage tasks already there.
+
+| arm | S14 | when the 12B planned a `think` |
+|---|---|---|
+| 12B only (`CONDUCTOR_THINK=0`: `think` falls back to the loop) | 0/10 | – |
+| 26B think, first prompt, new-tasks-only check (the full suite run) | 0/5 | 0/5 |
+| 26B think, first prompt | 7/10 | 7/9 |
+| 26B think, shipped prompt | 9/10 | 9/9 |
+| 26B think, shipped prompt, streamed call (shipped) | 6/10 | 6/6 |
+
+- The 12B-only arm never writes a plan: it lists the garage tasks and asks,
+  and the "yes" reaches nothing concrete.
+- The first prompt let the 26B put the whole schedule in its summary with no
+  steps (2/10). The shipped prompt says a schedule always has steps, one
+  change per line.
+- Every miss in the shipped arms is the 12B not escalating: it plans a plain
+  ask (1/10 and 4/10 across two runs), and once its own ask wrote a junk task
+  before the yes. Whenever it planned a think, S14 passed (15/15).
+- Two of the 26B's 15 answers needed the one repair. All 15 were proposals
+  of asks to tasks. None was claimed without a plan.
+- Thinks took 39–116 s on the 26B (p50 ~55 s), including the swap. Turn 1
+  answers at once ("Thinking it over…"), p50 2.7–9 s with the ask before it.
+- The fake tasks app now takes a list of moves, one per line, as PCC's agent
+  does. Two first-prompt passes came from it reading "schedule X to Monday"
+  as new tasks.
+
+**Foreground latency during an escalation.** `tests/test_think_contention.py`
+(`CONDUCTOR_THINK_EVALS=1`) times one foreground planner call on the 12B (the
+shipped planner prompt and schema, "what's due today?"). It starts the call
+3 s after the 26B is loaded and generating a real S14 think. Arms run back to
+back on the shared GPU:
+
+| arm | n | p50 | p95 | max |
+|---|---|---|---|---|
+| warm, no think | 10 | 0.34 s | 0.34 s | 0.34 s |
+| think yields (shipped: the turn cuts the streamed call off) | 10 | 5.57 s | 5.64 s | 5.64 s |
+| think left running | 3 | 125 s | 128 s | 128 s |
+| think yields, non-streamed call (first cut) | 10 | 124 s | 133 s | 133 s |
+
+- llama-swap doesn't stop the 26B for a 12B request. It finishes the
+  in-flight request first, so a foreground turn would wait out the whole
+  thought.
+- Closing a non-streamed call from another thread didn't unblock its read,
+  so the first cut waited too. The think's call now streams and stops
+  reading at the next chunk. The ~5.6 s that's left is the 26B → 12B swap
+  plus a cold prefill.
+- Another app's model call (PCC's agent, chess) isn't seen by conductor's
+  turn tracker, so it still waits behind a running think. That needs the GPU
+  priority gate (#56, later).
+
+Same day, same branch:
+- Plan-level evals: every group passed its gate (golden 91/105, cross 35/35,
+  ref 15/20, control 20/25, memory 7/10, knowledge 15/15, hard 4/5, self
+  9/15, holdout 48/50, long 36/40). The planner prompt, schema and validator
+  are unchanged.
+- Session gate tier: S1, S2, S2r, S4, S7, S8, S9 and S16 were 5/5, and S5
+  was 4/5.
+- Frontier: S3 5/5, S6 4/5, S10 5/5, S11 3/5, S12 0/5 (`unsupported`), S13
+  0/5 (unchanged; in one sample the 12B planned a think for "anything I
+  should know?", and the 26B answered with a summary) and S15 4/5.
+- This full run went out with the first prompt and the new-tasks-only S14
+  check. The S14 rows above are reruns of S14 alone.
+- Claims were 111/111 backed.
