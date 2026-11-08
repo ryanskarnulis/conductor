@@ -71,6 +71,8 @@ TOPICS_SCANNED = 200
 TURNS_SCANNED = 500
 ENTITIES_SCANNED = 500
 MAX_MATCHES = 3
+# Best-scored entities checked for a last turn in another conversation.
+MATCHES_LOOKED_AT = 20
 
 _SEEN = ("done", "looked_up")
 
@@ -110,16 +112,10 @@ def _touched(db: Session, turn_ids: Sequence[int]) -> dict[int, list[_Touched]]:
     """What each turn's acted plans changed or found, in receipt order."""
     if not turn_ids:
         return {}
-    crowd = (
-        select(LedgerTouch.receipt_id, func.count(LedgerTouch.id).label("n"))
-        .group_by(LedgerTouch.receipt_id)
-        .subquery()
-    )
     rows = db.execute(
-        select(LedgerPlan.turn_id, LedgerTouch, LedgerEntity, crowd.c.n)
+        select(LedgerPlan.turn_id, LedgerTouch, LedgerEntity)
         .join(LedgerEntity, LedgerEntity.id == LedgerTouch.entity_id)
         .join(LedgerReceipt, LedgerReceipt.id == LedgerTouch.receipt_id)
-        .join(crowd, crowd.c.receipt_id == LedgerReceipt.id)
         .join(LedgerStep, LedgerStep.id == LedgerReceipt.step_id)
         .join(LedgerPlan, LedgerPlan.id == LedgerStep.plan_id)
         .where(
@@ -129,10 +125,16 @@ def _touched(db: Session, turn_ids: Sequence[int]) -> dict[int, list[_Touched]]:
         )
         .order_by(LedgerReceipt.id, LedgerTouch.id)
     ).all()
+    # Every touch of these receipts is in ``rows``: count them here, not over the table.
+    crowd: dict[int, int] = defaultdict(int)
+    for _, touch, _ in rows:
+        crowd[touch.receipt_id] += 1
     found: dict[int, list[_Touched]] = defaultdict(list)
-    for turn_id, touch, entity, n in rows:
+    for turn_id, touch, entity in rows:
         found[turn_id].append(
-            _Touched(entity, touch.title, touch.untrusted or entity.untrusted, int(n))
+            _Touched(
+                entity, touch.title, touch.untrusted or entity.untrusted, crowd[touch.receipt_id]
+            )
         )
     return found
 
@@ -349,7 +351,7 @@ def matches(
     ]
     scored.sort(key=lambda item: (-item[0], -_aware(item[1].last_seen_at).timestamp()))
     found: list[Match] = []
-    for _, entity in scored:
+    for _, entity in scored[:MATCHES_LOOKED_AT]:
         last = _last_turn(db, entity.id)
         if last is None or last.conversation_id == conversation_id:
             continue

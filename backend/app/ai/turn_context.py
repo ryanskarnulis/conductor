@@ -4,10 +4,11 @@ The one place a turn's opening user message is composed. Conductor no longer
 replays chat turns: the model sees the system prompt and the tool schemas
 (byte-identical turn to turn), then one user message holding
 
-1. the state block (:mod:`app.ai.state_block`),
+1. the state block (:mod:`app.ai.state_block`), with the entity registry's
+   matches from earlier conversations (#80, :mod:`app.services.memory`),
 2. "Before this turn:" (:mod:`app.ai.recall`): this conversation's record,
    requests and last exchange, plus earlier conversations' calls that share
-   words with what the person just said,
+   words with what the person just said when the registry has no match,
 3. the person's words, last, nearest the model's answer.
 
 Building it never costs the turn: a lookup that fails is logged and the block

@@ -7,6 +7,10 @@ each with the receipts from the app's typed record (delegate v1.1). Receipts
 fill the entity registry from their ``touched`` refs and the job store from
 their ``job`` reports.
 
+A closed turn is indexed for memory (#80, :mod:`app.services.memory`), and a
+``recall`` step's receipts are conductor's own: the recalled words and the
+turn they cite.
+
 **Every app write has a receipt row.** A step to an app that ran but left no
 record conductor could read (a v1 app, or a call that stopped partway) gets
 conductor's own ``unknown`` receipt: a possible write, never "nothing changed".
