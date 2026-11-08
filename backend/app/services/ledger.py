@@ -36,7 +36,7 @@ from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
-from app.ai import confirmation, narrator, run_record
+from app.ai import confirmation, memory, narrator, run_record
 from app.ai.loop import AgentRunResult, ToolCallRecord
 from app.ai.plan import Ledgered, PausedPlan, RunningJob, Touched, TurnPlan, UndoReceipt
 from app.ai.state_block import Entity
@@ -55,6 +55,7 @@ from app.db.models import (
 )
 from app.fleet.jobs import FINISHED, JobRead
 from app.fleet.tools import OUTCOME_UNKNOWN
+from app.services import memory as memory_index
 
 logger = structlog.get_logger(__name__)
 
@@ -148,6 +149,9 @@ def close_turn(
         db.flush()
 
     _safely(db, "ledger_close_turn_failed", write)
+    # Memory (#80): index the ended turn (and any backlog), on its own, so a
+    # failure costs neither the turn nor its journal.
+    _safely(db, "ledger_memory_index_failed", lambda: memory_index.index_pending(db))
     logger.info(
         "ledger_turn_closed",
         turn_id=turn.id,
@@ -207,6 +211,7 @@ _STEP_WORDS = {
     "open": "opened",
     "confirm": "said yes to",
     "local": "looked up",
+    "recall": "looked back through what was said and done before",
 }
 _OUTCOME_WORDS = {
     "done": "it answered",
@@ -253,8 +258,14 @@ def self_report(db: Session, conversation_id: int) -> str:
         for step in steps:
             verb = _STEP_WORDS.get(step.kind, step.kind)
             outcome = _OUTCOME_WORDS.get(step.outcome, step.outcome)
-            lines.append(f"- {verb} {step.app or step.tool}: {outcome}")
+            if step.kind == "recall":
+                lines.append(f"- {verb}: {outcome}")
+            else:
+                lines.append(f"- {verb} {step.app or step.tool}: {outcome}")
             for receipt in step.receipts:
+                if receipt.tool == memory.RECALL_TOOL:
+                    lines.append(f'  - recalled: "{_clip(receipt.fact or "")}"')
+                    continue
                 titles = [f'"{_clip(touch.title)}"' for touch in receipt.touched if touch.title][:3]
                 what = f" {', '.join(titles)}" if titles else ""
                 action = (receipt.tool or "something").replace("_", " ")
@@ -491,6 +502,9 @@ def step_kind(tool: str, arguments: dict[str, Any]) -> tuple[str, str | None]:
     if run_record.is_job_cancel(tool):
         # A cancel sent to a running job (#76): a write with its own receipt.
         return "cancel", tool.removeprefix(run_record.JOB_CANCEL_PREFIX)
+    if memory.is_recall(tool):
+        # Conductor's own read of the ledger (#80): no app spoke.
+        return "recall", None
     if tool in run_record.READ_TOOLS:
         return "local", None
     return "unknown", None
@@ -507,7 +521,10 @@ def live_step(seq: int, record: ToolCallRecord) -> dict[str, Any]:
     kind, app = step_kind(record.tool, record.arguments)
     outcome = run_record.classify(record)
     receipts: list[dict[str, Any]] = []
-    if app is not None and kind in ("ask", "confirm", "cancel"):
+    if kind == "recall":
+        # What memory found, quoted with its day and conversation (#80).
+        receipts = [{**entry, "source": "conductor"} for entry in record.app_record or []]
+    elif app is not None and kind in ("ask", "confirm", "cancel"):
         if record.app_record is not None:
             receipts = [{**entry, "source": "app"} for entry in record.app_record]
         elif _may_have_written(record, outcome):
@@ -566,6 +583,10 @@ def _journal_step(db: Session, plan: LedgerPlan, seq: int, record: ToolCallRecor
     db.add(step)
     db.flush()
     _mark_undone(db, step, record, outcome)
+    if kind == "recall":
+        for entry_seq, entry in enumerate(record.app_record or [], start=1):
+            _journal_recall(db, step, entry_seq, entry)
+        return
     if app is None or kind not in ("ask", "confirm", "look", "cancel"):
         return
     if record.app_record is not None:
@@ -663,6 +684,45 @@ def _journal_receipt(
         db.add(
             LedgerTouch(
                 receipt_id=receipt.id, entity_id=entity.id, title=title, untrusted=untrusted
+            )
+        )
+
+
+def _journal_recall(db: Session, step: LedgerStep, seq: int, entry: dict[str, Any]) -> None:
+    """A recall's receipt (#80): conductor's, ``looked_up``, the recalled
+    words and the turn they come from, touching the entities it named (titles
+    as of then; the registry's latest title is left alone)."""
+    cited = entry.get("turn")
+    receipt = LedgerReceipt(
+        step_id=step.id,
+        seq=seq,
+        source="conductor",
+        app="conductor",
+        tool=memory.RECALL_TOOL,
+        outcome="looked_up",
+        fact=_text(entry.get("fact")),
+        cites_turn_id=cited if isinstance(cited, int) else None,
+    )
+    db.add(receipt)
+    db.flush()
+    for ref in entry.get("touched") or []:
+        if not isinstance(ref, dict) or ref.get("id") is None:
+            continue
+        entity = db.execute(
+            select(LedgerEntity).where(
+                LedgerEntity.app == str(ref.get("app")),
+                LedgerEntity.kind == str(ref.get("kind")),
+                LedgerEntity.ref == str(ref["id"]),
+            )
+        ).scalar_one_or_none()
+        if entity is None:
+            continue
+        db.add(
+            LedgerTouch(
+                receipt_id=receipt.id,
+                entity_id=entity.id,
+                title=_text(ref.get("title")),
+                untrusted=bool(ref.get("untrusted")),
             )
         )
 

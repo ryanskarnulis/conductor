@@ -16,6 +16,9 @@ its agent's words):
 - **No title** (a v1 app with no record, a record that touched nothing
   titled, a step that answered without a receipt): nothing to pass on.
 - **A failed step** ends the plan before anything could use it.
+- **A recall** (#80) passes on the one entity it resolved its query to
+  (:func:`from_recall`), with the trust the ledger kept for its title; when
+  several tie or none matches, nothing.
 
 A step whose ``{sN}`` has nothing to pass on doesn't run, and the plan ends
 there: the record says it didn't run and why. Code never guesses a name, and
@@ -52,6 +55,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from app.ai.memory import best_ref
 from app.ai.narrator import MAX_NAMED, MAX_TITLE_CHARS
 from app.ai.plan import REF, STEP_TEXT_FIELDS
 
@@ -112,6 +116,17 @@ def from_record(app_record: Iterable[Mapping[str, Any]] | None) -> Value | None:
     quoted = [f"“{title}”" for title in titles]
     text = quoted[0] if len(quoted) == 1 else f"{', '.join(quoted[:-1])} and {quoted[-1]}"
     return Value(text, untrusted)
+
+
+def from_recall(app_record: Iterable[Mapping[str, Any]] | None) -> Value | None:
+    """What a ``recall`` step passes on (#80): the one entity it resolved its
+    query to, by its title as of then, with its trust; ``None`` when nothing
+    clearly answered (code never picks one of several)."""
+    ref = best_ref(list(app_record or []))
+    title = clean(str((ref or {}).get("title") or ""))
+    if ref is None or not title:
+        return None
+    return Value(f"“{title}”", bool(ref.get("untrusted")))
 
 
 def answer(words: str) -> Value:
