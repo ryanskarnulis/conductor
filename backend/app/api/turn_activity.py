@@ -15,6 +15,15 @@ pause through :mod:`app.ai.turn_events`; the route publishes them here, keyed
 by conversation id, and closes the turn (``turn_ended``) only after the ledger
 has committed it. Nothing is published ahead of the record it describes.
 
+**Jobs** (#76): a job outlives the turn that started it, so the channel also
+keeps the conversation's running jobs (at most :data:`MAX_JOBS`), fed by the
+job watcher through :func:`publish_job`. Each change is a ``job`` event
+(status, ``done``/``total``; ``ended`` with the note's message id when it
+ends), a snapshot lists the running jobs (``jobs``, only when there are
+any), and a stream stays open past
+``turn_ended`` while one runs, ending after the last one's ``job`` event says
+it ended. With no running job a stream behaves exactly as before.
+
 Each turn also carries its :class:`~app.ai.stop.Stop` (#66): ``POST …/cancel``
 reaches the in-flight turn through here, and a fresh one per turn means a Stop
 that lands after a turn ended does nothing, never cancelling the next.
@@ -54,6 +63,8 @@ ActivityKind = Literal["model", "tool"]
 QUEUE_LIMIT = 64
 # Followers per conversation; past this the oldest is closed.
 MAX_SUBSCRIBERS = 8
+# Running jobs kept per conversation (the watcher's backstop, never the design).
+MAX_JOBS = 16
 # Steps kept in one turn's state (the loop caps a run at 12 calls and a plan
 # at 12 steps; this is the backstop, never the design).
 MAX_STEPS = 64
@@ -120,6 +131,12 @@ class _Follower:
 class _Channel:
     turn: _Turn | None = None
     followers: list[_Follower] = field(default_factory=list)
+    # Running jobs (#76), by ``app:ref``: the latest ``job`` event of each.
+    jobs: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    @property
+    def idle(self) -> bool:
+        return not self.followers and self.turn is None and not self.jobs
 
 
 _RESYNC = "resync"
@@ -212,7 +229,23 @@ def end(
             return
         channel.turn = None
         _publish(channel, "turn_ended", {"stop_reason": stop_reason, "message_id": message_id})
-        if not channel.followers:
+        if channel.idle:
+            del _CHANNELS[conversation_id]
+
+
+def publish_job(conversation_id: int, payload: dict[str, Any]) -> None:
+    """A job the conversation started moved (the watcher, through
+    :func:`app.ai.turn_events.job`): kept while it runs, dropped once it ended,
+    and sent to every follower as a ``job`` event."""
+    key = _job_key(payload)
+    with _LOCK:
+        channel = _CHANNELS.setdefault(conversation_id, _Channel())
+        if payload.get("ended"):
+            channel.jobs.pop(key, None)
+        elif key in channel.jobs or len(channel.jobs) < MAX_JOBS:
+            channel.jobs[key] = payload
+        _publish(channel, "job", payload)
+        if channel.idle:
             del _CHANNELS[conversation_id]
 
 
@@ -265,7 +298,9 @@ async def follow(
         first = _snapshot(channel)
     try:
         yield first
-        in_flight = bool(first.data["active"])
+        # What this stream has seen, so it ends in event order: a turn in
+        # flight, and the jobs still running (#76).
+        turn_on, running = _seen(first)
         # Events older than the last snapshot are already in it.
         floor = first.id
         waited = 0.0
@@ -274,7 +309,7 @@ async def follow(
                 item = await asyncio.wait_for(follower.queue.get(), timeout=heartbeat)
             except TimeoutError:
                 waited += heartbeat
-                if not in_flight and waited >= idle:
+                if not (turn_on or running) and waited >= idle:
                     return
                 yield Heartbeat()
                 continue
@@ -283,7 +318,7 @@ async def follow(
             if item == _RESYNC:
                 with _LOCK:
                     event = _snapshot(_CHANNELS.setdefault(conversation_id, _Channel()))
-                in_flight = bool(event.data["active"])
+                turn_on, running = _seen(event)
                 floor = event.id
                 yield event
                 continue
@@ -292,11 +327,31 @@ async def follow(
                 continue
             yield item
             if item.kind == "turn_started":
-                in_flight = True
+                turn_on = True
             elif item.kind == "turn_ended":
-                return
+                turn_on = False
+                if not running:
+                    return
+            elif item.kind == "job":
+                key = _job_key(item.data)
+                if not item.data.get("ended"):
+                    running.add(key)
+                elif key in running or not turn_on:
+                    running.discard(key)
+                    if not (turn_on or running):
+                        return
     finally:
         _unsubscribe(conversation_id, follower)
+
+
+def _seen(snapshot: TurnEvent) -> tuple[bool, set[str]]:
+    """A snapshot's turn in flight and running jobs, as a stream tracks them."""
+    jobs = snapshot.data.get("jobs") or []
+    return bool(snapshot.data["active"]), {_job_key(job) for job in jobs}
+
+
+def _job_key(job: dict[str, Any]) -> str:
+    return f"{job.get('app')}:{job.get('ref')}"
 
 
 def subscribers(conversation_id: int) -> int:
@@ -340,6 +395,8 @@ def _snapshot(channel: _Channel) -> TurnEvent:
             "steps": [turn.steps[seq] for seq in sorted(turn.steps)],
             "paused": turn.paused,
         }
+    if channel.jobs:
+        data["jobs"] = list(channel.jobs.values())
     return TurnEvent(id=next(_IDS), kind="snapshot", data=data)
 
 
@@ -364,7 +421,7 @@ def _unsubscribe(conversation_id: int, follower: _Follower) -> None:
             return
         if follower in channel.followers:
             channel.followers.remove(follower)
-        if not channel.followers and channel.turn is None:
+        if channel.idle:
             del _CHANNELS[conversation_id]
 
 

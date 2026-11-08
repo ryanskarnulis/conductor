@@ -40,13 +40,15 @@ from sqlalchemy.orm import sessionmaker
 import app.main as main_module
 from app.ai import interpreter as interpreter_module
 from app.ai.loop import AgentLoop, loop_from_settings
-from app.ai.provider import ProviderRequestError
+from app.ai.provider import ChatProvider, ProviderRequestError
+from app.ai.providers.llamacpp import provider_from_settings
 from app.api import rate_limit, routes_agent, turn_activity
 from app.config import get_settings
 from app.db.models import Base
 from app.db.session import get_db
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
+from app.services.job_watcher import JobWatcher
 from app.tools import registry
 from tests import eval_seed
 from tests.evalstats import (
@@ -62,7 +64,7 @@ from tests.fake_world import World, write_fixture_fleet
 from tests.receipt_claims import Tally
 from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
 from tests.session_harness import LoopDriver, Sample, Scenario, WorldHolder, run_sample, sample_line
-from tests.session_scenarios import S2, S3, S9, S10, S11, S12, S16, SCENARIOS
+from tests.session_scenarios import S2, S3, S4, S9, S10, S11, S12, S16, SCENARIOS
 
 _LIVE = os.environ.get("CONDUCTOR_AGENT_EVALS") == "1"
 _FRONTIER = os.environ.get("CONDUCTOR_FRONTIER_EVALS") == "1"
@@ -102,6 +104,25 @@ def _wiper(db_session: DbSession) -> Callable[[], None]:
     return wipe
 
 
+def _watching(
+    session_factory: sessionmaker[DbSession],
+    holder: WorldHolder,
+    provider: Callable[[], ChatProvider | None],
+) -> Callable[[], None]:
+    """The job watcher (#76) over the eval's database and the world's jobs
+    endpoint; the returned ``settle`` is one pass of it with every job due,
+    run when the harness reads what arrived unprompted (time has passed)."""
+    watcher = JobWatcher(
+        session_factory, app.state.fleet, reader=holder.read_job, provider=provider
+    )
+    app.state.job_watcher = watcher
+
+    def settle() -> None:
+        watcher.sweep(force=True)
+
+    return settle
+
+
 def _started(
     fleet_dir: Path,
     db_session: DbSession,
@@ -114,6 +135,8 @@ def _started(
     # A plan's `look` reads the world's glance, never the real app behind the
     # manifest (the interpreter resolves its default reader at construction).
     monkeypatch.setattr(interpreter_module, "read_glance", holder.glance)
+    # A cancel on a running job reaches the world's jobs endpoint (#76).
+    monkeypatch.setattr(interpreter_module, "cancel_job", holder.cancel_job)
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[routes_agent.get_thread_store] = lambda: DbThreadStore(session_factory)
     try:
@@ -135,11 +158,14 @@ class _ScriptedRun:
         client: TestClient,
         holder: WorldHolder,
         db_session: DbSession,
+        session_factory: sessionmaker[DbSession],
         *,
         compiled: bool = False,
     ) -> None:
         self.client = client
         self.provider = ScriptedProvider([])
+        # A job's note is narrated by the same scripted model, after the turns.
+        settle = _watching(session_factory, holder, lambda: self.provider)
         app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
             self.provider,
             fleet_section=getattr(app.state, "fleet_section", None),
@@ -152,6 +178,7 @@ class _ScriptedRun:
             tool_names=_tool_names,
             reset=rate_limit._reset,
             fresh_db=_wiper(db_session),
+            settle=settle,
         )
 
     def run(self, scenario: Scenario, turns: list[Any] | None = None) -> Sample:
@@ -172,7 +199,7 @@ def scripted(
 ) -> Generator[_ScriptedRun, None, None]:
     fleet_dir = write_fixture_fleet(tmp_path / "fleet")
     for client, holder in _started(fleet_dir, db_session, session_factory, monkeypatch):
-        yield _ScriptedRun(client, holder, db_session)
+        yield _ScriptedRun(client, holder, db_session, session_factory)
 
 
 @pytest.fixture
@@ -184,7 +211,7 @@ def compiled(
 ) -> Generator[_ScriptedRun, None, None]:
     fleet_dir = write_fixture_fleet(tmp_path / "fleet")
     for client, holder in _started(fleet_dir, db_session, session_factory, monkeypatch):
-        yield _ScriptedRun(client, holder, db_session, compiled=True)
+        yield _ScriptedRun(client, holder, db_session, session_factory, compiled=True)
 
 
 def _plan(*steps: dict[str, Any]) -> Any:
@@ -204,7 +231,17 @@ _S3_PLAN = _plan(
 # The compiled runtime's golden model side (#74): plans, then the narrator.
 # S10's Stop lands mid-delegate, so nothing is narrated. S11's undo turn is
 # tasks' own question, passed through; the yes turn is narrated.
+_S4_NOTE = text_turn(
+    "Your playlist is in: 38 of 40 downloaded; “Lost Signal” and “Paper Moons” couldn't be found."
+)
+
 COMPILED_SCRIPTS: dict[str, Callable[[World], list[Any]]] = {
+    # The playlist detaches as a job; the watcher's note comes after (#76).
+    S4.id: lambda w: [
+        _plan(_ask_step("music", "download this playlist https://example.com/playlist?list=PL40")),
+        text_turn("Queued your playlist: 40 tracks. I'll post a note when it's done."),
+        _S4_NOTE,
+    ],
     S10.id: lambda w: [_plan(_ask_step("music", "sort my whole library"))],
     S11.id: lambda w: [
         _S3_PLAN,
@@ -216,7 +253,7 @@ COMPILED_SCRIPTS: dict[str, Callable[[World], list[Any]]] = {
 }
 
 
-@pytest.mark.parametrize("scenario", [S10, S11], ids=lambda s: s.id)
+@pytest.mark.parametrize("scenario", [S4, S10, S11], ids=lambda s: s.id)
 def test_compiled_golden_script_passes(scenario: Scenario, compiled: _ScriptedRun) -> None:
     sample = compiled.run(scenario, COMPILED_SCRIPTS[scenario.id](World()))
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
@@ -246,12 +283,6 @@ def _supported_today(scenario: Scenario) -> bool:
 )
 def test_golden_script_passes(scenario: Scenario, scripted: _ScriptedRun) -> None:
     sample = scripted.run(scenario)
-    if scenario.id == "S4":
-        # No runtime reports back unprompted yet: the golden can queue the
-        # playlist but nothing arrives on its own, and the check must say so.
-        assert sample.taken.outcome is Outcome.FAIL
-        assert "no unprompted report" in (sample.taken.failure or "")
-        return
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
     assert scripted.provider._turns == [], "the golden script wasn't fully consumed"
 
@@ -380,12 +411,14 @@ def live(
                 f"fleet discovery registered {sorted(_tool_names())}; is "
                 f"{WORKSPACE_ROOT} the workspace root?"
             )
+        provider = eval_seed.seeded_provider if _SEED_BASE is not None else provider_from_settings
         yield LoopDriver(
             client,
             holder,
             tool_names=_tool_names,
             reset=rate_limit._reset,
             fresh_db=_wiper(db_session),
+            settle=_watching(session_factory, holder, provider),
         )
 
 

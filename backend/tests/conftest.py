@@ -60,6 +60,23 @@ def no_real_glance(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def no_job_watcher(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The job watcher (#76) never runs on its own in tests: it would open the
+    configured database and dial real apps. Tests build one over the test
+    database and drive it with ``sweep()``; a cancel to a job never leaves
+    the process unless a test injects a canceller."""
+    from app.ai import interpreter
+    from app.fleet.jobs import JobError
+
+    monkeypatch.setattr(get_settings(), "conductor_job_watcher", False)
+
+    def refuse(app: object, ref: str) -> object:
+        raise JobError("tests don't reach real apps")
+
+    monkeypatch.setattr(interpreter, "cancel_job", refuse)
+
+
+@pytest.fixture(autouse=True)
 def _reset_rate_limiter() -> None:
     rate_limit._reset()
 

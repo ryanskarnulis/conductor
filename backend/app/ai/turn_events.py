@@ -16,6 +16,11 @@ is its ``seq`` in the ledger too.
 
 The sink is a context variable, so the reads a plan runs at once (each in a
 copy of the turn's context) publish to the same turn.
+
+**Jobs outlive their turn** (#76). A job's progress and end come from the job
+watcher, long after the turn that started it ended, so :func:`job` goes to a
+process-wide sink (:func:`set_job_sink`, bound once at startup) keyed by the
+conversation that started the job, never to a turn's sink.
 """
 
 from __future__ import annotations
@@ -34,8 +39,11 @@ logger = structlog.get_logger(__name__)
 
 EventKind = Literal["plan", "step_started", "receipt", "paused"]
 Sink = Callable[[EventKind, dict[str, Any]], None]
+# A job event for a conversation (#76): ``(conversation_id, payload)``.
+JobSink = Callable[[int, dict[str, Any]], None]
 
 _SINK: ContextVar[Sink | None] = ContextVar("turn_event_sink", default=None)
+_JOB_SINK: JobSink | None = None
 
 
 @contextmanager
@@ -79,6 +87,25 @@ def paused(
 ) -> None:
     """The plan waits on the person: code's question, or an app's."""
     _emit("paused", {"reason": reason, "question": question, "app": app, "step": step})
+
+
+def set_job_sink(sink: JobSink | None) -> None:
+    """Where job events go for the life of the process (``None``: nowhere)."""
+    global _JOB_SINK
+    _JOB_SINK = sink
+
+
+def job(conversation_id: int, payload: dict[str, Any]) -> None:
+    """A job the conversation started moved (#76): its status, ``done`` and
+    ``total`` as the watcher last read them, and once it ended, the note's
+    message id. Built from the ledger row the watcher just committed."""
+    sink = _JOB_SINK
+    if sink is None:
+        return
+    try:
+        sink(conversation_id, payload)
+    except Exception as exc:
+        logger.warning("turn_event_failed", kind="job", error=str(exc))
 
 
 def _emit(kind: EventKind, payload: dict[str, Any]) -> None:

@@ -357,6 +357,26 @@ class WorldHolder:
         assert self.world is not None, "no world bound: call Driver.begin first"
         return self.world.glance(fleet_app.name)
 
+    def read_job(self, fleet_app: Any, ref: str) -> Any:
+        """The ``JobReader`` behind the job watcher (#76): the bound world's
+        jobs endpoint. A session eval never reaches a real app."""
+        return self._job(fleet_app, ref, cancel=False)
+
+    def cancel_job(self, fleet_app: Any, ref: str) -> Any:
+        """The ``JobCanceller`` behind a ``cancel`` on a running job (#76)."""
+        return self._job(fleet_app, ref, cancel=True)
+
+    def _job(self, fleet_app: Any, ref: str, *, cancel: bool) -> Any:
+        from app.fleet.jobs import JobGone, JobRead
+
+        assert self.world is not None, "no world bound: call Driver.begin first"
+        if fleet_app.name != "music":
+            raise JobGone(f"{fleet_app.name} doesn't know that job")
+        body = self.world.job_cancel(ref) if cancel else self.world.job_read(ref)
+        if body is None:
+            raise JobGone("music doesn't know that job")
+        return JobRead.model_validate(body)
+
 
 _CANCEL_ROUTE = re.compile(r"^/api/agent/conversations/\{[^}]+\}/(?:cancel|stop)$")
 
@@ -370,7 +390,9 @@ class LoopDriver:
     sampled 20 times sends far more). ``fresh_db`` is called at the start of
     every sample: samples share one app and one database, and a sample's
     "new conversation" must not find another world's conversations (#64's
-    cross-conversation recall reads them).
+    cross-conversation recall reads them). ``settle`` runs before the
+    unprompted messages are read: time has passed, so the job watcher looks
+    at every running job now (#76).
     """
 
     def __init__(
@@ -381,12 +403,14 @@ class LoopDriver:
         tool_names: Callable[[], set[str]],
         reset: Callable[[], None] = lambda: None,
         fresh_db: Callable[[], None] = lambda: None,
+        settle: Callable[[], None] = lambda: None,
     ) -> None:
         self._client = client
         self._holder = holder
         self._tool_names = tool_names
         self._reset = reset
         self._fresh_db = fresh_db
+        self._settle = settle
         self._conversation: int | None = None
         self._seen: int = 0
         # The OpenAPI paths, not ``app.routes``: included routers nest there.
@@ -451,6 +475,7 @@ class LoopDriver:
 
     def unprompted(self) -> list[str]:
         assert self._conversation is not None
+        self._settle()
         detail = self._client.get(f"/api/agent/conversations/{self._conversation}")
         if detail.status_code != 200:
             return []

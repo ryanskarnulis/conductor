@@ -318,6 +318,7 @@ def post_message(
         history=lambda: turns,
         earlier=lambda: conversations_service.earlier_calls(db, conversation.id),
         entities=lambda: ledger.recent_entities(db, conversation.id),
+        jobs=lambda: ledger.running_job_lines(db, conversation.id),
     )
     user_message = conversations_service.append_user_message(db, conversation, data.content)
     turn = ledger.open_turn(db, conversation, user_message, surface=data.surface, panel=data.panel)

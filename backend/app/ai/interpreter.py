@@ -24,7 +24,12 @@ same as the loop's. What it runs, across apps (#72):
   the rules for no title, several titles and outside text).
 - ``confirm``: yes or no to whatever is waiting.
 - ``cancel``/``amend``/``undo``: on what's waiting or what just ran, over the
-  ledger (:mod:`app.ai.control`, #74), each as a plan of its own.
+  ledger (:mod:`app.ai.control`, #74), each as a plan of its own; ``cancel``
+  and ``amend`` on a running job go to the jobs runtime
+  (:mod:`app.ai.job_control`, #76).
+- A step whose receipt carries a job ref detaches: the app accepted the work
+  and the reply says so now ("queued 40"); the ledger's job row and the
+  watcher (:mod:`app.services.job_watcher`) follow it from there.
 - The direct answers (:mod:`app.ai.speaker`), ``self`` from the ledger.
 
 Independent reads (:func:`plans.reads_only`: asks to different apps, phrased
@@ -64,6 +69,7 @@ from app.ai.plan import Ledgered, PausedPlan, TurnPlan
 from app.ai.stop import STOPPED_ERROR, Stop, current_stop
 from app.fleet.context import current_delegation_context
 from app.fleet.glance import GlanceError, GlanceReader, read_glance
+from app.fleet.jobs import JobCanceller, cancel_job
 from app.fleet.manifests import Fleet
 from app.fleet.tools import ask_tool_name, look_tool_name, open_tool_name
 
@@ -98,11 +104,19 @@ class _Run:
 class Interpreter:
     """Compiles and runs one turn on behalf of an :class:`AgentLoop`."""
 
-    def __init__(self, loop: AgentLoop, fleet: Fleet, glance: GlanceReader | None = None) -> None:
+    def __init__(
+        self,
+        loop: AgentLoop,
+        fleet: Fleet,
+        glance: GlanceReader | None = None,
+        jobs: JobCanceller | None = None,
+    ) -> None:
         self._loop = loop
         self._fleet = fleet
         # How a look reads a glance; tests pass a fake, none dials the network.
         self._glance: GlanceReader = glance or read_glance
+        # How a cancel reaches a running job (#76); the same rule.
+        self._cancel_job: JobCanceller = jobs or cancel_job
         self._looks = {look_tool_name(app.name): app for app in fleet.apps}
         self._prompt = compiler.planner_prompt(fleet)
 
@@ -172,7 +186,6 @@ class Interpreter:
             plan,
             confirm_app=confirm_app,
             pending=paused is not None or pending is not None,
-            running_jobs=state.view.jobs(plan),
         )
         logger.info(
             "plan_compiled",
