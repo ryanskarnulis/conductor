@@ -619,6 +619,13 @@ def _record(reply: AppReply, written: list[Receipt]) -> list[RecordEntry]:
     return [*reply.found, *(_write_entry(receipt) for receipt in written)]
 
 
+_MOVE_WORDS = r"\b(push|move|reschedule|postpone|bump|shift|change the due)\b"
+# A line of a list that puts an existing task on a day (a think's proposal, #78).
+_LIST_MOVE_WORDS = (
+    r"\b(push|move|reschedule|postpone|bump|shift|change the due|schedule|set the due)\b"
+)
+
+
 class TasksApp:
     """PCC's shape: read, create, move, complete and trash tasks and projects.
 
@@ -641,6 +648,10 @@ class TasksApp:
                 raise DelegateConfirmRefused("409: confirm token unknown", kind="unknown")
             return armed[1]()
         text = message.lower()
+        lines = [line.strip(" -*\t") for line in message.splitlines() if line.strip(" -*\t")]
+        if len(lines) > 1 and all(re.search(_LIST_MOVE_WORDS, line.lower()) for line in lines):
+            # A list of moves, one per line (a think's proposal, #78), as PCC's agent takes it.
+            return self._moves(lines)
         leads_with_create = re.match(
             r"\W*(?:please\s+|can you\s+|could you\s+)?(?:add|create|make|remind me)\b", text
         ) or re.search(r"^\s*(?:[-*]|\d+[.)])\s", message, flags=re.M)
@@ -650,7 +661,7 @@ class TasksApp:
             return self._undo(thread)
         if re.search(r"\b(delete|trash|remove|wipe|bin|get rid of)\b", text):
             return self._trash(thread, message)
-        if re.search(r"\b(push|move|reschedule|postpone|bump|shift|change the due)\b", text):
+        if re.search(_MOVE_WORDS, text):
             return self._move(message)
         if re.search(r"\b(mark|complete|finish|tick off|check off)\b", text) and "done" in text:
             return self._complete(message)
@@ -792,6 +803,14 @@ class TasksApp:
             f'Moved "{task.title}" (#{task.id}) to {due.isoformat()} '
             f"(was {old.isoformat() if old else 'unscheduled'}).",
             [_tool("update_task", task_id=task.id, due_date=due.isoformat())],
+        )
+
+    def _moves(self, lines: list[str]) -> AppReply:
+        """Several moves in one request, one per line: each is its own move."""
+        replies = [self._move(line) for line in lines]
+        return AppReply(
+            " ".join(reply.text for reply in replies),
+            [tool for reply in replies for tool in reply.tools],
         )
 
     def _complete(self, message: str) -> AppReply:

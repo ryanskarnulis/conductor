@@ -520,12 +520,16 @@ def _s14(session: Session) -> None:
     assert not session.writes(propose), "wrote before the plan was confirmed"
     go = session.turn("go")
     week_end = session.world.today + timedelta(days=7)
-    planned = [
-        _task_for(session, r)
-        for r in session.writes(go)
-        if r.kind == "create" and r.detail.get("project") == "Garage"
-    ]
-    dated = [t for t in planned if t.due and session.world.today <= t.due <= week_end]
+    # New garage tasks or existing ones put on days this week (#78: the 26B
+    # often schedules the garage tasks already there): either is the plan.
+    planned = {
+        task.id: task
+        for task in (
+            _task_for(session, r) for r in session.writes(go) if r.kind in ("create", "update")
+        )
+        if task.project == "Garage"
+    }
+    dated = [t for t in planned.values() if t.due and session.world.today <= t.due <= week_end]
     assert len(dated) >= 3, f"{len(dated)} dated garage tasks this week"
 
 
