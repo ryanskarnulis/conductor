@@ -281,16 +281,31 @@ def test_compiled_golden_script_passes(scenario: Scenario, compiled: _ScriptedRu
     assert compiled.provider._turns == [], "the golden script wasn't fully consumed"
 
 
+def _is_planner(request: dict[str, Any]) -> bool:
+    form = request.get("response_format") or {}
+    return bool(form.get("json_schema", {}).get("name") == "plan")
+
+
 def test_compiled_s6_finds_the_song_in_state_across_conversations(
     compiled: _ScriptedRun,
 ) -> None:
     # #80: the entity registry, not the planner, carries "Odessa" across days.
     sample = compiled.run(S6, COMPILED_SCRIPTS[S6.id](World()))
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
-    planner = [r for r in compiled.provider.requests if r.get("response_format")]
+    planner = [r for r in compiled.provider.requests if _is_planner(r)]
     opening = planner[-1]["messages"][1]["content"]
     assert "Matches for words in the message, from earlier conversations" in opening
     assert '"Odessa" (outside text)' in opening
+
+
+def test_compiled_s15_sees_no_matches_from_its_own_conversation(compiled: _ScriptedRun) -> None:
+    # Matches are leads from *other* conversations: S15's second turn points
+    # back ("their other album") within one conversation, so its planner input
+    # is what it was before #80.
+    sample = compiled.run(S15, COMPILED_SCRIPTS[S15.id](World()))
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    planner = [r for r in compiled.provider.requests if _is_planner(r)]
+    assert "Matches for words" not in planner[-1]["messages"][1]["content"]
 
 
 def test_compiled_s5_a_guessed_decision_still_gets_codes_no_record(

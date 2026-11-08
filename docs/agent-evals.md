@@ -476,3 +476,66 @@ Gate tier, 5 samples each, compiler on, planner prompt and schema unchanged:
   35/35, ref 19/20, control 22/25, memory 8/10, knowledge 15/15, hard 2/5,
   self 9/15, holdout 47/50, long 40/40). The planner prompt and step kinds
   didn't change.
+
+### Memory over the ledger (#80, 2026-11-08)
+
+`recall` runs on the interpreter over the ledger, and the entity registry puts
+matches from earlier conversations in State. The planner prompt, the schema
+and the validator are unchanged; the narrator prompt gained one line on
+recalled results. Compiler on, gemma-4-12b.
+
+Session evals, gate tier at 5 samples, frontier at 5 then 15:
+
+| scenario | before | this change |
+|---|---|---|
+| S1, S2, S2r, S4, S7, S8, S9, S16 | 5/5 | 5/5 each |
+| S5 | 4/5 (#76) | **5/5** |
+| **S6** | 7/10 (#72), frontier | **19/20** (4/5, then 15/15): moves to the gate tier |
+| S15 | 9/10 (#72), frontier | 14/20 (3/5, then 11/15): stays frontier |
+| S3 | 10/10 | 5/5 |
+| S10 | 10/10 | 5/5 |
+| S11 | — | 4/5 |
+| S12, S13, S14 | 0 | 0 (no `ask_chess`; `think` is #78) |
+
+- S5 is now a `recall` plan, not a loop fallback. On the fresh world there's
+  nothing on record, so all five said so ("I have no record of a decision
+  regarding the garage shelves"). Code appends that line if the narrator
+  guesses.
+- S6 reads the registry's match in State (`"Odessa" (outside text), Tuesday …,
+  you said "grab Odessa by Caribou"`). 19 of 20 asks to music named Odessa.
+  The miss asked for "the Caribou song", and music asked which one.
+- S15's planner input is unchanged by this PR: matches only come from other
+  conversations, and a scripted test asserts it. Its misses are the planner's:
+  one ask to music carried both the download and the task (4 times), and
+  once it asked the person which album instead. Recorded, not treated as a
+  regression, since the prompt and State it sees are byte-identical.
+- Claims were 107/107 backed.
+
+Plan-level evals, same prompt and validator, n=5 for every group:
+
+| group | floor | this run |
+|---|---|---|
+| golden | 0.8 | 94/105 |
+| cross | 0.8 | 35/35 |
+| ref | 0.85 | 15/20 |
+| control | 0.8 | 22/25 |
+| memory | 0.8 | 7/10 |
+| knowledge | 0.65 | 15/15 |
+| hard | 0.5 | 5/5 |
+| self | 0.55 | 10/15 |
+| holdout | 0.85 | 47/50 |
+| long | 0.7 | 38/40 |
+
+Then `ref` and `memory` at n=20, against main's n=20 (#122's investigation):
+
+| group | main | this change |
+|---|---|---|
+| ref | 61/80 | 64/80 (`ref-ambiguous` 5/20) |
+| memory | 27/40 | 33/40 (`memory-caribou` 13/20, `s5-garage` 20/20) |
+
+- Every group passed its gate.
+- This PR doesn't move `memory-caribou` or `ref-ambiguous`. Plan evals feed
+  a fixed State and nothing here changes what the planner sees, so those
+  differences are sampling. `memory-caribou`'s misses are `look:music`
+  (7/20), and `ref-ambiguous` asks tasks instead of asking the person
+  (15/20). Both are planner-side follow-ups.

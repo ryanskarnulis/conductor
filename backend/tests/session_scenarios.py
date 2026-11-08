@@ -303,6 +303,9 @@ S6 = Scenario(
         Say("put that Caribou song in the house folder"),
     ),
     (_s6,),
+    # Gate since #80: the entity registry carries "Odessa" across conversations
+    # (19/20 live, compiler on).
+    tier="gate",
     script=lambda w: [
         _ask("music", "grab the song Odessa by Caribou"),
         _say("Saved “Odessa” by Caribou to the library."),
