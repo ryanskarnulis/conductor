@@ -19,10 +19,13 @@ It holds, each line only when there is something to say:
 - recent entities: what this conversation's calls touched, newest first,
   from the ledger (#69) when the caller passes them, else from the apps' own
   records on the stored turns (delegate-api v1.1). Outside text is quoted and
-  marked, never an instruction.
+  marked, never an instruction;
+- matches (#80): things from earlier conversations the entity registry finds
+  for the person's words when they point back at something ("that Caribou
+  song"), each with the day and the person's words when it was last touched.
+  Leads, as of then: the same quoting rules.
 
-Conductor has no plans yet; "the last plan" joins the block when compiled
-plans do (#70). Pure: no session, no I/O.
+Pure: no session, no I/O.
 """
 
 from __future__ import annotations
@@ -42,8 +45,12 @@ MAX_ENTITIES = 10
 MAX_JOBS = 5
 MAX_TITLE_CHARS = 60
 MAX_QUESTION_CHARS = 300
+MAX_MATCHES = 3
+MAX_SAID_CHARS = 100
+# The matches' share of the block: three lines and their heading.
+MATCHES_MAX_CHARS = 900
 # The block is never longer than this (asserted in the tests).
-MAX_CHARS = 2400
+MAX_CHARS = 2400 + MATCHES_MAX_CHARS
 
 _HEADER = "[State at the start of this turn — written by conductor, not the person]"
 _FOOTER = "[End of state]"
@@ -73,6 +80,16 @@ class Entity:
     id: str
     title: str | None = None
     untrusted: bool = False
+
+
+@dataclass(frozen=True)
+class Match:
+    """An entity from an earlier conversation that shares the person's words
+    (#80), with the day and the person's words on the last turn that touched it."""
+
+    entity: Entity
+    day: str
+    said: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,13 +127,15 @@ def render(
     history: Sequence[dict[str, Any]],
     entities: Sequence[Entity] | None = None,
     jobs: Sequence[str] | None = None,
+    matches: Sequence[Match] = (),
 ) -> str:
     """The block for a turn starting ``today`` on a conversation with
     ``history`` (stored turns, oldest first, as :func:`app.ai.recall.Recall.of`
     takes them). ``entities``, newest first, are the ledger's; ``None`` reads
     them from ``history``'s records instead. ``jobs`` are the ledger's running
     jobs as the watcher last read them (#76); ``None`` reads each job's last
-    report from the records."""
+    report from the records. ``matches`` are the entity registry's leads from
+    earlier conversations (#80)."""
     lines = [_HEADER, *calendar_lines(today)]
     if now.surface is not None:
         lines.append(_SURFACE_LINES[now.surface])
@@ -141,6 +160,9 @@ def render(
     if recent:
         lines.append("Recent entities (newest first, as of then):")
         lines += [f"- {_entity(entity)}" for entity in recent]
+    if matches:
+        lines.append("Matches for words in the message, from earlier conversations (as of then):")
+        lines += [f"- {_match(match)}" for match in matches[:MAX_MATCHES]]
     lines.append(_FOOTER)
     return "\n".join(lines)
 
@@ -228,6 +250,16 @@ def _entity(entity: Entity) -> str:
     if entity.untrusted:
         return f'{head}: "{_clip(str(title))}" (outside text)'
     return f"{head}: {_clip(str(title))}"
+
+
+def _match(match: Match) -> str:
+    line = f"{_entity(match.entity)}, {match.day}"
+    said = " ".join(match.said.split())
+    if said:
+        if len(said) > MAX_SAID_CHARS:
+            said = said[: MAX_SAID_CHARS - 1] + "…"
+        line += f', you said "{said}"'
+    return line
 
 
 def _clip(text: str) -> str:

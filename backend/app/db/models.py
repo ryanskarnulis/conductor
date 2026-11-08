@@ -114,7 +114,8 @@ class DelegateThread(Base, TimestampMixin):
 # its steps, the apps' receipts for each step, the jobs those started and the
 # entities they touched. Episodic memory, the source for undo and "do the same",
 # and the job store (#56). Append-only: rows are never edited after their turn
-# ends, except a job's latest report and an entity's latest title. No soft
+# ends, except a job's latest report, an entity's latest title and memory's
+# code-built index (terms and topics, #80). No soft
 # delete: trashing a conversation leaves what the apps did on the record
 # (forgetting is #81's, on purpose).
 
@@ -147,6 +148,13 @@ class LedgerTurn(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(default="running")  # running | ended
     stop_reason: Mapped[str | None] = mapped_column(default=None)
     ended_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Memory (#80), built by code once the turn ends: the words recall matches
+    # on (the person's words and the titles its receipts touched; null until
+    # indexed), and the quiet topic it joined.
+    terms: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    topic_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ledger_topics.id"), default=None, index=True
+    )
 
     plans: Mapped[list[LedgerPlan]] = relationship(back_populates="turn", order_by="LedgerPlan.id")
 
@@ -241,6 +249,10 @@ class LedgerReceipt(Base, TimestampMixin):
     undo_handle: Mapped[str | None] = mapped_column(default=None)
     undo_how: Mapped[str | None] = mapped_column(default=None)
     undo_none: Mapped[str | None] = mapped_column(default=None)
+    # A recall's receipt (#80, ``source`` conductor): the recalled words,
+    # quoted, and the turn they come from (its day and conversation).
+    fact: Mapped[str | None] = mapped_column(default=None)
+    cites_turn_id: Mapped[int | None] = mapped_column(ForeignKey("ledger_turns.id"), default=None)
     # The step that undid it (#74): no receipt is undone twice.
     undone_by_step_id: Mapped[int | None] = mapped_column(
         ForeignKey("ledger_steps.id"), default=None
@@ -272,6 +284,27 @@ class LedgerEntity(Base, TimestampMixin):
     title: Mapped[str | None] = mapped_column(default=None)
     untrusted: Mapped[bool] = mapped_column(default=False)
     last_seen_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=func.now())
+    # Memory (#80): the words this entity was seen with (its title, kind and
+    # the person's words on each turn that touched it), term -> count, so "that
+    # Caribou song" finds it days later. Built by code, never by a model.
+    terms: Mapped[dict[str, int] | None] = mapped_column(JSON, default=None)
+
+
+class LedgerTopic(Base, TimestampMixin):
+    """A quiet automatic topic (#80): turns that talk about the same things.
+
+    Code clusters each ended turn by the words it shares with a topic and the
+    entities it touched, or keeps it with the turn before it in the same
+    conversation; no model writes one, and nobody sees or manages them. Recall
+    reads a matching topic's turns as well as the turns that match outright.
+    ``terms`` is term -> count, capped.
+    """
+
+    __tablename__ = "ledger_topics"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    terms: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
+    turns: Mapped[int] = mapped_column(default=0)
 
 
 class LedgerTouch(Base):

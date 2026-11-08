@@ -33,6 +33,8 @@ import json
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
+from app.ai.memory import RECALL_TOOL
+
 if TYPE_CHECKING:
     from app.ai.loop import ToolCallRecord
 
@@ -65,8 +67,9 @@ def is_look(tool: str) -> bool:
 
 
 def is_read(tool: str) -> bool:
-    """Whether a tool only reads: conductor's local read or an app's glance."""
-    return tool in READ_TOOLS or is_look(tool)
+    """Whether a tool only reads: conductor's local read, an app's glance, or
+    a recall over the ledger (#80)."""
+    return tool in READ_TOOLS or is_look(tool) or tool == RECALL_TOOL
 
 
 # The prefix of every error text the loop writes for a call it never

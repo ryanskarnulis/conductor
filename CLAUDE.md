@@ -83,10 +83,11 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   activity note — never raw transcripts into conductor's history.
 - **No chat turns are replayed** (#64). Each turn's one user message opens
   with the state block (`app/ai/state_block.py`: calendar, surface, panel,
-  running jobs, a pending question, recent entities from the apps' records)
-  and recall (`app/ai/recall.py`: this thread's record, requests and last
-  exchange as data, plus word-matched calls from earlier conversations), then
-  the person's words. System prompt and tool schemas stay byte-identical; the
+  running jobs, a pending question, recent entities from the apps' records,
+  and matches from earlier conversations, #80) and recall (`app/ai/recall.py`:
+  this thread's record, requests and last exchange as data, plus word-matched
+  calls from earlier conversations when the registry has no match), then the
+  person's words. System prompt and tool schemas stay byte-identical; the
   opening is capped (`turn_context.MAX_CHARS`).
 - **Delegate v1.1** (#67): each `ask` mints one `Idempotency-Key`; only a
   connection dropped after send is resent, under that key. The app's typed
@@ -109,8 +110,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   to a typed plan under `json_schema` (`app/ai/plan.py`, `compiler.py`), code
   validates it (one repair, else the loop takes the turn), and the
   interpreter (`app/ai/interpreter.py`) runs `ask`/`look`/`open`/`ask_user`/
-  `confirm` plans across apps, a last `think`, the control steps, and the
-  direct answers (`app/ai/speaker.py`).
+  `confirm`/`recall` plans across apps, a last `think`, the control steps,
+  and the direct answers (`app/ai/speaker.py`).
   Plans have no designed length; 12 steps is a runaway ceiling. Every other
   kind falls back to the loop until its issue lands; the fallen-back plan
   stays on the ledger. A destructive
@@ -137,6 +138,18 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   the harness): no eval ever reaches a real app, and a look counts as a read.
   The speaker's `chat` answer sees the ledger's facts and the about-you check,
   since the planner files "what did you just do?" there when glance lines shift.
+- **Memory over the ledger** (#80, `app/services/memory.py`, `app/ai/memory.py`).
+  Code only: no model call writes memory, and it reads the person's words and
+  the apps' receipts, never conductor's replies or plan text. Each ended turn
+  is indexed (words, the entities it touched, a quiet topic: shared words or
+  entities, else the turn before), oldest first, as turns close. Topics are
+  never shown or managed. `recall` cites turns from every live conversation by
+  day and conversation, scoped by matching topics, as a `conductor` receipt
+  (`fact`, `cites_turn_id`); `{sN}` on it is the one entity that clearly
+  answers (a tie names nothing), with its trust. Nothing found is said, never
+  guessed (code appends it). The state block's matches are registry leads
+  from other conversations, only when the words point back; outside titles
+  stay quoted labels.
 - **Data flows as quoted data, never as control** (#72, `app/ai/dataflow.py`).
   Code fills `{sN}` from step N's receipt: its main touched title (job refs
   skipped, up to 3 joined), cleaned and quoted. No title, or more than 3,

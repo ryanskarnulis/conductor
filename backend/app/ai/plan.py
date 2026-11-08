@@ -20,10 +20,10 @@ interpreter can run a valid plan yet: it runs ``ask``/``open``/``ask_user``/
 ``confirm`` plans across apps, with ``{sN}`` data flow between them (#72),
 ``look`` (#73: a plain read of an app's glance, offered only for apps whose
 manifest declares one), the control steps ``cancel``/``amend``/``undo`` on
-their own (#74; on a running job through the jobs runtime, #76), ``think``
-as the last step (#78: a background job whose proposal waits for a yes), and
-the direct answers; every other kind (``recall``) falls back to the loop
-until its issue lands (#80). :func:`reads_only` says which asks may run in parallel.
+their own (#74; on a running job through the jobs runtime, #76), ``recall``
+over the ledger (#80, :mod:`app.services.memory`), ``think`` as the last
+step (#78: a background job whose proposal waits for a yes), and the direct
+answers. :func:`reads_only` says which asks may run in parallel.
 Pure: no I/O.
 """
 
@@ -48,7 +48,9 @@ StepKind = Literal[
 ]
 
 # What the interpreter runs; the rest fall back to the loop.
-RUNNABLE_KINDS: frozenset[str] = frozenset({"ask", "look", "open", "ask_user", "confirm", "think"})
+RUNNABLE_KINDS: frozenset[str] = frozenset(
+    {"ask", "look", "open", "ask_user", "confirm", "recall", "think"}
+)
 # Control steps (#74): they act on what's waiting or on what just ran, so each
 # runs as a plan of its own (:mod:`app.ai.control`).
 CONTROL_KINDS: frozenset[str] = frozenset({"cancel", "amend", "undo"})
@@ -440,8 +442,9 @@ def fallback_reason(
     Cross-app plans run (#72): writes in order, one at a time. A ``look`` runs
     (#73) but gives nothing to ``{sN}``: a glance is several things, not a
     name, so a ref to one falls back. ``{sN}`` runs
-    when step N can give a name: an ``ask`` (its receipt's title) or the
-    ``ask_user`` (the person's answer). ``confirm_app`` is the app a
+    when step N can give a name: an ``ask`` (its receipt's title), the
+    ``ask_user`` (the person's answer) or a ``recall`` (the one entity it
+    resolved, #80). ``confirm_app`` is the app a
     ``confirm`` step answers, when it's an app's question; kept for the
     callers, it no longer changes the answer.
 
@@ -467,7 +470,7 @@ def fallback_reason(
             return "think_not_last"
         if set(REF.findall(step_text(step))) - namers:
             return "data_flow"
-        if isinstance(step, Ask | AskUser):
+        if isinstance(step, Ask | AskUser | Recall):
             namers.add(step.id)
     return None
 

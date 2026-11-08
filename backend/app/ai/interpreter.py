@@ -17,6 +17,10 @@ same as the loop's. What it runs, across apps (#72):
   same app is asked the person's words instead, when that can't repeat a
   write the plan already made; else the step fails and the plan ends.
 - ``open``: the handoff. Always last.
+- ``recall`` (#80): memory over the ledger (:mod:`app.services.memory`): the
+  person's words and the apps' receipts from every conversation and day,
+  cited by day and conversation. No app, no model. ``{sN}`` on it is the one
+  entity it resolved, if one clearly answers.
 - ``ask_user``: the plan pauses on the question; the person's answer resumes
   the same plan, ``{s1}`` replaced by their words.
 - ``{sN}`` in a step's text: the main title step N's receipt touched, quoted,
@@ -59,6 +63,7 @@ from __future__ import annotations
 
 import contextvars
 import time
+from datetime import date
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -69,6 +74,7 @@ from app.ai import (
     compiler,
     control,
     dataflow,
+    memory,
     narrator,
     run_record,
     speaker,
@@ -92,6 +98,9 @@ if TYPE_CHECKING:
     from app.ai.loop import AgentLoop, AgentRunResult, LoopActivity, OnActivity, ToolCallRecord
 
 logger = structlog.get_logger(__name__)
+
+# How a recall step reads the ledger (#80): its query in, what memory found out.
+MemoryReader = Callable[[str], memory.Recalled]
 
 _AFTER_FAILURE = f"{run_record.NOT_RUN_PREFIX}an earlier step of the plan didn't finish"
 _LEFT_IT = "Okay, I left it."
@@ -117,6 +126,8 @@ class _Run:
     view: control.View = field(default_factory=lambda: control.View(None))
     # Each step's record by id, for a think's inputs (#78).
     found: dict[str, ToolCallRecord] = field(default_factory=dict)
+    # Memory over the ledger (#80): a recall step's query in, what it found out.
+    memory: MemoryReader | None = None
 
 
 class Interpreter:
@@ -154,10 +165,13 @@ class Interpreter:
         paused: PausedPlan | None,
         self_facts: Callable[[], str] | None,
         control_view: Callable[[], Ledgered] | None = None,
+        recall: MemoryReader | None = None,
     ) -> tuple[AgentRunResult | None, TurnPlan]:
         """The turn's result, or ``None`` when the loop should take it; and the plan."""
         loop = self._loop
-        state = _Run(words, actor, trace, on_activity, stop, view=control.View(control_view))
+        state = _Run(
+            words, actor, trace, on_activity, stop, view=control.View(control_view), memory=recall
+        )
         if _stopped(stop):
             return loop._stop("cancelled", [], 0, []), TurnPlan(status="ran", note="stopped")
         pending = current_delegation_context().pending_confirm
@@ -450,6 +464,8 @@ class Interpreter:
                         return self._app_asked(state, turn, steps, position + 1, step, values)
             elif isinstance(step, plans.Think):
                 return self._think(state, turn, step, values)
+            elif isinstance(step, plans.Recall):
+                record = self._recall(state, step)
             elif isinstance(step, plans.Open):
                 filled = dataflow.fill(step.intent, values)
                 refusal = _refusal(step, filled, confirms=False)
@@ -472,7 +488,11 @@ class Interpreter:
         """What a step gives later steps as ``{sN}``, from its receipt; and
         its record, for a think's inputs (#78)."""
         state.found[step.id] = record
-        value = dataflow.from_record(record.app_record)
+        value = (
+            dataflow.from_recall(record.app_record)
+            if memory.is_recall(record.tool)
+            else dataflow.from_record(record.app_record)
+        )
         if value is not None:
             values[step.id] = value
 
@@ -666,6 +686,31 @@ class Interpreter:
         logger.info("plan_look", tool=call.name, ok=record.error is None)
         return record, record.result or f"Error: {record.error}", False
 
+    def _recall(self, state: _Run, step: plans.Recall) -> ToolCallRecord:
+        """Read memory over the ledger (#80): no app, no model, no budget. The
+        record is code's: one ``looked_up`` entry per cited turn, or "nothing
+        on record" (still a read that went well; a later ``{sN}`` on it has
+        nothing to pass on)."""
+        from app.ai.loop import ToolCallRecord  # noqa: PLC0415
+
+        arguments = {"query": step.query}
+        self._loop._emit(state.on_activity, _activity("tool", tool=memory.RECALL_TOOL))
+        turn_events.step_started(len(state.records) + 1, memory.RECALL_TOOL, arguments)
+        record = ToolCallRecord(tool=memory.RECALL_TOOL, arguments=arguments)
+        if state.memory is None:
+            record.error = "couldn't look back: memory isn't available here"
+        else:
+            try:
+                found = state.memory(step.query)
+                record.result, record.app_record = memory.record(found, date.today())
+            except Exception as exc:
+                logger.warning("plan_recall_failed", error=str(exc), error_type=type(exc).__name__)
+                record.error = "couldn't look back: memory couldn't be read"
+        logger.info("plan_recall", hits=len(record.app_record or []), ok=record.error is None)
+        state.records.append(record)
+        turn_events.receipt(len(state.records), record)
+        return record
+
     def _look_fell_back(
         self,
         state: _Run,
@@ -789,6 +834,8 @@ def _call_for(step: plans.Step) -> tuple[str, dict[str, Any]]:
         return open_tool_name(step.app), {"intent": step.intent}
     if isinstance(step, plans.Look):
         return look_tool_name(step.app), {}
+    if isinstance(step, plans.Recall):
+        return memory.RECALL_TOOL, {"query": step.query}
     return f"plan:{step.do}", {}
 
 

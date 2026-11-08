@@ -66,6 +66,7 @@ import structlog
 from pydantic import BaseModel, ValidationError
 
 from app.ai import confirmation, narrator, run_record, turn_events
+from app.ai.memory import Recalled
 from app.ai.plan import Ledgered, PausedPlan, TurnPlan
 from app.ai.stop import STOPPED_ERROR, Stop, use_stop
 from app.ai import trace as run_trace
@@ -366,6 +367,7 @@ class AgentLoop:
         paused: PausedPlan | None = None,
         self_facts: Callable[[], str] | None = None,
         control_view: Callable[[], Ledgered] | None = None,
+        recall: Callable[[str], Recalled] | None = None,
     ) -> AgentRunResult:
         """Run the loop for one user message. Always returns; never spins.
 
@@ -396,7 +398,8 @@ class AgentLoop:
         (:mod:`app.ai.interpreter`): ``paused`` is last turn's plan waiting on
         the person, ``self_facts`` what code knows about its own recent work
         (for "what did you just do?"), ``control_view`` what the ledger says a
-        control step acts on (#74). A plan the interpreter can't run yet
+        control step acts on (#74), ``recall`` how a recall step reads memory
+        over the ledger (#80). A plan the interpreter can't run yet
         falls back to the loop, and the result carries the plan either way.
         """
         bound = structlog.contextvars.get_contextvars()
@@ -434,6 +437,7 @@ class AgentLoop:
                         paused=paused,
                         self_facts=self_facts,
                         control_view=control_view,
+                        recall=recall,
                     )
                     trace.plan = turn_plan.model_dump()
                 if result is None:
