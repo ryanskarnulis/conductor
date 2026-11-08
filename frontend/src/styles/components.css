@@ -88,6 +88,36 @@
 .cd-job progress::-webkit-progress-value{background:var(--glow)}
 .cd-job progress::-moz-progress-bar{background:var(--glow)}
 .cd-job .hint{color:var(--silk)}
+/* Live jobs (#90): the status word's colour is the job's own state; queued is not working, and nothing is ok before its end event. */
+.cd-job-title{color:var(--ink);overflow-wrap:anywhere}
+q.cd-job-title{quotes:"“" "”"}
+.cd-job-error{color:var(--danger);font-size:12px}
+.cd-job[data-state="queued"]{border-color:var(--silk-border);background:transparent}
+.cd-job[data-state="queued"] .big,.cd-jobrow[data-state="queued"] .big,.cd-job[data-state="stop"] .big,.cd-jobrow[data-state="stop"] .big{color:var(--muted)}
+.cd-job[data-state="wait"],.cd-jobrow[data-state="wait"]{border-color:var(--warn)}
+.cd-job[data-state="wait"] .big,.cd-jobrow[data-state="wait"] .big{color:var(--warn)}
+.cd-job[data-state="ok"] .big,.cd-jobrow[data-state="ok"] .big{color:var(--ok)}
+.cd-job[data-state="bad"],.cd-jobrow[data-state="bad"]{border-color:rgba(242,143,164,.5)}
+.cd-job[data-state="bad"] .big,.cd-jobrow[data-state="bad"] .big{color:var(--danger)}
+.cd-jobs{padding:var(--space-4) var(--space-5);border-radius:var(--radius);border:1px solid rgba(155,231,255,.28);background:rgba(155,231,255,.04);font-size:13px;display:flex;flex-direction:column;gap:var(--space-3)}
+.cd-jobs ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.cd-jobs-head{font-weight:600;color:var(--silk)}
+.cd-jobrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--space-2) var(--space-4);align-items:center;padding:var(--space-3) 0;border-top:1px solid rgba(199,211,228,.1)}
+.cd-jobrow:first-child{border-top:0}
+.cd-jobrow .who{min-width:0}
+.cd-jobrow .big{color:var(--glow);text-align:right;font-variant-numeric:tabular-nums}
+.cd-jobrow progress{grid-column:1/-1;appearance:none;-webkit-appearance:none;width:100%;height:3px;border:0;border-radius:3px;background:rgba(199,211,228,.15);overflow:hidden}
+.cd-jobrow progress::-webkit-progress-bar{background:rgba(199,211,228,.15)}
+.cd-jobrow progress::-webkit-progress-value{background:currentColor;color:var(--glow)}
+.cd-jobrow progress::-moz-progress-bar{background:var(--glow)}
+.cd-jobrow .cd-row{grid-column:1/-1;gap:var(--space-3)}
+.cd-jobrow .cd-row:empty{display:none}
+.cd-jobs details summary{cursor:pointer;color:var(--muted);min-height:28px;display:flex;align-items:center}
+.cd-jobnote{padding:var(--space-4) var(--space-5);border-radius:var(--radius);border:1px solid var(--silk-border);background:var(--surface-soft);font-size:13px;display:flex;flex-direction:column;gap:var(--space-2)}
+.cd-jobnote>b{color:var(--silk);font-weight:600}
+.cd-jobnote p{margin:0}
+.cd-jobnote summary{cursor:pointer;min-height:28px;display:flex;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cd-jobnote summary:focus-visible,.cd-jobs summary:focus-visible{outline:2px solid var(--glow);outline-offset:2px}
 
 /* Finished note */
 .cd-note{padding:var(--space-5);border-radius:var(--radius);border:1px solid var(--ok);background:var(--ok-soft);font-size:13px;display:flex;flex-direction:column;gap:var(--space-2)}

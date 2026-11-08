@@ -213,6 +213,14 @@
   background: transparent;
 }
 
+/* Job notes (#90) stay in view on a phone too: they are what a job left. */
+.shell-jobnotes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
 .shell-working {
   display: flex;
   align-items: center;

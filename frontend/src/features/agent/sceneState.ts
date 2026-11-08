@@ -1,4 +1,5 @@
 import type { PresenceState } from '../../design/status'
+import type { JobCardData } from './jobStream'
 import type { ShellTurn } from './turnView'
 
 /** What the Living Web scene reads each frame: the same facts as the panel,
@@ -13,7 +14,10 @@ export interface SceneState {
   /** `k` is the strand's place on the plan, so queued strands reach out one after another. */
   strands: Record<string, { state: StrandState; since: number; k?: number }>
   recall: { state: 'run' | 'done'; since: number } | null
+  /** The job Glitch hums over (`of` 0: its total isn't known). */
   job: { n: number; of: number; app: string } | null
+  /** The progress ring on each app's anchor, from its running jobs with a known total (#90). */
+  jobs: Record<string, { n: number; of: number }>
   confirm: { app: string } | null
   lastStart: { app: string; t: number } | null
   lastReceipt: { app: string; t: number } | null
@@ -58,9 +62,42 @@ function strandFor(state: ShellTurn['steps'][number]['state']): StrandState | nu
   }
 }
 
-/** Next scene state from the latest turn, carrying `since` forward for any
- * strand whose state did not change. Pure given `now`. */
-export function nextSceneState(prev: SceneState | null, latest: ShellTurn | null, presence: PresenceState, confirmApp: string | null, now: number): SceneState {
+/** What a job card makes of its app's strand, from its own words only: queued
+ * is not working, and nothing is done before the end event says so. */
+function strandOfJob(job: JobCardData): StrandState | null {
+  switch (job.word) {
+    case 'queued':
+      return 'queued'
+    case 'working':
+    case 'stopping':
+    case 'ending':
+      return 'job'
+    case 'waiting on you':
+      return 'wait'
+    case 'finished':
+      return 'done'
+    case 'failed':
+    case 'lost track of it':
+      return 'failed'
+    default:
+      return null
+  }
+}
+
+const JOB_RANK: Record<StrandState, number> = { failed: 6, wait: 5, job: 4, queued: 3, done: 2, run: 0 }
+
+/** Next scene state from the latest turn and the conversation's job cards,
+ * carrying `since` forward for any strand whose state did not change. A
+ * running turn's own strand wins; a job lights the strand of an app the turn
+ * has left done or never touched, with a progress ring (#90). Pure given `now`. */
+export function nextSceneState(
+  prev: SceneState | null,
+  latest: ShellTurn | null,
+  presence: PresenceState,
+  confirmApp: string | null,
+  now: number,
+  jobs: readonly JobCardData[] = [],
+): SceneState {
   const strands: SceneState['strands'] = {}
   let lastStart: SceneState['lastStart'] = prev?.lastStart ?? null
   let lastReceipt: SceneState['lastReceipt'] = prev?.lastReceipt ?? null
@@ -82,18 +119,44 @@ export function nextSceneState(prev: SceneState | null, latest: ShellTurn | null
     if (since === now && (state === 'done' || state === 'failed')) lastReceipt = { app, t: now }
     if (since === now && state === 'failed') lastFail = { app, t: now }
   }
+  const lit: Record<string, StrandState> = {}
+  const rings: SceneState['jobs'] = {}
+  for (const job of jobs) {
+    const state = strandOfJob(job)
+    if (!state || !(WEB_APPS as readonly string[]).includes(job.app)) continue
+    if (!lit[job.app] || JOB_RANK[state] > JOB_RANK[lit[job.app]]) lit[job.app] = state
+    if (state === 'job' && job.total !== null) {
+      const ring = rings[job.app] ?? { n: 0, of: 0 }
+      rings[job.app] = { n: ring.n + job.done, of: ring.of + job.total }
+    }
+  }
+  for (const [app, state] of Object.entries(lit)) {
+    const have = strands[app]
+    if (have && have.state !== 'done') continue
+    const before = prev?.strands[app]
+    const since = before && before.state === state ? before.since : now
+    strands[app] = state === 'queued' ? { state, since, k: Object.keys(strands).length } : { state, since }
+    if (since === now && state === 'done') lastReceipt = { app, t: now }
+    if (since === now && state === 'failed') {
+      failed[app] = { state: 'failed' }
+      lastFail = { app, t: now }
+    }
+  }
+  const hum = jobs.find((job) => strandOfJob(job) === 'job')
   const pres = PRES[presence]
   const changed =
     !prev ||
     prev.pres !== pres ||
     (prev.confirm?.app ?? null) !== confirmApp ||
     Object.keys(strands).length !== Object.keys(prev.strands).length ||
+    JSON.stringify(rings) !== JSON.stringify(prev.jobs) ||
     Object.entries(strands).some(([app, s]) => prev.strands[app]?.state !== s.state)
   return {
     pres,
     strands,
     recall: null,
-    job: null,
+    job: hum ? { n: hum.done, of: hum.total ?? 0, app: hum.app } : null,
+    jobs: rings,
     confirm: confirmApp ? { app: confirmApp } : null,
     lastStart,
     lastReceipt,
