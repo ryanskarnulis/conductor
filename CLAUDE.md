@@ -109,8 +109,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   to a typed plan under `json_schema` (`app/ai/plan.py`, `compiler.py`), code
   validates it (one repair, else the loop takes the turn), and the
   interpreter (`app/ai/interpreter.py`) runs `ask`/`look`/`open`/`ask_user`/
-  `confirm` plans across apps, the control steps, and the direct answers
-  (`app/ai/speaker.py`).
+  `confirm` plans across apps, a last `think`, the control steps, and the
+  direct answers (`app/ai/speaker.py`).
   Plans have no designed length; 12 steps is a runaway ceiling. Every other
   kind falls back to the loop until its issue lands; the fallen-back plan
   stays on the ledger. A destructive
@@ -179,6 +179,21 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   never failed. A note isn't an exchange: it never lapses a waiting question.
   `cancel` calls the app's `…/cancel` and says the `done` count it answered;
   `amend` can't change a running job and says so (the contract has none).
+- **`think` is a background job on the local 26B** (#78, `app/ai/think.py`,
+  `app/services/thinker.py`; `CONDUCTOR_THINK` off falls back to the loop).
+  Always the last step: it files a `ledger_jobs` row conductor owns
+  (`app = "conductor"`) with what its inputs found, and code replies at once;
+  the conversation never waits. The watcher hands it to the thinker:
+  gemma-4-26b-a4b, thinking on, `json_schema` on the answer, its own prompt
+  and sampling. The answer is a **proposal**, validated like any plan (one
+  repair) and tainted: it posts as the job's one note (`think_proposal`, the
+  confirm card) and nothing in it runs without the person's yes. Yes runs it
+  as a normal plan (gates and apps' questions still ask); no, an amend or
+  anything else sets it aside. **It yields the GPU**: no try starts during a
+  turn, one in flight is cut off when a turn starts (`app/ai/foreground.py`)
+  or the 26B is stopped under it; it is `interrupted` (a `not_run` receipt)
+  and retried after 60 s with no turn, 3 tries, then code's honest "couldn't
+  finish". Never claim a proposal that wasn't made.
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
   depth stacks.
 - **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every
@@ -197,7 +212,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   person's own turn — never an invented assistant reply.
 - **Single-worker by design:** conductor runs SQLite on one uvicorn worker,
   and the in-memory turn-activity registry (the live channel), the rate
-  limiter and the job watcher's one thread rely on it; multi-worker safety is
+  limiter, the job watcher's one thread and the thinker's one try at a time
+  (with its turn tracker and cancel flags) rely on it; multi-worker safety is
   not a goal.
 - **The live channel** (#38, `app/api/turn_activity.py`): `GET …/events` is
   SSE for the turn in flight: a snapshot on connect (so a reconnect loses

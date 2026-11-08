@@ -125,10 +125,8 @@ class Thinker:
     def tick(self, watched: WatchedJob, now: datetime, *, force: bool = False) -> int:
         """One look at a think job; how many notes were posted (0 or 1)."""
         with self._lock:
-            if self._running == watched.id:
-                return 0
-            if self._running is not None and not force:
-                return 0  # one try at a time; this one waits its turn
+            if self._running is not None:
+                return 0  # one try at a time: this one, or the next, waits its turn
         job = self._load(watched.id)
         if job is None:
             return 0
