@@ -359,6 +359,9 @@ KNOWN_REDS: dict[str, str] = {
     # Hidden by the one-sample gate; the sampled gate reads it 2/5, then 13/20.
     # The misses answer locally with no app call.
     "music-save": "answers without routing, 13/20 (2026-10-28)",
+    # A planner miss ("resign the game" -> ask music), 11/20 on 2026-11-08. A chess
+    # open.description naming resigning fixes it (20/20); drop the mark when that lands.
+    "chess-resign": "plans ask_music, 11/20 (2026-11-08) — chess manifest fix in #122",
 }
 
 

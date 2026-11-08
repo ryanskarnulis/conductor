@@ -113,11 +113,93 @@ Run on gemma-4-12b, 5 samples per golden, infra 0/12, 105 s:
 | confirm-delete-task, -wipe-project | 5/5, 5/5 |
 | local-capabilities | 5/5 |
 
-The reds besides `chess-analysis` are not from this change and are not fixed
-here: `tasks-week` and `chess-resign` read below the floor on this run, and
-their gate verdict is BELOW_FLOOR. `chess-resign` is the plan-level known miss
-in chess's manifest examples; `tasks-week` is new in this record and wants its
-own issue.
+The reds besides `chess-analysis` are not from this change: `tasks-week` and
+`chess-resign` read below the floor on this run. Both are explained, and
+`tasks-week` fixed, in the next section (#122).
+
+## The `tasks-week` and `chess-resign` reds (#122, 2026-11-08)
+
+Two causes, bisected with the live goldens (gemma-4-12b, 5 samples) over the
+merges since the last recorded baseline:
+
+| commit | `tasks-week` | `chess-resign` |
+|---|---|---|
+| `11068a8` (#100, loop) | 5/5 | 5/5 |
+| `19c9874` (#102, recall, loop) | 5/5 | 5/5 |
+| `186bcd0` (#70, compiler) | **1/5** | **2/5** |
+| `757c42d` (#73, look) | 1/5 | 12/20 |
+| main, 2026-11-08 | 1/5 | 4/5; 11/20 at n=20 |
+
+Both turned red with the compiler, which is the first thing that reads #64's
+recall. The bisect held the manifests fixed at today's, so neither is a manifest
+regression.
+
+- **`tasks-week` was the harness, not routing.** Samples share one database,
+  and #64's recall adds "earlier conversations' calls that share words" to the
+  turn. Sample 1 routed; samples 2–5 found sample 1's answered
+  `ask_tasks "what am I working on this week?"` in the context and the
+  planner replied `{"answer": "knowledge"}`: no app call, the speaker
+  declined. Session evals got a wiped database per sample in #103; routing
+  evals didn't. Now `tests/eval_db.py` is shared and both wipe. `tasks-week`
+  5/5. The same leak is the likeliest cause of `music-save`'s "answers locally"
+  misses (5/5 now, in two runs; left `xfail` until a 20-sample read).
+- **`chess-resign` is a real planner miss**, no leak: `{"do":"ask","app":"music",
+  "request":"resign the game"}`, 9 of 20, though "resign the game" is
+  one of chess's own examples. Listing more examples made it worse (add
+  "I resign" and "reset the game": 3/20). The `open.description` was the lever:
+  naming resigning and what "the game" means took it to **20/20** (the same
+  sentence without the clause: 17/20). Chess owns `app.yaml`, so the fix is
+  a draft for that repo:
+
+```diff
+-  description: "Opens the chess board in the browser and starts a session with the chess agent. Use this for anything to do with playing, watching, or changing a chess game — you do not play chess yourself, you hand the user to the board."
++  description: "Opens the chess board in the browser and starts a session with the chess agent. Use this for anything to do with playing, watching, resetting, resigning or otherwise changing a chess game ('the game' always means this one) — you do not play chess yourself, you hand the user to the board."
+```
+
+`chess-resign` is `xfail` in `KNOWN_REDS` until that lands.
+
+Same run, the draft manifest read from a scratch fleet dir ("after"; before is
+the real manifests, both with the wiped database):
+
+| golden | before | after |
+|---|---|---|
+| tasks-week | 5/5 (was 1/5) | 5/5 |
+| chess-resign | 4/5 (11/20 at n=20) | **5/5** (20/20 at n=20) |
+| chess-analysis | 0/5 known red | 0/5 |
+| refuse-playback | 9/15 (xfail) | 5/5 (xpass) |
+| every other golden | 5/5 | 5/5 |
+
+Plan evals, shipped prompt (unchanged), 5 samples per case:
+
+| group | floor | before | after |
+|---|---|---|---|
+| golden | 0.8 | 95/105 (`chess-resign` 1/5) | 98/105 (`chess-resign` 5/5) |
+| cross | 0.8 | 35/35 | 35/35 |
+| ref | 0.85 | 16/20 | 14/20 |
+| control | 0.8 | 20/25 | 20/25 |
+| memory | 0.8 | 7/10 | 5/10 |
+| knowledge | 0.65 | 15/15 | 14/15 |
+| hard | 0.5 | 5/5 | 5/5 |
+| self | 0.55 | 6/15 | 10/15 |
+| holdout | 0.85 | 46/50 | 46/50 |
+| long | 0.7 | 36/40 | 38/40 |
+
+At n=5 `ref` and `memory` read red after (and `ref` nominally under its floor
+before). They're two cases, `ref-ambiguous` and `memory-caribou`, that don't
+involve chess. At n=20 on each side: ref 61/80 before, 67/80 after; memory
+27/40 before, 26/40 after. So the change doesn't move them, and they are
+red on main at n=20 independent of this work (`ref-ambiguous` plans an `ask` to
+tasks instead of `ask_user` about 3 in 4 times; `memory-caribou` plans a
+`look` of music instead of recalling or asking).
+
+Session gate tier, compiler on, 5 samples: every scenario 5/5 before and
+after except S7 4/5 after (ABOVE_FLOOR; S7's miss is already recorded in
+this file as happening on main). Claims 40/40 backed in both runs.
+
+Left open: the leak is also a product weakness. A person asking the same
+question in a new conversation gets the planner trusting a recalled
+answered call over asking the app again. The planner prompt is unchanged
+here; it wants its own change, gated by the plan evals.
 
 ## Open regression — `refuse-playback` red since music #9
 
