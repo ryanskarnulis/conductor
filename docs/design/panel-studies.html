@@ -1,0 +1,502 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Panel Studies</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Night-Silk, dark by design (same tokens as Living Web).
+   Layout: a bar with the run's controls and moment chips, then five panel studies side by side, each the size of the
+   real panel and driven by the same scripted ledger, with what it is good for and what it costs underneath. */
+:root{
+  --bg:#0a0c12; --bg-deep:#05070c; --surface:#0f131d; --glass:rgba(12,16,25,.86);
+  --silk:#c7d3e4; --silk-border:rgba(199,211,228,.2); --hair:rgba(199,211,228,.1); --ink:#e8edf5; --muted:#939db0;
+  --glow:#9be7ff; --glow-soft:rgba(155,231,255,.14); --violet:#c9b2f4;
+  --ok:#8fdcaa; --warn:#eec98a; --danger:#f28fa4; --paper:#e9e4d8; --paper-ink:#1b1d24;
+  --sans:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink)}
+body{font-family:var(--sans);font-size:15px;line-height:1.5}
+button{font:inherit;color:inherit}
+button:focus-visible,summary:focus-visible{outline:2px solid var(--glow);outline-offset:2px}
+.wrap{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));max-width:1900px;margin:0 auto}
+.bar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 24px;padding-block:16px 10px}
+.eyebrow{margin:0;font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+h1{margin:2px 0 0;font-weight:300;font-size:26px;letter-spacing:.38em;text-transform:uppercase;line-height:1.1}
+.lede{margin:0;max-width:62ch;color:var(--muted);font-size:14px}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto;align-items:center}
+.clock{font-family:var(--mono);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:8ch}
+.btn{min-height:40px;padding:0 14px;border-radius:12px;border:1px solid var(--silk-border);background:var(--surface);cursor:pointer;font-size:13.5px}
+.btn:hover{border-color:var(--glow)}
+.moments{display:flex;gap:6px;overflow-x:auto;padding-bottom:12px;scrollbar-width:thin}
+.chip{flex:none;min-height:34px;padding:0 12px;border-radius:999px;border:1px solid var(--silk-border);background:transparent;cursor:pointer;font-size:13px;white-space:nowrap}
+.chip[aria-current="true"]{border-color:var(--glow);color:var(--glow);background:rgba(155,231,255,.07)}
+.chip .n{font-family:var(--mono);font-size:11px;color:var(--muted);margin-right:6px}
+
+.grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;padding-block:6px 28px}
+@media (max-width:1580px){.grid{grid-template-columns:repeat(6,minmax(0,1fr))}.study{grid-column:span 2}.study:nth-child(4){grid-column:2 / span 2}}
+@media (max-width:1060px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.study,.study:nth-child(4){grid-column:auto}.study:last-child{grid-column:1 / -1;justify-self:center;width:min(100%,calc(50% - 8px))}}
+@media (max-width:700px){.grid{grid-template-columns:minmax(0,1fr)}.study:last-child{width:100%}}
+.study{display:flex;flex-direction:column;gap:10px;min-width:0}
+.study header{display:flex;align-items:baseline;gap:10px}
+.study .letter{font-family:var(--mono);font-size:12px;color:var(--glow);border:1px solid rgba(155,231,255,.4);border-radius:6px;padding:0 6px}
+.study h2{margin:0;font-size:17px;font-weight:600;letter-spacing:.01em}
+.study .idea{margin:0;font-size:13.5px;color:var(--silk);min-height:4.5em}
+@media (max-width:1060px){.study .idea{min-height:0}}
+.frame{position:relative;height:640px;border-radius:16px;border:1px solid var(--silk-border);overflow:hidden;
+  background:radial-gradient(ellipse at -30% 40%,rgba(80,150,230,.22),transparent 60%),repeating-radial-gradient(circle at -40% 45%,transparent 0 26px,rgba(155,200,255,.05) 26px 27px),var(--bg-deep)}
+.panel{position:absolute;inset:10px;border-radius:14px;background:var(--glass);border:1px solid var(--silk-border);backdrop-filter:blur(14px);
+  padding:16px;display:flex;flex-direction:column;gap:12px;overflow-y:auto;scrollbar-width:thin}
+.panel.off{opacity:.18}
+.fit{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 10px;margin:0;font-size:13px}
+.fit dt{color:var(--muted);font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding-top:2px}
+.fit dd{margin:0}
+.foot{border-top:1px solid var(--hair);padding-block:14px 30px;color:var(--muted);font-size:13px}
+
+/* shared bits */
+.who{display:block;font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+.w{font-size:11.5px;padding:2px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.queued .w{color:var(--muted);border-style:dashed}
+.run .w,.job .w{color:var(--glow);background:rgba(155,231,255,.12)}
+.wait .w{color:var(--warn);background:rgba(238,201,138,.14)}
+.done .w{color:var(--bg);background:var(--ok);border-color:var(--ok);font-weight:600}
+.failed .w{color:var(--danger);background:rgba(242,143,164,.12)}
+.cbtn{min-height:44px;padding:0 16px;border-radius:10px;border:1px solid var(--warn);background:transparent;cursor:pointer;font-weight:600;color:var(--ink)}
+.cbtn.primary{background:var(--warn);color:var(--bg)}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.undo{min-height:30px;padding:0 10px;border-radius:8px;border:1px solid var(--silk-border);background:transparent;font-size:12px;cursor:pointer}
+progress{appearance:none;-webkit-appearance:none;width:100%;height:4px;border:0;border-radius:4px;background:rgba(199,211,228,.15);overflow:hidden}
+progress::-webkit-progress-bar{background:rgba(199,211,228,.15)}
+progress::-webkit-progress-value{background:var(--glow)}
+progress::-moz-progress-bar{background:var(--glow)}
+.empty{margin:auto 0;color:var(--muted);font-size:14px}
+details.more{margin-top:auto;border-top:1px solid var(--hair);padding-top:6px;font-size:12.5px}
+details.more summary{cursor:pointer;color:var(--muted);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;min-height:28px;display:flex;align-items:center}
+
+/* A: thread */
+.a-msg{display:flex;flex-direction:column;gap:6px;max-width:92%}
+.a-msg p{margin:0}
+.a-you{align-self:flex-end;align-items:flex-end;text-align:right}
+.a-you p{background:rgba(199,211,228,.1);border:1px solid var(--silk-border);padding:8px 12px;border-radius:14px 14px 4px 14px;font-size:14.5px}
+.a-bot p{font-size:14.5px}
+.a-bot .lead{color:var(--glow)}
+.a-acts{display:flex;flex-wrap:wrap;gap:6px}
+.a-act{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--silk-border);color:var(--silk)}
+.a-act i{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.a-act.run i,.a-act.job i{background:var(--glow);box-shadow:0 0 8px var(--glow)} .a-act.done i{background:var(--ok)} .a-act.wait i{background:var(--warn)} .a-act.failed i{background:var(--danger)}
+.a-att{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:10px;border:1px solid rgba(143,220,170,.3);background:rgba(143,220,170,.07);font-size:13px}
+.a-att b{color:var(--ok)}
+.a-att span{flex:1;min-width:0}
+.a-card{padding:12px;border-radius:12px;border:1px solid var(--warn);background:rgba(238,201,138,.08);display:flex;flex-direction:column;gap:8px;font-size:14px}
+.a-card b{color:var(--warn)}
+.a-job{padding:10px 12px;border-radius:12px;border:1px solid rgba(155,231,255,.35);background:rgba(155,231,255,.06);font-size:13px;display:flex;flex-direction:column;gap:6px}
+.a-time{align-self:center;font-family:var(--mono);font-size:10.5px;color:var(--muted)}
+
+/* B: silk line */
+.b-line{list-style:none;margin:0;padding:0 0 0 22px;position:relative;display:flex;flex-direction:column;gap:14px}
+.b-line::before{content:"";position:absolute;left:6px;top:6px;bottom:6px;width:1.5px;background:linear-gradient(var(--silk-border),rgba(155,231,255,.5),var(--silk-border))}
+.b-node{position:relative;display:flex;flex-direction:column;gap:4px;font-size:13.5px}
+.b-node::before{content:"";position:absolute;left:-21px;top:5px;width:11px;height:11px;border-radius:50%;background:var(--bg-deep);border:1.5px solid var(--silk)}
+.b-node.run::before,.b-node.job::before{border-color:var(--glow);background:var(--glow);box-shadow:0 0 10px var(--glow)}
+.b-node.done::before{border-color:var(--ok);background:var(--ok)} .b-node.wait::before{border-color:var(--warn);background:var(--warn)}
+.b-node.failed::before{border-color:var(--danger);background:var(--bg-deep)} .b-node.queued::before{border-style:dashed}
+.b-node.said::before{border-color:var(--glow)}
+.b-top{display:flex;align-items:baseline;gap:8px}
+.b-top .k{font-family:var(--mono);font-size:12px;color:var(--violet)}
+.b-top .app{font-size:12px;color:var(--muted)}
+.b-top .t{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.b-node p{margin:0}
+.b-quote{font-size:15px}
+.b-rc{margin-top:2px;padding:6px 9px;border-left:2px solid var(--ok);background:rgba(143,220,170,.06);font-size:12.5px;display:flex;gap:8px;align-items:center}
+.b-rc span{flex:1;min-width:0} .b-rc b{color:var(--ok)}
+.b-narr{font-size:15.5px;font-weight:300;line-height:1.45}
+
+/* C: board */
+.c-ask{padding-bottom:10px;border-bottom:1px solid var(--hair)}
+.c-ask p{margin:2px 0 0;font-size:14px}
+.c-ask .ack{color:var(--glow);font-size:13px;margin-top:4px}
+.c-sec{display:flex;flex-direction:column;gap:6px}
+.c-h{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.c-h .n{font-family:var(--mono);font-size:11px;min-width:20px;height:20px;border-radius:6px;display:inline-grid;place-items:center;background:rgba(199,211,228,.1);color:var(--ink);letter-spacing:0}
+.c-sec.need .c-h{color:var(--warn)} .c-sec.need .c-h .n{background:var(--warn);color:var(--bg)}
+.c-sec.work .c-h{color:var(--glow)} .c-sec.done .c-h{color:var(--ok)}
+.c-item{display:flex;flex-direction:column;gap:6px;padding:9px 11px;border-radius:10px;border:1px solid var(--silk-border);font-size:13.5px}
+.c-item .r1{display:flex;gap:8px;align-items:center}
+.c-item .r1{flex-wrap:wrap}
+.c-item .r1 .tt{flex:1 1 60%;min-width:0}
+.c-item .app{flex-basis:100%;font-size:11px;color:var(--muted);font-family:var(--mono)}
+.c-sec.need .c-item{border-color:var(--warn);background:rgba(238,201,138,.08)}
+.c-sec.done .c-item{border-color:rgba(143,220,170,.3);background:rgba(143,220,170,.05)}
+.c-next{display:flex;flex-wrap:wrap;gap:6px}
+.c-next span{font-size:12px;padding:3px 9px;border:1px dashed var(--silk-border);border-radius:999px;color:var(--muted)}
+.c-none{font-size:12.5px;color:var(--muted)}
+.c-said{margin-top:auto;padding:10px 12px;border-radius:12px;background:rgba(155,231,255,.06);border:1px solid rgba(155,231,255,.2);font-size:14px;line-height:1.45}
+
+/* D: glance */
+.d-kick{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--glow)}
+.d-kick i{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}
+.d-kick.wait{color:var(--warn)} .d-kick.idle{color:var(--muted)} .d-kick.fail{color:var(--danger)} .d-kick.ok{color:var(--ok)}
+.d-line{margin:4px 0 0;font-size:25px;font-weight:300;line-height:1.25;letter-spacing:-.005em;text-wrap:balance}
+.d-sub{margin:0;color:var(--muted);font-size:13.5px}
+.d-bar{display:flex;gap:4px}
+.d-bar span{flex:1;height:6px;border-radius:3px;background:rgba(199,211,228,.14)}
+.d-bar .run,.d-bar .job{background:var(--glow)} .d-bar .done{background:var(--ok)} .d-bar .wait{background:var(--warn)} .d-bar .failed{background:var(--danger)}
+.d-count{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.d-last{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--silk)}
+.d-last i{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none}
+.d-last span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.d-steps{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
+.d-steps li{display:flex;justify-content:space-between;gap:8px}
+.d-steps li span:first-child{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* E: receipts */
+.e-req{font-family:var(--mono);font-size:11.5px;color:var(--muted);line-height:1.5}
+.e-req q{display:block;font-family:var(--sans);font-size:14px;color:var(--ink);quotes:"“" "”"}
+.e-tape{display:flex;flex-direction:column;gap:10px}
+.e-tk{position:relative;padding:12px 14px 12px;border-radius:4px;background:var(--paper);color:var(--paper-ink);font-family:var(--mono);font-size:12px;display:flex;flex-direction:column;gap:5px;
+  -webkit-mask:radial-gradient(circle 5px at 0 50%,transparent 98%,#000) left/51% 100% no-repeat,radial-gradient(circle 5px at 100% 50%,transparent 98%,#000) right/51% 100% no-repeat;
+          mask:radial-gradient(circle 5px at 0 50%,transparent 98%,#000) left/51% 100% no-repeat,radial-gradient(circle 5px at 100% 50%,transparent 98%,#000) right/51% 100% no-repeat}
+.e-tk.pend{background:transparent;color:var(--silk);border:1px dashed var(--silk-border);-webkit-mask:none;mask:none}
+.e-tk.wait{background:rgba(238,201,138,.1);color:var(--ink);border:1px solid var(--warn);-webkit-mask:none;mask:none}
+.e-tk.failed{background:rgba(242,143,164,.08);color:var(--ink);border:1px solid rgba(242,143,164,.5);-webkit-mask:none;mask:none}
+.e-tk.run,.e-tk.job{background:rgba(155,231,255,.06);color:var(--ink);border:1px solid rgba(155,231,255,.4);-webkit-mask:none;mask:none}
+.e-hd{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;opacity:.75}
+.e-v{font-family:var(--sans);font-size:15px;font-weight:600;letter-spacing:.01em}
+.e-ent{font-family:var(--sans);font-size:13px;line-height:1.4}
+.e-cut{border-top:1px dashed currentColor;opacity:.35;margin:2px 0}
+.e-ft{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px}
+.e-stamp{flex:none;align-self:flex-start;transform:rotate(-6deg);border:2px solid currentColor;border-radius:4px;padding:0 6px;font-size:11px;font-weight:600;letter-spacing:.14em;opacity:.8}
+.e-tk.done .e-stamp{color:#2f7a4b}
+.e-tk .undo{border-color:rgba(27,29,36,.35);color:var(--paper-ink)}
+.e-said{margin-top:auto;font-family:var(--mono);font-size:11px;color:var(--muted)}
+.e-said p{margin:3px 0 0;font-family:var(--sans);font-size:14.5px;color:var(--ink);line-height:1.45}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+  <div class="bar">
+    <div>
+      <p class="eyebrow">Conductor · Living Web · #94 · panel</p>
+      <h1>Panel Studies</h1>
+    </div>
+    <p class="lede">Five ways to draw the text panel beside the web. All five read the same scripted run as the Living Web page, so pick a moment and compare them side by side.</p>
+    <div class="ctl">
+      <span class="clock" id="clock" aria-hidden="true">t + 0.0 s</span>
+      <button class="btn" type="button" id="bPlay">Pause</button>
+      <button class="btn" type="button" id="bNext">Next event</button>
+      <button class="btn" type="button" id="bRestart">Restart</button>
+    </div>
+  </div>
+  <div class="moments" id="moments" role="group" aria-label="Jump to a moment"></div>
+
+  <div class="grid">
+    <section class="study" aria-labelledby="hA">
+      <header><span class="letter">A</span><h2 id="hA">Thread</h2></header>
+      <p class="idea">A conversation. Steps show as chips inside Conductor’s reply, and receipts arrive as attachments.</p>
+      <div class="frame"><div class="panel" id="pA"></div></div>
+      <dl class="fit"><dt>Good for</dt><dd>Feels familiar at a desk; the order of the talk is obvious.</dd><dt>Costs</dt><dd>Grows long; status is small type inside bubbles.</dd></dl>
+    </section>
+    <section class="study" aria-labelledby="hB">
+      <header><span class="letter">B</span><h2 id="hB">Silk line</h2></header>
+      <p class="idea">One strand from top to bottom. Every step is a knot on it, with its receipt hanging underneath.</p>
+      <div class="frame"><div class="panel" id="pB"></div></div>
+      <dl class="fit"><dt>Good for</dt><dd>Cause and effect at a glance; echoes the web, and replaces the separate ledger.</dd><dt>Costs</dt><dd>Denser than the others; timestamps add noise.</dd></dl>
+    </section>
+    <section class="study" aria-labelledby="hC">
+      <header><span class="letter">C</span><h2 id="hC">Board</h2></header>
+      <p class="idea">Sorted by what you need to do: needs you, working, up next, done.</p>
+      <div class="frame"><div class="panel" id="pC"></div></div>
+      <dl class="fit"><dt>Good for</dt><dd>Acting fast; a confirmation is never buried under other steps.</dd><dt>Costs</dt><dd>Loses the order things happened in.</dd></dl>
+    </section>
+    <section class="study" aria-labelledby="hD">
+      <header><span class="letter">D</span><h2 id="hD">Glance</h2></header>
+      <p class="idea">One big sentence about right now, a progress bar, the last receipt. Everything else folds away.</p>
+      <div class="frame"><div class="panel" id="pD"></div></div>
+      <dl class="fit"><dt>Good for</dt><dd>Room and wall, voice-first use, reading from across the room.</dd><dt>Costs</dt><dd>Detail is one tap away; past steps disappear quickly.</dd></dl>
+    </section>
+    <section class="study" aria-labelledby="hE">
+      <header><span class="letter">E</span><h2 id="hE">Receipts</h2></header>
+      <p class="idea">Each step prints a ticket. Pending ones are outlines; done ones are paper, stamped, with their undo.</p>
+      <div class="frame"><div class="panel" id="pE"></div></div>
+      <dl class="fit"><dt>Good for</dt><dd>Trust and undo; what changed, where, is the main thing on screen.</dd><dt>Costs</dt><dd>The conversation takes a back seat.</dd></dl>
+    </section>
+  </div>
+  <p class="foot">Each panel carries every status as a word, not only a colour. During “Voice only” the screen is off, so every panel dims.</p>
+  <div id="live" class="sr" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)"></div>
+</div>
+<script>
+const STEPS = {
+  s1: { k: 'recall', app: 'conductor', text: 'from Maya · an album · Oct 26 – Nov 1' },
+  s2: { k: 'ask', app: 'music', text: 'download “Low Tide Atlas”' },
+  s3: { k: 'ask', app: 'pcc', text: 'add task “Listen to Low Tide Atlas” · Sat Nov 7' },
+  s4: { k: 'recall', app: 'conductor', text: 'what you said about chess club · Oct 26 – Nov 1' },
+  s5: { k: 'look', app: 'chess', text: 'next club night' },
+};
+const R = {
+  found: { app: 'conductor', verb: 'Found', ent: '“Low Tide Atlas” · Kessler Row · sent by Maya, Thu Oct 29' },
+  created: { app: 'pcc', verb: 'Created', ent: 'Task #1287 “Listen to Low Tide Atlas” · Sat Nov 7', undo: 'Undo' },
+  downloaded: { app: 'music', verb: 'Downloaded', ent: '“Low Tide Atlas” · 11 tracks → Unsorted', undo: 'Undo' },
+  note: { app: 'conductor', verb: 'Found', ent: 'Your words, Tue Oct 27: “skip chess club until December”' },
+  club: { app: 'chess', verb: 'Looked up', ent: 'Next club night · Thu Dec 3, 7 pm' },
+};
+const SAID1 = 'Find the album Maya sent last week, download it, and put it on my list for Saturday.';
+const SAID2 = 'What did I decide about chess club last week?';
+/* [ms, type, ledger line, data] */
+const E = [
+  [0, 'idle', 'presence · hub idle', {}],
+  [1800, 'listen', 'mic.open · desk', { said: 'Find the album Maya sent last week…', fresh: true }],
+  [4200, 'heard', 'utterance · 17 words', { said: SAID1 }],
+  [4700, 'think', 'planner · gemma-4-12b', {}],
+  [6300, 'plan', 'plan.compiled · 3 steps · valid', { steps: ['s1', 's2', 's3'], ack: 'On it. Checking last week, then asking music and PCC.' }],
+  [7200, 'start', 'step 1 running · recall · in-process', { id: 's1' }],
+  [8500, 'receipt', 'receipt · step 1 · found', { id: 's1', r: R.found }],
+  [8800, 'start', 'step 2 running · ask(music)', { id: 's2' }],
+  [10000, 'detach', 'step 2 → job_7f3a · running', { id: 's2' }],
+  [10300, 'wait', 'step 3 waiting on you · ask(pcc) writes', { id: 's3', q: 'Add “Listen to Low Tide Atlas” to Saturday, Nov 7?', why: 'This writes to PCC. Say “yes”, or tap.' }],
+  [13300, 'approve', 'confirm.approved · voice “yes”', { id: 's3', said: 'Yes, add it.' }],
+  [13400, 'start', 'step 3 running · ask(pcc)', { id: 's3' }],
+  [14500, 'receipt', 'receipt · step 3 · created #1287', { id: 's3', r: R.created }],
+  [15000, 'speak', 'narrator · from 2 receipts', { narr: 'Found it: Low Tide Atlas by Kessler Row. It’s downloading now, and it’s on your list for Saturday.' }],
+  [19800, 'idle', 'mic.closed', {}],
+  [21000, 'progress', 'job_7f3a · 6 of 11', { n: 6 }],
+  [23000, 'progress', 'job_7f3a · 9 of 11', { n: 9 }],
+  [25000, 'jobdone', 'job_7f3a · done · receipt · 11 tracks', { id: 's2', r: R.downloaded }],
+  [29500, 'listen', 'mic.open · desk', { said: 'What did I decide about…', fresh: true }],
+  [31200, 'heard', 'utterance · 9 words', { said: SAID2 }],
+  [31600, 'think', 'planner · gemma-4-12b', {}],
+  [32800, 'plan', 'plan.compiled · 2 steps · valid', { steps: ['s4', 's5'], ack: 'Looking back at last week, and asking chess.' }],
+  [33500, 'start', 'step 1 running · recall · in-process', { id: 's4' }],
+  [33600, 'start', 'step 2 running · look(chess)', { id: 's5' }],
+  [34700, 'receipt', 'receipt · step 1 · found', { id: 's4', r: R.note }],
+  [35200, 'fail', 'step 2 failed · chess · timeout 1.2 s', { id: 's5', why: 'chess didn’t answer' }],
+  [36800, 'start', 'step 2 retry 1 of 2 · look(chess)', { id: 's5', retry: 1 }],
+  [37900, 'receipt', 'receipt · step 2 · looked up', { id: 's5', r: R.club }],
+  [38300, 'speak', 'narrator · from 2 receipts', { narr: 'On Tuesday the 27th you said you’d skip chess club until December. The next club night is Thursday, December 3, at 7.' }],
+  [43200, 'idle', 'mic.closed', {}],
+  [45000, 'screenoff', 'display.off · voice only', {}],
+  [46200, 'listen', 'mic.open · kitchen speaker', { said: 'Is the album done?', fresh: true }],
+  [47600, 'speak', 'narrator · from receipt job_7f3a', { narr: 'Yes. All 11 tracks are in Unsorted.' }],
+  [51000, 'idle', 'mic.closed', {}],
+  [52500, 'screenon', 'display.on', {}],
+];
+
+const END = 55500;
+const MOMENTS = [
+  ['Idle', 0], ['Listening', 2600], ['Thinking', 5200], ['Steps running', 7700], ['Confirmation', 11200],
+  ['Receipts as it speaks', 15600], ['Background job', 21500], ['Finished note', 25600], ['Recall, and a failure', 35600], ['Voice only', 48200],
+];
+const WORD = { queued: 'queued', run: 'running', wait: 'waiting on you', done: 'done', job: 'running · job', failed: 'failed' };
+const VERB = { recall: 'Remembering', ask: 'Asking', look: 'Checking' };
+const stamp = t => { const s = Math.floor(t / 1000); return `18:${String(4 + Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+
+/* the same ledger fold as Living Web, plus the times each thing happened */
+function derive(clock) {
+  const S = { pres: 'idle', said: '', said2: '', ack: '', narr: '', order: [], steps: {}, receipts: [], job: null, note: null, confirm: null,
+    screen: true, idx: 0, announce: '', saidAt: 0, planAt: 0, narrAt: 0, said2At: 0 };
+  for (const [t, type, , d] of E) {
+    if (t > clock) break;
+    S.idx++;
+    const st = d.id && S.steps[d.id];
+    switch (type) {
+      case 'idle': S.pres = 'idle'; break;
+      case 'listen':
+        S.pres = 'listen'; S.said = d.said; S.said2 = ''; S.saidAt = t;
+        if (d.fresh) { S.ack = ''; S.narr = ''; S.order = []; S.steps = {}; S.receipts = []; S.note = null; S.confirm = null; }
+        S.announce = 'Listening.'; break;
+      case 'heard': S.said = d.said; S.announce = 'Heard: ' + d.said; break;
+      case 'think': S.pres = 'think'; S.announce = 'Compiling a plan.'; break;
+      case 'plan': S.order = d.steps.slice(); S.ack = d.ack; S.planAt = t; S.announce = d.ack;
+        d.steps.forEach(id => { S.steps[id] = { ...STEPS[id], id, state: 'queued', t }; }); break;
+      case 'start': Object.assign(st, { state: 'run', retry: d.retry || 0, t }); S.pres = 'work'; if (d.retry) S.announce = 'Retrying ' + st.app + '.'; break;
+      case 'receipt': Object.assign(st, { state: 'done', t, r: d.r }); S.receipts.push({ ...d.r, t }); S.announce = d.r.verb + ', ' + d.r.app + ': ' + d.r.ent; break;
+      case 'detach': Object.assign(st, { state: 'job', t }); S.job = { id: d.id, title: 'Download “Low Tide Atlas”', n: 4, of: 11 }; S.announce = 'Music is downloading in the background.'; break;
+      case 'wait': Object.assign(st, { state: 'wait', t }); S.pres = 'wait'; S.confirm = { id: d.id, app: st.app, q: d.q, why: d.why, t }; S.announce = 'Waiting on you: ' + d.q; break;
+      case 'approve': S.confirm = null; S.said2 = d.said; S.said2At = t; S.announce = 'You said: ' + d.said; break;
+      case 'progress': if (S.job) S.job = { ...S.job, n: d.n }; break;
+      case 'jobdone': S.job = null; if (st) Object.assign(st, { state: 'done', t, r: d.r });
+        S.receipts.push({ ...d.r, t }); S.note = { at: '6:12 pm', t, text: 'Low Tide Atlas: 11 tracks, now in Unsorted.' };
+        S.announce = 'Finished, music: Low Tide Atlas, 11 tracks, in Unsorted.'; break;
+      case 'speak': S.pres = 'speak'; S.narr = d.narr; S.narrAt = t; S.announce = 'Conductor: ' + d.narr; break;
+      case 'fail': Object.assign(st, { state: 'failed', why: d.why, t }); S.announce = 'Step failed: ' + d.why + '. Retrying.'; break;
+      case 'screenoff': S.screen = false; break;
+      case 'screenon': S.screen = true; break;
+    }
+  }
+  return S;
+}
+
+/* ---------------------------------------------------------------- helpers */
+const $ = id => document.getElementById(id);
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const k in attrs || {}) { const v = attrs[k]; if (v == null || v === false) continue; if (k.startsWith('on')) el.addEventListener(k.slice(2), v); else el.setAttribute(k, v === true ? '' : v); }
+  for (const c of kids.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
+  return el;
+}
+const word = s => s.state === 'run' && s.retry ? `running · retry ${s.retry} of 2` : s.state === 'failed' ? 'failed · ' + s.why : WORD[s.state];
+const pill = s => h('span', { class: 'w' }, word(s));
+const steps = S => S.order.map(id => S.steps[id]);
+const confirmBtns = () => h('div', { class: 'row' },
+  h('button', { class: 'cbtn primary', type: 'button', onclick: () => seek(13300, true) }, 'Add it'),
+  h('button', { class: 'cbtn', type: 'button', onclick: () => { playing = false; sync(); say('In this prototype only “Add it” is scripted.'); } }, 'Not now'));
+const undoBtn = r => r.undo && h('button', { class: 'undo', type: 'button', title: 'Not wired in the prototype' }, r.undo);
+const ready = () => h('p', { class: 'empty' }, 'Say “hey conductor”, or hold the mic. Nothing is running.');
+function jobBlock(S, cls) {
+  return S.job && h('div', { class: cls }, h('div', { class: 'row', style: 'justify-content:space-between' }, h('span', {}, h('b', {}, 'Job · music'), ' · ' + S.job.title), h('span', { style: 'color:var(--glow)' }, `running · ${S.job.n} of ${S.job.of}`)),
+    h('progress', { max: S.job.of, value: S.job.n, 'aria-label': 'Download progress' }));
+}
+
+/* ---------------------------------------------------------------- A: thread */
+function vA(S) {
+  const k = [];
+  if (S.said) k.push(h('div', { class: 'a-msg a-you' }, h('span', { class: 'who' }, 'You'), h('p', {}, S.said)));
+  if (S.ack) {
+    const done = steps(S).filter(s => s.r).map(s => s.r);
+    k.push(h('div', { class: 'a-msg a-bot' }, h('span', { class: 'who' }, 'Conductor'), h('p', { class: 'lead' }, S.ack),
+      h('div', { class: 'a-acts', 'aria-label': 'Steps' }, steps(S).map(s => h('span', { class: 'a-act ' + s.state }, h('i', { 'aria-hidden': 'true' }), `${s.app} · ${word(s)}`))),
+      done.map(r => h('div', { class: 'a-att' }, h('span', {}, h('b', {}, r.verb), ` · ${r.app} · ${r.ent}`), undoBtn(r)))));
+  }
+  if (S.confirm) k.push(h('div', { class: 'a-card', role: 'group', 'aria-label': 'Confirmation' }, h('b', {}, 'Conductor asks · PCC'), h('span', {}, S.confirm.q), h('span', { style: 'font-size:12.5px;color:var(--silk)' }, S.confirm.why), confirmBtns()));
+  if (S.said2) k.push(h('div', { class: 'a-msg a-you' }, h('p', {}, S.said2)));
+  if (S.narr) k.push(h('div', { class: 'a-msg a-bot' }, h('span', { class: 'who' }, 'Conductor'), h('p', {}, S.narr)));
+  const j = jobBlock(S, 'a-job'); if (j) k.push(j);
+  if (S.note) k.push(h('span', { class: 'a-time' }, 'Later · ' + S.note.at), h('div', { class: 'a-msg a-bot' }, h('span', { class: 'who' }, 'Conductor'), h('p', {}, 'Finished in the background.'),
+    h('div', { class: 'a-att' }, h('span', {}, h('b', {}, 'Downloaded'), ' · music · ' + S.note.text), h('button', { class: 'undo', type: 'button' }, 'Undo'))));
+  return k.length ? k : [ready()];
+}
+
+/* ---------------------------------------------------------------- B: silk line */
+function vB(S) {
+  const n = [];
+  if (S.said) n.push(h('li', { class: 'b-node said' }, h('div', { class: 'b-top' }, h('span', { class: 'k' }, 'heard'), h('span', { class: 't' }, stamp(S.saidAt))), h('p', { class: 'b-quote' }, '“' + S.said + '”')));
+  if (S.planAt) n.push(h('li', { class: 'b-node done' }, h('div', { class: 'b-top' }, h('span', { class: 'k' }, 'plan'), h('span', { class: 'app' }, `${S.order.length} steps`), h('span', { class: 't' }, stamp(S.planAt))), h('p', { style: 'color:var(--glow)' }, S.ack)));
+  steps(S).forEach(s => {
+    const kids = [h('div', { class: 'b-top' }, h('span', { class: 'k' }, s.k), h('span', { class: 'app' }, s.app), s.state !== 'queued' && h('span', { class: 't' }, stamp(s.t))),
+      h('div', { class: 'row', style: 'align-items:center;justify-content:space-between' }, h('span', { style: 'min-width:0' }, s.text), pill(s))];
+    if (s.state === 'wait' && S.confirm) kids.push(h('p', {}, S.confirm.q), confirmBtns());
+    if (s.state === 'job' && S.job) kids.push(h('progress', { max: S.job.of, value: S.job.n, 'aria-label': 'Download progress' }), h('span', { style: 'font-size:12px;color:var(--glow)' }, `${S.job.n} of ${S.job.of} tracks`));
+    if (s.r) kids.push(h('div', { class: 'b-rc' }, h('span', {}, h('b', {}, s.r.verb), ' · ' + s.r.ent), undoBtn(s.r)));
+    n.push(h('li', { class: 'b-node ' + s.state }, kids));
+  });
+  if (S.said2) n.push(h('li', { class: 'b-node said' }, h('div', { class: 'b-top' }, h('span', { class: 'k' }, 'you'), h('span', { class: 't' }, stamp(S.said2At))), h('p', {}, '“' + S.said2 + '”')));
+  if (S.narr) n.push(h('li', { class: 'b-node said' }, h('div', { class: 'b-top' }, h('span', { class: 'k' }, 'said'), h('span', { class: 't' }, stamp(S.narrAt))), h('p', { class: 'b-narr' }, S.narr)));
+  if (S.note) n.push(h('li', { class: 'b-node done' }, h('div', { class: 'b-top' }, h('span', { class: 'k' }, 'note'), h('span', { class: 'app' }, 'music'), h('span', { class: 't' }, stamp(S.note.t))), h('p', {}, S.note.text)));
+  return n.length ? [h('ol', { class: 'b-line', 'aria-label': 'What happened, in order' }, n)] : [ready()];
+}
+
+/* ---------------------------------------------------------------- C: board */
+function vC(S) {
+  if (!S.said && !S.job && !S.receipts.length) return [ready()];
+  const all = steps(S), sec = (cls, title, items, body) => h('section', { class: 'c-sec ' + cls }, h('div', { class: 'c-h' }, h('span', { class: 'n' }, items), title), body);
+  const k = [h('div', { class: 'c-ask' }, h('span', { class: 'who' }, 'You asked'), h('p', {}, S.said || '—'), S.ack && h('p', { class: 'ack' }, S.ack))];
+  const need = all.filter(s => s.state === 'wait');
+  const work = all.filter(s => s.state === 'run' || s.state === 'failed' || s.state === 'job');
+  const jobOnly = S.job && !all.some(s => s.state === 'job');
+  const next = all.filter(s => s.state === 'queued');
+  k.push(sec('need', 'Needs you', need.length, need.length ? need.map(s => h('div', { class: 'c-item wait' }, h('div', { class: 'r1' }, h('span', { class: 'app' }, s.app), h('span', { class: 'tt' }, s.text), pill(s)), S.confirm && h('span', {}, S.confirm.q), confirmBtns()))
+    : h('p', { class: 'c-none' }, 'Nothing needs you.')));
+  const wItems = work.map(s => h('div', { class: 'c-item ' + s.state }, h('div', { class: 'r1' }, h('span', { class: 'app' }, s.app), h('span', { class: 'tt' }, s.text), pill(s)),
+    s.state === 'job' && S.job && h('progress', { max: S.job.of, value: S.job.n, 'aria-label': 'Download progress' })));
+  if (jobOnly) wItems.push(h('div', { class: 'c-item job' }, h('div', { class: 'r1' }, h('span', { class: 'app' }, 'music'), h('span', { class: 'tt' }, S.job.title), h('span', { class: 'w' }, `${S.job.n} of ${S.job.of}`)), h('progress', { max: S.job.of, value: S.job.n, 'aria-label': 'Download progress' })));
+  k.push(sec('work', 'Working', wItems.length, wItems.length ? wItems : h('p', { class: 'c-none' }, 'Nothing running.')));
+  if (next.length) k.push(sec('next', 'Up next', next.length, h('div', { class: 'c-next' }, next.map(s => h('span', {}, `${s.app} · ${s.k}`)))));
+  if (S.receipts.length) k.push(sec('done', 'Done', S.receipts.length, S.receipts.slice().reverse().map(r => h('div', { class: 'c-item done' }, h('div', { class: 'r1' }, h('span', { class: 'app' }, r.app), h('span', { class: 'tt' }, h('b', { style: 'color:var(--ok)' }, r.verb), ' · ' + r.ent), undoBtn(r))))));
+  if (S.narr) k.push(h('div', { class: 'c-said' }, h('span', { class: 'who' }, 'Conductor said'), S.narr));
+  return k;
+}
+
+/* ---------------------------------------------------------------- D: glance */
+function now(S) {
+  const all = steps(S), cur = all.filter(s => s.state === 'run' || s.state === 'failed').pop();
+  if (S.pres === 'listen') return { kick: 'Listening', line: S.said || '…' };
+  if (S.pres === 'think') return { kick: 'Planning', line: S.said, sub: 'Working out the steps.' };
+  if (S.pres === 'wait' && S.confirm) return { kick: 'Waiting on you', cls: 'wait', line: S.confirm.q, sub: S.confirm.why, act: true };
+  if (S.pres === 'work' && cur) {
+    if (cur.state === 'failed') return { kick: 'Trying again', cls: 'fail', line: `${cur.app[0].toUpperCase() + cur.app.slice(1)} didn’t answer`, sub: 'Retrying once more.' };
+    return { kick: `Working · step ${S.order.indexOf(cur.id) + 1} of ${S.order.length}`, line: `${VERB[cur.k]} ${cur.app === 'conductor' ? 'your history' : cur.app}: ${cur.text}` };
+  }
+  if (S.pres === 'speak') return { kick: 'Speaking', line: S.narr };
+  if (S.job) return { kick: 'In the background', line: `Music is downloading Low Tide Atlas`, sub: `${S.job.n} of ${S.job.of} tracks`, job: true };
+  if (S.note) return { kick: 'Finished · ' + S.note.at, cls: 'ok', line: S.note.text };
+  if (S.narr) return { kick: 'Done', cls: 'ok', line: S.narr };
+  return { kick: 'Ready', cls: 'idle', line: 'Say “hey conductor”, or hold the mic.' };
+}
+function vD(S) {
+  const n = now(S), all = steps(S), k = [];
+  k.push(h('div', { class: 'd-kick ' + (n.cls || '') }, h('i', { 'aria-hidden': 'true' }), n.kick));
+  k.push(h('p', { class: 'd-line' }, n.line));
+  if (n.sub) k.push(h('p', { class: 'd-sub' }, n.sub));
+  if (n.act) k.push(confirmBtns());
+  if (n.job && S.job) k.push(h('progress', { max: S.job.of, value: S.job.n, 'aria-label': 'Download progress' }));
+  if (all.length) {
+    const done = all.filter(s => s.state === 'done').length;
+    k.push(h('div', { style: 'display:flex;flex-direction:column;gap:6px;margin-top:6px' }, h('div', { class: 'd-bar', 'aria-hidden': 'true' }, all.map(s => h('span', { class: s.state }))), h('span', { class: 'd-count' }, `${done} of ${all.length} steps done`)));
+  }
+  const last = S.receipts[S.receipts.length - 1];
+  if (last) k.push(h('div', { class: 'd-last' }, h('i', { 'aria-hidden': 'true' }), h('span', {}, h('b', {}, last.verb), ` · ${last.app} · ${last.ent}`), undoBtn(last)));
+  if (all.length || S.receipts.length > 1) k.push(h('details', { class: 'more' }, h('summary', {}, 'All steps and receipts'),
+    h('ul', { class: 'd-steps' }, all.map(s => h('li', { class: s.state }, h('span', {}, `${s.k} · ${s.app} · ${s.text}`), pill(s)))),
+    h('ul', { class: 'd-steps' }, S.receipts.map(r => h('li', {}, h('span', {}, `${r.verb} · ${r.app} · ${r.ent}`))))));
+  return k;
+}
+
+/* ---------------------------------------------------------------- E: receipts */
+const STAMP = { done: 'DONE', wait: 'NEEDS YOU', failed: 'FAILED', run: 'RUNNING', job: 'RUNNING', queued: 'QUEUED' };
+function vE(S) {
+  const k = [];
+  if (S.said) k.push(h('div', { class: 'e-req' }, `REQUEST · ${stamp(S.saidAt)}`, h('q', {}, S.said)));
+  const tk = steps(S).map((s, i) => {
+    const cls = s.state === 'queued' ? 'pend' : s.state, kids = [h('div', { class: 'e-hd' }, h('span', {}, `No. ${String(i + 1).padStart(2, '0')} · ${s.k} · ${s.app}`, s.state !== 'queued' && h('br'), s.state !== 'queued' && stamp(s.t)), h('span', { class: 'e-stamp', 'aria-hidden': 'true' }, STAMP[s.state]))];
+    if (s.r) kids.push(h('span', { class: 'e-v' }, s.r.verb), h('span', { class: 'e-ent' }, s.r.ent), h('div', { class: 'e-cut' }), h('div', { class: 'e-ft' }, h('span', {}, s.app === 'pcc' ? 'ref #1287' : s.app === 'music' ? 'ref job_7f3a' : 'from your ledger'), undoBtn(s.r) || h('span', {}, 'nothing to undo')));
+    else kids.push(h('span', { class: 'e-ent' }, s.text), h('span', { style: 'font-size:11.5px;opacity:.8' }, word(s)));
+    if (s.state === 'wait' && S.confirm) kids.push(h('span', { class: 'e-ent' }, S.confirm.q), confirmBtns());
+    if (s.state === 'job' && S.job) kids.push(h('progress', { max: S.job.of, value: S.job.n, 'aria-label': 'Download progress' }));
+    return h('div', { class: 'e-tk ' + cls }, kids);
+  });
+  if (S.job && !steps(S).some(s => s.state === 'job')) tk.push(h('div', { class: 'e-tk job' }, h('div', { class: 'e-hd' }, h('span', {}, 'Background · music', h('br'), 'job_7f3a'), h('span', { class: 'e-stamp', 'aria-hidden': 'true' }, 'RUNNING')),
+    h('span', { class: 'e-ent' }, S.job.title), h('progress', { max: S.job.of, value: S.job.n, 'aria-label': 'Download progress' }), h('span', { style: 'font-size:11.5px' }, `running · ${S.job.n} of ${S.job.of}`)));
+  if (S.note && !S.order.includes('s2')) tk.push(h('div', { class: 'e-tk done' }, h('div', { class: 'e-hd' }, h('span', {}, 'Background · music', h('br'), stamp(S.note.t)), h('span', { class: 'e-stamp', 'aria-hidden': 'true' }, 'DONE')),
+    h('span', { class: 'e-v' }, 'Downloaded'), h('span', { class: 'e-ent' }, S.note.text), h('div', { class: 'e-cut' }), h('div', { class: 'e-ft' }, h('span', {}, 'ref job_7f3a'), h('button', { class: 'undo', type: 'button' }, 'Undo'))));
+  if (tk.length) k.push(h('div', { class: 'e-tape', 'aria-label': 'Tickets' }, tk));
+  if (S.narr) k.push(h('div', { class: 'e-said' }, `SAID · ${stamp(S.narrAt)}`, h('p', {}, S.narr)));
+  return k.length ? k : [ready()];
+}
+
+/* ---------------------------------------------------------------- clock and controls */
+let clock = 0, playing = true, last = performance.now(), S = derive(0), shownIdx = -1;
+const V = { pA: vA, pB: vB, pC: vC, pD: vD, pE: vE };
+function render(seeked) {
+  for (const id in V) { const p = $(id), sc = p.scrollTop; p.replaceChildren(...V[id](S)); p.classList.toggle('off', !S.screen); p.scrollTop = seeked ? 0 : sc; }
+  if (!seeked && S.idx !== shownIdx && S.announce) say(S.announce);
+  if (seeked) { const m = [...MOMENTS].reverse().find(m => m[1] <= clock); say('Moment: ' + (m ? m[0] : 'start')); }
+  shownIdx = S.idx;
+}
+function say(t) { $('live').textContent = t; }
+function seek(ms, play) { clock = ms; if (play != null) playing = play; S = derive(clock); render(true); sync(); }
+function sync() {
+  $('bPlay').textContent = playing ? 'Pause' : 'Play';
+  const cur = [...MOMENTS].reverse().find(m => m[1] <= clock);
+  [...$('moments').children].forEach(b => b.setAttribute('aria-current', String(!!cur && b.dataset.t == cur[1])));
+}
+function tick(t) {
+  const dt = Math.min(100, t - last); last = t;
+  if (playing) {
+    clock += dt;
+    if (clock >= END) seek(0); else { S = derive(clock); if (S.idx !== shownIdx) render(false); }
+    sync();
+  }
+  $('clock').textContent = `t + ${(clock / 1000).toFixed(1)} s`;
+  requestAnimationFrame(tick);
+}
+MOMENTS.forEach(([name, t], i) => $('moments').append(h('button', { class: 'chip', type: 'button', 'data-t': t, onclick: () => seek(t, true) }, h('span', { class: 'n' }, String(i + 1).padStart(2, '0')), name)));
+$('bPlay').onclick = () => { playing = !playing; sync(); };
+$('bNext').onclick = () => { const n = E.find(e => e[0] > clock); seek(n ? n[0] : 0, false); };
+$('bRestart').onclick = () => seek(0, true);
+seek(matchMedia('(prefers-reduced-motion: reduce)').matches ? 15600 : 0, !matchMedia('(prefers-reduced-motion: reduce)').matches);
+requestAnimationFrame(t => { last = t; requestAnimationFrame(tick); });
+</script>
+
+</body></html>

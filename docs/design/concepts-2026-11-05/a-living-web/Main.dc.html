@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Living Web — prototype</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap">
+<style>
+body{margin:0;background:#0a0c12}
+.proto{width:1440px;height:1000px;box-sizing:border-box;background:radial-gradient(ellipse at 32% 48%,#131726 0%,#0a0c12 62%);color:#e8edf5;font-family:Inter,system-ui,sans-serif;display:flex;flex-direction:column;overflow:hidden}
+.bar{height:84px;box-sizing:border-box;padding:0 40px;display:flex;align-items:center;gap:32px;border-bottom:1px solid rgba(199,211,228,.14)}
+.eyebrow{display:block;font-size:11px;letter-spacing:.32em;text-transform:uppercase;color:#939db0}
+.bar h1{margin:2px 0 0;font-weight:300;font-size:26px;letter-spacing:.38em;text-transform:uppercase}
+.ctl{display:flex;gap:10px;margin-left:auto}
+.btn{min-height:44px;padding:0 18px;border-radius:12px;border:1px solid rgba(199,211,228,.3);background:#0f131d;color:#e8edf5;font:500 14px Inter,sans-serif;cursor:pointer}
+.btn:hover{border-color:#9be7ff;box-shadow:0 0 20px rgba(155,231,255,.22)}
+.btn:focus-visible{outline:2px solid #9be7ff;outline-offset:2px}
+.clock{font-family:"JetBrains Mono",monospace;font-size:13px;color:#939db0;min-width:120px;text-align:right;margin:0}
+.stage{flex:1;display:grid;grid-template-columns:900px 540px;min-height:0}
+.viz{position:relative;display:flex;align-items:center;justify-content:center}
+.viz svg{width:880px;height:880px}
+.panel{padding:28px 40px 24px 8px;display:flex;flex-direction:column;gap:14px;min-width:0;overflow:hidden}
+.who{display:block;font-size:10px;letter-spacing:.24em;text-transform:uppercase;color:#939db0;margin-bottom:3px}
+.said{margin:0;font-size:20px;font-weight:300;line-height:1.4}
+.ack{margin:0;font-size:14px;color:#9be7ff}
+.steps{display:flex;flex-direction:column;gap:6px}
+.step{display:grid;grid-template-columns:62px 58px 1fr auto;gap:8px;align-items:center;padding:8px 12px;border-radius:10px;border:1px solid rgba(199,211,228,.16);font-size:14px}
+.k{font-family:"JetBrains Mono",monospace;font-size:12px;color:#c9b2f4}
+.app{font-size:12px;color:#939db0}
+.t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w{font-size:11px;padding:2px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.queued .w{color:#939db0;border-style:dashed}
+.run .w,.job .w{color:#9be7ff;background:rgba(155,231,255,.12)}
+.wait .w{color:#eec98a;background:rgba(238,201,138,.14)}
+.done .w{color:#0a0c12;background:#8fdcaa;border-color:#8fdcaa;font-weight:600}
+.step.done{border-color:rgba(143,220,170,.4)}
+.step.run,.step.job{border-color:rgba(155,231,255,.4)}
+.rcs{display:flex;flex-direction:column;gap:6px}
+.rc{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:10px;background:rgba(143,220,170,.08);border:1px solid rgba(143,220,170,.3);font-size:13px;line-height:1.4}
+.rc svg{flex:none;margin-top:3px}
+.rc b{color:#8fdcaa;font-weight:600}
+.rc .ent{flex:1}
+.undo{min-height:32px;padding:0 10px;border-radius:8px;border:1px solid rgba(199,211,228,.3);background:transparent;color:#e8edf5;font:500 12px Inter,sans-serif}
+.jb{padding:12px 14px;border-radius:12px;border:1px solid rgba(155,231,255,.35);background:rgba(155,231,255,.06);font-size:13px;display:flex;flex-direction:column;gap:8px}
+.jb .row1{display:flex;justify-content:space-between;gap:8px}
+.jb .lbl2{color:#9be7ff}
+progress{appearance:none;-webkit-appearance:none;width:100%;height:4px;border:0;border-radius:4px;background:rgba(199,211,228,.15);overflow:hidden}
+progress::-webkit-progress-bar{background:rgba(199,211,228,.15)}
+progress::-webkit-progress-value{background:#9be7ff}
+progress::-moz-progress-bar{background:#9be7ff}
+.nt{padding:12px 14px;border-radius:12px;border:1px solid #8fdcaa;background:rgba(143,220,170,.1);font-size:13px;display:flex;flex-direction:column;gap:6px}
+.nt b{color:#8fdcaa}
+.narr{margin:0;font-size:18px;font-weight:300;line-height:1.45}
+.narr .who{color:#9be7ff}
+.ledger{margin-top:auto;border-top:1px solid rgba(199,211,228,.14);padding-top:10px;font-family:"JetBrains Mono",monospace;font-size:11.5px;line-height:1.7;color:#939db0}
+.ledger .who{font-family:Inter,sans-serif}
+.ln{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ln.last{color:#e8edf5}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+/* web */
+.web .spoke,.web .ring{stroke:rgba(199,211,228,.12);fill:none;stroke-width:.7}
+.web .base{stroke:rgba(199,211,228,.26);stroke-width:.9}
+.prog,.tip{fill:none;stroke-width:2.2;stroke-linecap:round;opacity:0}
+.prog.queued{opacity:1;stroke:rgba(199,211,228,.55);stroke-dasharray:1 6}
+.prog.run{opacity:1;stroke:#9be7ff;stroke-dasharray:4 7;animation:flow 1.1s linear infinite}
+.prog.wait{opacity:1;stroke:#eec98a;stroke-dasharray:2 5}
+.prog.done,.tip.done{opacity:1;stroke:#8fdcaa}
+.an{fill:#0f131d;stroke:rgba(199,211,228,.5);stroke-width:1.2;transform-box:fill-box;transform-origin:center}
+.an.queued{stroke-dasharray:2 3}
+.an.run{stroke:#9be7ff}
+.an.wait{stroke:#eec98a;fill:rgba(238,201,138,.25);animation:pulse 1.6s ease-in-out infinite}
+.an.done{fill:#8fdcaa;stroke:#8fdcaa}
+.lbl{fill:#939db0;font-size:10px;font-family:Inter,sans-serif;text-anchor:middle;letter-spacing:.18em;text-transform:uppercase}
+.hub{fill:#9be7ff;transform-box:fill-box;transform-origin:center}
+.halo{fill:rgba(155,231,255,.14);transform-box:fill-box;transform-origin:center}
+.lr,.sp,.wv{fill:none;transform-box:fill-box;transform-origin:center;opacity:0}
+.lr{stroke:#9be7ff;stroke-width:1}
+.sp{stroke:#c9b2f4;stroke-width:1.4;stroke-dasharray:5 9}
+.wv{stroke:#9be7ff;stroke-width:1}
+.p-idle .hub{animation:breathe 6s ease-in-out infinite}
+.p-listen .lr{opacity:.6;animation:tremble .8s ease-in-out infinite alternate}
+.p-listen .lr.l2{animation-delay:.2s}.p-listen .lr.l3{animation-delay:.4s}
+.p-think .sp{opacity:1;animation:spin 3.6s linear infinite}
+.p-work .hub{animation:breathe 1.4s ease-in-out infinite}
+.p-speak .wv{opacity:.35;animation:emit 2.4s ease-out infinite}
+.p-speak .wv.w2{animation-delay:1.2s}
+.p-wait .hub{fill:#eec98a}
+.p-wait .halo{fill:rgba(238,201,138,.16)}
+@keyframes flow{to{stroke-dashoffset:-22}}
+@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
+@keyframes tremble{from{transform:scale(.94)}to{transform:scale(1.08)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes emit{from{transform:scale(1);opacity:.5}to{transform:scale(4.2);opacity:0}}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.3)}}
+.rm *{animation:none !important}
+.rm .p-speak .wv.w2,.p-speak .wv.w2{}
+@media (prefers-reduced-motion:reduce){*{animation:none !important}}
+</style>
+</helmet>
+<div class="proto {{rmClass}}">
+<header class="bar">
+<div>
+<span class="eyebrow">Conductor · concept A · prototype</span>
+<h1>Living Web</h1>
+</div>
+<div class="ctl">
+<button class="btn" type="button" onClick="{{toggle}}">{{playLabel}}</button>
+<button class="btn" type="button" onClick="{{next}}">Next event</button>
+<button class="btn" type="button" onClick="{{restart}}">Restart</button>
+<button class="btn" type="button" aria-pressed="{{rmPressed}}" onClick="{{toggleRm}}">{{rmLabel}}</button>
+</div>
+<p class="clock">{{clockLabel}}</p>
+</header>
+<main class="stage">
+<div class="viz">
+<svg class="web p-{{pres}}" viewBox="0 0 400 400" role="img" aria-label="{{vizLabel}}">
+<g aria-hidden="true">
+<polygon class="ring" points="260,200 252,230 230,252 200,260 170,252 148,230 140,200 148,170 170,148 200,140 230,148 252,170"></polygon>
+<polygon class="ring" points="305,200 291,252.5 252.5,291 200,305 147.5,291 109,252.5 95,200 109,147.5 147.5,109 200,95 252.5,109 291,147.5"></polygon>
+<polygon class="ring" points="350,200 330,275 275,330 200,350 125,330 70,275 50,200 70,125 125,70 200,50 275,70 330,125"></polygon>
+<path class="spoke" d="M200 200L390 200M200 200L364.5 295M200 200L295 364.5M200 200L200 390M200 200L105 364.5M200 200L35.5 295M200 200L10 200M200 200L35.5 105M200 200L105 35.5M200 200L200 10M200 200L295 35.5M200 200L364.5 105"></path>
+<line class="base" x1="200" y1="200" x2="70" y2="80"></line>
+<line class="base" x1="200" y1="200" x2="330" y2="80"></line>
+<line class="base" x1="200" y1="200" x2="335" y2="315"></line>
+<line class="base" x1="200" y1="200" x2="65" y2="320"></line>
+</g>
+<line class="prog {{st.pcc}}" x1="200" y1="200" x2="96" y2="104"></line>
+<line class="tip {{st.pcc}}" x1="96" y1="104" x2="70" y2="80"></line>
+<line class="prog {{st.music}}" x1="200" y1="200" x2="304" y2="104"></line>
+<line class="tip {{st.music}}" x1="304" y1="104" x2="330" y2="80"></line>
+<line class="prog {{st.chess}}" x1="200" y1="200" x2="308" y2="292"></line>
+<line class="tip {{st.chess}}" x1="308" y1="292" x2="335" y2="315"></line>
+<line class="prog {{st.mem}}" x1="200" y1="200" x2="92" y2="296"></line>
+<line class="tip {{st.mem}}" x1="92" y1="296" x2="65" y2="320"></line>
+<circle class="an {{st.pcc}}" cx="70" cy="80" r="8"></circle>
+<circle class="an {{st.music}}" cx="330" cy="80" r="8"></circle>
+<circle class="an {{st.chess}}" cx="335" cy="315" r="8"></circle>
+<circle class="an {{st.mem}}" cx="65" cy="320" r="8"></circle>
+<text class="lbl" x="70" y="60">PCC</text>
+<text class="lbl" x="330" y="60">music</text>
+<text class="lbl" x="335" y="344">chess</text>
+<text class="lbl" x="65" y="349">ledger</text>
+<circle class="lr" cx="200" cy="200" r="26"></circle>
+<circle class="lr l2" cx="200" cy="200" r="34"></circle>
+<circle class="lr l3" cx="200" cy="200" r="42"></circle>
+<circle class="sp" cx="200" cy="200" r="38"></circle>
+<circle class="wv" cx="200" cy="200" r="22"></circle>
+<circle class="wv w2" cx="200" cy="200" r="22"></circle>
+<circle class="halo" cx="200" cy="200" r="24"></circle>
+<circle class="hub" cx="200" cy="200" r="12"></circle>
+</svg>
+</div>
+<section class="panel" aria-label="Conversation and plan">
+<sc-if value="{{hasSaid}}" hint-placeholder-val="{{ true }}">
+<p class="said"><span class="who">You</span>{{said}}</p>
+</sc-if>
+<sc-if value="{{hasAck}}" hint-placeholder-val="{{ true }}">
+<p class="ack">{{ack}}</p>
+</sc-if>
+<sc-if value="{{planned}}" hint-placeholder-val="{{ true }}">
+<div class="steps" role="list" aria-label="Plan steps">
+<sc-for list="{{steps}}" as="p" hint-placeholder-count="3">
+<div class="step {{p.state}}" role="listitem"><span class="k">{{p.k}}</span><span class="app">{{p.app}}</span><span class="t">{{p.text}}</span><span class="w">{{p.word}}</span></div>
+</sc-for>
+</div>
+</sc-if>
+<div class="rcs">
+<sc-for list="{{receipts}}" as="r" hint-placeholder-count="2">
+<div class="rc"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4.5" fill="#8fdcaa"></circle></svg><span class="ent"><b>{{r.verb}}</b> · {{r.app}} · {{r.ent}}</span><sc-if value="{{r.undo}}" hint-placeholder-val="{{ false }}"><button class="undo" type="button">{{r.undo}}</button></sc-if></div>
+</sc-for>
+</div>
+<sc-if value="{{hasJob}}" hint-placeholder-val="{{ false }}">
+<div class="jb">
+<div class="row1"><span><b>Job · music</b> · {{job.t}}</span><span class="lbl2">running · {{job.n}} of {{job.of}}</span></div>
+<progress max="11" value="{{job.n}}" aria-label="Download progress">{{job.n}} of 11</progress>
+<span>A note will arrive when it ends. Stop it any time: “stop the download”.</span>
+</div>
+</sc-if>
+<sc-if value="{{hasNote}}" hint-placeholder-val="{{ false }}">
+<div class="nt"><span><b>Finished · music · 6:12 pm</b></span><span>Low Tide Atlas — 11 tracks, now in Unsorted.</span><div><button class="undo" type="button">Undo</button> <button class="undo" type="button">Open in music</button></div></div>
+</sc-if>
+<sc-if value="{{hasNarr}}" hint-placeholder-val="{{ true }}">
+<p class="narr"><span class="who">Conductor</span>{{narr}}</p>
+</sc-if>
+<div class="ledger" aria-label="Ledger events this view is drawn from">
+<span class="who">Ledger · the only thing this screen draws from</span>
+<sc-for list="{{log}}" as="l" hint-placeholder-count="8">
+<div class="ln {{l.cls}}">{{l.text}}</div>
+</sc-for>
+</div>
+</section>
+</main>
+<div class="sr" aria-live="polite">{{announce}}</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  componentDidMount() {
+    this.timer = setInterval(() => {
+      this.setState((p) => {
+        const s = p || {};
+        if (s.paused) return null;
+        let c = (s.clock == null ? 7000 : s.clock) + 100;
+        if (c > 17000) c = 0;
+        return { clock: c };
+      });
+    }, 100);
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+  renderVals() {
+    const S = this.state || {};
+    const clock = S.clock == null ? 7000 : S.clock;
+    const W = { queued: 'queued', run: 'running', wait: 'waiting on you', done: 'done', job: 'running · job' };
+    const R1 = { app: 'ledger', verb: 'Found', ent: '“Low Tide Atlas” — Kessler Row · sent by Maya, Thu Oct 29', undo: '' };
+    const R2 = { app: 'music', verb: 'Downloaded', ent: '“Low Tide Atlas” · 11 tracks → Unsorted', undo: 'Undo' };
+    const R3 = { app: 'pcc', verb: 'Created', ent: 'Task #1287 “Listen to Low Tide Atlas” · Sat Nov 7', undo: 'Undo' };
+    const STEPS = [['recall', 'ledger', 'from Maya · an album · Oct 26 – Nov 1'], ['ask', 'music', 'download “Low Tide Atlas”'], ['ask', 'pcc', 'add task · Sat Nov 7']];
+    const EV = [
+      [0, 'listen', 'mic.open · desk', { said: 'Find the album Maya sent last week…' }],
+      [1400, 'heard', 'utterance · 19 words', { said: 'Find the album Maya sent last week, download it, and put it on my list for Saturday.' }],
+      [2000, 'think', 'planner · gemma-4-12b', {}],
+      [2700, 'plan', 'plan.compiled · 3 steps · valid', { ack: 'On it — checking last week, then asking music and PCC.' }],
+      [3300, 'start', 'step 1 running · recall(ledger)', { i: 0 }],
+      [4100, 'receipt', 'receipt · step 1 · found', { i: 0, r: R1 }],
+      [4300, 'start', 'step 2 running · ask(music)', { i: 1 }],
+      [5300, 'detach', 'step 2 → job_7f3a · running', { i: 1 }],
+      [5400, 'start', 'step 3 running · ask(pcc)', { i: 2 }],
+      [6300, 'receipt', 'receipt · step 3 · created #1287', { i: 2, r: R3 }],
+      [6600, 'speak', 'narrator · from 2 receipts', { narr: 'Found it — Low Tide Atlas by Kessler Row. It’s downloading now, and it’s on your list for Saturday.' }],
+      [9800, 'idle', 'mic.closed', {}],
+      [10800, 'progress', 'job_7f3a · 6 of 11', { n: 6 }],
+      [12400, 'progress', 'job_7f3a · 9 of 11', { n: 9 }],
+      [14000, 'jobdone', 'job_7f3a · done · receipt · 11 tracks', { r: R2 }],
+    ];
+    let pres = 'idle', said = '', ack = '', narr = '', planned = false, job = null, note = false, announce = '';
+    const steps = STEPS.map(([k, app, text]) => ({ k, app, text, state: 'queued' }));
+    const receipts = [];
+    const log = [];
+    for (const [t, type, line, d] of EV) {
+      if (t > clock) break;
+      const sec = Math.floor(t / 1000), tenth = Math.floor((t % 1000) / 100);
+      log.push({ text: '18:04:' + String(sec).padStart(2, '0') + '.' + tenth + '  ' + line, cls: '' });
+      if (type === 'listen') { pres = 'listen'; said = d.said; ack = ''; narr = ''; }
+      if (type === 'heard') { said = d.said; announce = 'Heard: ' + d.said; }
+      if (type === 'think') pres = 'think';
+      if (type === 'plan') { planned = true; ack = d.ack; announce = d.ack; }
+      if (type === 'start') { steps[d.i].state = 'run'; pres = 'work'; }
+      if (type === 'receipt') { steps[d.i].state = 'done'; receipts.push(d.r); announce = d.r.verb + ': ' + d.r.ent; }
+      if (type === 'detach') { steps[d.i].state = 'job'; job = { t: 'Download “Low Tide Atlas”', n: 4, of: 11 }; }
+      if (type === 'speak') { pres = 'speak'; narr = d.narr; }
+      if (type === 'idle') pres = 'idle';
+      if (type === 'progress' && job) job = { ...job, n: d.n };
+      if (type === 'jobdone') { job = null; note = true; steps[1].state = 'done'; receipts.push(d.r); announce = 'Music finished: Low Tide Atlas, 11 tracks, in Unsorted.'; }
+    }
+    if (log.length) log[log.length - 1].cls = 'last';
+    const view = s => (s === 'job' ? 'run' : s);
+    const st = planned
+      ? { mem: view(steps[0].state), music: view(steps[1].state), pcc: view(steps[2].state), chess: 'rest' }
+      : { mem: 'rest', music: 'rest', pcc: 'rest', chess: 'rest' };
+    const names = { mem: 'ledger', music: 'music', pcc: 'PCC', chess: 'chess' };
+    const parts = Object.keys(st).filter(k => st[k] !== 'rest').map(k => names[k] + ' ' + (W[st[k]] || st[k]));
+    const presWord = { idle: 'idle', listen: 'listening', think: 'compiling a plan', work: 'working', speak: 'speaking', wait: 'waiting on you' }[pres];
+    const rm = !!S.rm;
+    return {
+      pres, said, ack, narr, planned, st, announce,
+      steps: steps.map(s => ({ ...s, word: W[s.state] })),
+      receipts, job: job || { t: '', n: 0, of: 11 }, hasJob: !!job, hasNote: note,
+      hasSaid: !!said, hasAck: !!ack, hasNarr: !!narr,
+      log: log.slice(-9),
+      vizLabel: 'Conductor is ' + presWord + (parts.length ? '. Strands: ' + parts.join(', ') + '.' : '.'),
+      clockLabel: 't + ' + (clock / 1000).toFixed(1) + ' s',
+      playLabel: S.paused ? 'Play' : 'Pause',
+      rmClass: rm ? 'rm' : '', rmPressed: rm ? 'true' : 'false', rmLabel: rm ? 'Reduced motion: on' : 'Reduced motion: off',
+      toggle: () => this.setState({ paused: !S.paused }),
+      next: () => { const n = EV.find(e => e[0] > clock); this.setState({ clock: n ? n[0] : 0, paused: true }); },
+      restart: () => this.setState({ clock: 0, paused: false }),
+      toggleRm: () => this.setState({ rm: !rm }),
+    };
+  }
+}
+</script>
+</body>
+</html>

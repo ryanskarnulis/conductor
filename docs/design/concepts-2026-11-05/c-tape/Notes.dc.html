@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tape — motion, sound and rules</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap">
+<style>
+body{margin:0;background:#0d0d0b}
+h2{margin:0 0 12px;font-weight:700;font-size:22px;letter-spacing:-.02em;color:#efe9dc}
+p{margin:0 0 10px}
+ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+b{font-weight:700;color:#efe9dc}
+code{font-family:"JetBrains Mono",monospace;font-size:13px;color:#ff7a45}
+td,th{padding:7px 10px;border-bottom:1px solid #2a2925;text-align:left;vertical-align:top}
+th{font-family:"JetBrains Mono",monospace;font-weight:400;color:#9a958a;font-size:12px;text-transform:uppercase}
+</style>
+</helmet>
+<div style="width: 1200px; height: 1400px; box-sizing: border-box; padding: 64px; background: #0d0d0b; color: #d9d3c6; font-family: 'Space Grotesk', system-ui, sans-serif; font-size: 15px; line-height: 1.55; display: flex; flex-direction: column; gap: 28px">
+<div>
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: #9a958a">Concept C · notes</span>
+<h1 style="margin: 6px 0 0; font-weight: 700; font-size: 88px; letter-spacing: -.04em; line-height: .9; color: #efe9dc">Tape</h1>
+<p style="margin-top: 16px; font-size: 18px; max-width: 900px">What makes it distinct: it bets that the future is legibility, not spectacle. The UI is the typed ledger itself, set like a newspaper headline that is still being written. There is no mascot and no sound. “Epic” comes from scale (40–120 px type on the wall), rhythm and absolute precision. It is the fastest to build, the lightest to run and the hardest to make lie.</p>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px 40px">
+<section>
+<h2>Motion</h2>
+<ul>
+<li><b>Idle:</b> a single caret blinks at the head of the tape every 1.6 s.</li>
+<li><b>Listening:</b> the presence line becomes a live level meter in signal orange. Your words print in place as STT streams them.</li>
+<li><b>Thinking:</b> an orange block scans the line. On <code>plan.compiled</code> the steps type out as numbered lines, 40 ms per line, with no easing.</li>
+<li><b>Running:</b> the stamp is an orange outline with a sweeping underline.</li>
+<li><b>Receipt:</b> the stamp snaps to an inverted DONE (one frame, no fade), and the receipt line prints under it.</li>
+<li><b>Speaking:</b> the narration prints at the speed of the TTS audio, word by word, as the words are heard.</li>
+<li><b>Room:</b> the tape scrolls up one line at a time, never smoothly, so it is readable mid-motion.</li>
+</ul>
+</section>
+<section>
+<h2>Sound: none, by design</h2>
+<ul>
+<li>No earcons on any screen. The only audio is conductor’s voice.</li>
+<li>Voice only: the ack is spoken (“On it — asking music”), and the speaker’s light is the listening cue.</li>
+<li>Phone: one haptic tick per receipt, and a double tick for waiting on you. There is no haptic for queued or running.</li>
+<li>This keeps the room quiet unless asked, and so stays closest to “stays quiet unless asked”.</li>
+</ul>
+</section>
+<section>
+<h2>Honesty: the look follows the ledger</h2>
+<table style="border-collapse: collapse; width: 100%; font-size: 14px">
+<tr><th>Ledger state</th><th>Stamp</th><th>Line text</th></tr>
+<tr><td>queued</td><td>dashed outline, grey</td><td>grey</td></tr>
+<tr><td>running</td><td>orange outline, underline sweep</td><td>full ink</td></tr>
+<tr><td>waiting on you</td><td>solid yellow block</td><td>full ink + the question</td></tr>
+<tr><td>done (receipt)</td><td>inverted bone block</td><td>full ink + receipt line</td></tr>
+<tr><td>failed</td><td>rose outline</td><td>reason, from the receipt</td></tr>
+<tr><td>cancelled</td><td>struck-through outline</td><td>count (“112 of 400”)</td></tr>
+</table>
+<p style="margin-top: 10px">The DONE stamp is rendered only from a receipt row. The job bar counts real <code>progress</code> events and never interpolates.</p>
+</section>
+<section>
+<h2>Reduced motion and screen readers</h2>
+<ul>
+<li>Reduced motion: lines appear whole, there is no sweep and no scan, and the caret is solid. Nothing else changes, because the design is already static type.</li>
+<li>The tape is a real list in DOM order, which equals ledger order. A screen reader reads it as the transcript it is.</li>
+<li>New receipts, questions and finished notes go to a polite live region. The level meter and the scan are <code>aria-hidden</code>.</li>
+<li>Bone on near-black is about 15:1. Grey labels are about 6.6:1, orange about 6.9:1.</li>
+</ul>
+</section>
+<section>
+<h2>Room / wall mode</h2>
+<ul>
+<li>It shows only the last four lines, with what you said at 120 px and the stamps at 40 px.</li>
+<li>Idle at night, it shows the date, any running jobs and nothing else.</li>
+</ul>
+</section>
+<section>
+<h2>Budgets: first render ≤1 s, 60 fps</h2>
+<ul>
+<li>It is DOM text plus one 20-bar SVG. There is no canvas, WebGL or audio. Two font files, subset.</li>
+<li>Nothing animates except one transform per stamp and the meter bars.</li>
+<li>The first paint is the ledger snapshot as plain HTML, so the tape can render on the server.</li>
+</ul>
+</section>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":1400}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

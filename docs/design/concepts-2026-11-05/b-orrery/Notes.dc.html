@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orrery — motion, sound and rules</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400;600&amp;family=IBM+Plex+Mono:wght@400&amp;display=swap">
+<style>
+body{margin:0;background:#070a1a}
+h2{margin:0 0 12px;font-weight:400;font-size:20px;color:#f3c969}
+p{margin:0 0 10px}
+ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+b{font-weight:600;color:#eef0ff}
+code{font-family:"IBM Plex Mono",monospace;font-size:13px;color:#c9c2ff}
+td,th{padding:7px 10px;border-bottom:1px solid rgba(154,163,199,.18);text-align:left;vertical-align:top}
+th{font-weight:600;color:#9aa3c7;font-size:12px;letter-spacing:.12em;text-transform:uppercase}
+</style>
+</helmet>
+<div style="width: 1200px; height: 1400px; box-sizing: border-box; padding: 64px; background: #070a1a; color: #c9cdea; font-family: Sora, system-ui, sans-serif; font-size: 15px; line-height: 1.55; display: flex; flex-direction: column; gap: 28px">
+<div>
+<span style="font-size: 12px; letter-spacing: .28em; text-transform: uppercase; color: #f3c969">Concept B · notes</span>
+<h1 style="margin: 6px 0 0; font-weight: 200; font-size: 64px; color: #eef0ff; line-height: 1">Orrery</h1>
+<p style="margin-top: 16px; font-size: 18px; font-weight: 300; max-width: 900px">What makes it distinct: conductor as a precise instrument, not a creature. The structure is radial and mechanical, in gold on midnight. Time is literal: the rim is the ledger’s dial, and recall turns it back. It is the most theatrical of the three and the strongest in room mode. Sound is part of how it works.</p>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px 40px">
+<section>
+<h2>Motion</h2>
+<ul>
+<li><b>Idle:</b> the gyroscope at the core turns once every 24 s, and the dial once every 4 min.</li>
+<li><b>Listening:</b> a ring of 40 ticks around the core swells with your voice level.</li>
+<li><b>Thinking:</b> the gyroscope spins up to 1.8 s a turn. On <code>plan.compiled</code> the constellation is drawn: dotted beams to each planet, 250 ms apart, in step order.</li>
+<li><b>Running:</b> dashes travel along the beam and stop at 75% of the way. The planet’s ring turns blue.</li>
+<li><b>Receipt:</b> the beam completes, the planet fills gold and a four-point star ignites (scale 0 → 1.5 → 1, 700 ms).</li>
+<li><b>Speaking:</b> the orbits brighten outward in turn, paced by the TTS envelope.</li>
+<li><b>Recall:</b> the dial turns back to the day it found (Tue Oct 27), then eases home.</li>
+<li><b>Jobs:</b> a job is a small moon on music’s orbit, with its progress as an arc. It docks only on the job’s done receipt.</li>
+</ul>
+</section>
+<section>
+<h2>Sound: yes, it is part of the design</h2>
+<ul>
+<li>Each app is a note of one pentatonic chord: PCC G, music B, chess D, ledger low E.</li>
+<li>A receipt rings its planet’s note. The full chord resolves only when the plan’s last receipt lands. A plan still holding a running job leaves the chord open.</li>
+<li>Waiting on you: one suspended fourth, played once.</li>
+<li>Failed: a muted, detuned note, and never the resolution.</li>
+<li>Earcons: a high chime when the mic opens, and the chord falling when it closes.</li>
+<li>Default: on in room mode and voice, quiet on desktop, off on phone unless asked.</li>
+</ul>
+</section>
+<section>
+<h2>Honesty: the look follows the ledger</h2>
+<table style="border-collapse: collapse; width: 100%; font-size: 14px">
+<tr><th>Ledger state</th><th>Beam</th><th>Planet</th></tr>
+<tr><td>queued</td><td>dotted grey</td><td>dashed ring</td></tr>
+<tr><td>running</td><td>blue dashes, stops at 75%</td><td>half-filled blue</td></tr>
+<tr><td>waiting on you</td><td>coral dashes</td><td>coral ring</td></tr>
+<tr><td>done (receipt)</td><td>solid gold, all the way</td><td>gold, with a star</td></tr>
+<tr><td>failed</td><td>beam breaks</td><td>rose slash, no star</td></tr>
+<tr><td>cancelled</td><td>beam dims</td><td>grey ring</td></tr>
+</table>
+<p style="margin-top: 10px">Stars come only from receipt events. A queued planet is never gold.</p>
+</section>
+<section>
+<h2>Reduced motion and screen readers</h2>
+<ul>
+<li>Reduced motion stops every spin and ripple. The dial jumps to the recalled day instead of turning. Stars appear at full size without the burst.</li>
+<li>Status is carried by fill (hollow, half, full), by word and by color, so color is never the only signal.</li>
+<li>The orrery is one <code>role="img"</code> labelled from the ledger. Receipts, confirmations and finished notes go to a polite live region. Every sound has a text twin in that region.</li>
+<li>Gold, blue and coral text all hold AA contrast on #070a1a.</li>
+</ul>
+</section>
+<section>
+<h2>Room / wall mode</h2>
+<ul>
+<li>The orrery is the hero, at about 1000 px tall. Text sits beside it at 3× size: what you said, step words, the narration.</li>
+<li>Idle at night, the wall dims to the dial and core alone, at 8% brightness.</li>
+</ul>
+</section>
+<section>
+<h2>Budgets: first render ≤1 s, 60 fps</h2>
+<ul>
+<li>Inline SVG, under 60 nodes. Animation uses only <code>transform</code>, <code>opacity</code> and dash offset.</li>
+<li>Sound uses Web Audio with synthesized sine and bell partials. There are no sample files, so nothing extra loads.</li>
+<li>The first paint shows the ledger snapshot. The constellation animates only on live events, never on load.</li>
+</ul>
+</section>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":1400}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

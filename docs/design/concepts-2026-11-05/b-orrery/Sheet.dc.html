@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orrery — ten moments</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@200;300;400;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;background:#070a1a}
+.sheet{width:7688px;min-height:2600px;box-sizing:border-box;padding:96px 64px;background:radial-gradient(ellipse at 15% 0%,#121a3d 0%,#070a1a 50%);color:#eef0ff;font-family:Sora,system-ui,sans-serif}
+.hd{display:flex;gap:64px;align-items:flex-end}
+.eyebrow{display:block;font-size:14px;letter-spacing:.28em;text-transform:uppercase;color:#f3c969}
+.hd h1{margin:8px 0 0;font-weight:200;font-size:96px;letter-spacing:.01em;line-height:1}
+.lede{max-width:900px;font-size:20px;font-weight:300;line-height:1.5;color:#c9cdea;margin:0}
+.legend{display:flex;gap:18px;flex-wrap:wrap;margin-left:auto;align-items:center}
+.lg{display:flex;gap:8px;align-items:center;font-size:14px}
+.row{margin-top:96px}
+.rowh{margin:0 0 20px;font-weight:300;font-size:26px}
+.rowh span{color:#9aa3c7;font-size:15px;margin-left:16px}
+.frames{display:flex;gap:40px;align-items:flex-start}
+.col{margin:0;display:flex;flex-direction:column;gap:12px}
+figcaption{font-size:15px;color:#9aa3c7}
+figcaption b{color:#f3c969;font-weight:500;margin-right:8px;font-family:"IBM Plex Mono",monospace}
+.f{position:relative;box-sizing:border-box;background:radial-gradient(circle at 70% 50%,#111839,#070a1a 70%);border:1px solid rgba(243,201,105,.22);border-radius:18px;overflow:hidden;display:grid}
+.f-desktop{width:720px;height:450px;grid-template-columns:310px 410px}
+.f-phone{width:300px;height:650px;grid-template-rows:260px 390px;border-radius:32px;background:radial-gradient(circle at 50% 20%,#111839,#070a1a 70%)}
+.f-phone .viz{order:-1}
+.f-wall{width:720px;height:405px;grid-template-columns:330px 390px;border-radius:4px}
+.v-voice{background:#04060f}
+.viz{min-height:0}
+.viz svg{width:100%;height:100%;display:block}
+.side{padding:20px 4px 14px 20px;display:flex;flex-direction:column;gap:8px;font-size:12px;line-height:1.45;overflow:hidden;min-width:0;min-height:0}
+.f-phone .side{padding:0 18px 18px;font-size:11.5px}
+.f-wall .side{font-size:15px;padding:26px 0 18px 28px;gap:12px}
+.who{display:block;font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;color:#9aa3c7;margin-bottom:2px}
+.said{margin:0;font-size:14px;font-weight:300}
+.f-wall .said{font-size:22px}
+.ack{margin:0;color:#f3c969}
+.steps{display:flex;flex-direction:column;gap:0;border-top:1px solid rgba(154,163,199,.18);border-bottom:1px solid rgba(154,163,199,.18);padding:3px 0}
+.step{display:grid;grid-template-columns:12px 44px 40px 1fr auto;gap:7px;align-items:center;padding:4px 0}
+.f-phone .step{grid-template-columns:12px 42px 1fr auto}
+.f-phone .step .app{display:none}
+.f-wall .step{grid-template-columns:14px 70px 1fr auto}
+.f-wall .step .t{display:none}
+.dot{width:10px;height:10px;border-radius:50%;box-sizing:border-box;border:1.5px solid #9aa3c7}
+.f-wall .dot{width:13px;height:13px}
+.queued .dot{border-style:dashed}
+.run .dot,.job .dot{border-color:#8ab4ff;background:linear-gradient(90deg,#8ab4ff 50%,transparent 50%)}
+.wait .dot{border-color:#ffb37a}
+.done .dot{border-color:#f3c969;background:#f3c969}
+.k{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:#c9c2ff}
+.f-wall .k{font-size:14px}
+.app{font-size:10.5px;color:#9aa3c7}
+.t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w{font-size:10px;letter-spacing:.05em;white-space:nowrap}
+.f-wall .w{font-size:14px}
+.queued .w{color:#9aa3c7}
+.run .w,.job .w{color:#8ab4ff}
+.wait .w{color:#ffb37a}
+.done .w{color:#f3c969;font-weight:600}
+.rc{display:grid;grid-template-columns:12px 1fr auto;gap:7px;align-items:start}
+.rc svg{margin-top:3px}
+.rc b{color:#f3c969}
+.f-wall .rc .app2{display:none}
+.mini{min-height:26px;padding:0 10px;border-radius:13px;border:1px solid rgba(154,163,199,.45);background:transparent;color:#eef0ff;font:400 11px Sora,sans-serif}
+.cf{border:1px solid #ffb37a;border-radius:16px;padding:10px 13px;background:rgba(255,179,122,.08);display:flex;flex-direction:column;gap:6px}
+.cf .q{font-weight:600;font-size:13px}
+.f-wall .cf .q{font-size:20px}
+.cf ul{margin:0;padding-left:16px;color:#c9cdea}
+.cf .acts{display:flex;gap:8px}
+.yes{min-height:32px;padding:0 14px;border-radius:16px;border:1px solid #ffb37a;background:#ffb37a;color:#070a1a;font:600 12px Sora,sans-serif}
+.no{min-height:32px;padding:0 14px;border-radius:16px;border:1px solid rgba(154,163,199,.5);background:transparent;color:#eef0ff;font:400 12px Sora,sans-serif}
+.f-wall .yes,.f-wall .no{min-height:44px;font-size:16px;border-radius:22px}
+.jb{padding:8px 12px;border-radius:14px;border:1px solid rgba(138,180,255,.4);background:rgba(138,180,255,.07);display:flex;flex-direction:column;gap:5px}
+.jb .r1{display:flex;justify-content:space-between;gap:6px}
+.jb .lbl2{color:#8ab4ff;white-space:nowrap}
+progress{appearance:none;-webkit-appearance:none;width:100%;height:3px;border:0;background:rgba(154,163,199,.2)}
+progress::-webkit-progress-bar{background:rgba(154,163,199,.2)}
+progress::-webkit-progress-value{background:#8ab4ff}
+progress::-moz-progress-bar{background:#8ab4ff}
+.nt{padding:9px 12px;border-radius:14px;border:1px solid #f3c969;background:rgba(243,201,105,.08);display:flex;flex-direction:column;gap:4px}
+.nt b{color:#f3c969}
+.f-wall .nt{font-size:18px}
+.narr{margin:0;font-size:14px;font-weight:300;line-height:1.45}
+.f-wall .narr{font-size:21px}
+.narr .who{color:#f3c969}
+.vl{display:grid;grid-template-columns:72px 1fr;gap:8px;align-items:baseline}
+.vl .vk{font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:#9aa3c7}
+.vl.conductor .vt{font-size:13px}
+.vl.earcon .vt{color:#f3c969;font-style:italic}
+.vl.plan .vt{font-family:"IBM Plex Mono",monospace;color:#c9c2ff}
+.f-wall .vl .vt{font-size:16px}
+.foot{margin-top:auto;font-size:10.5px;color:#9aa3c7;padding-top:6px}
+.f-wall .foot{font-size:13px}
+.ldot{width:14px;height:14px;border-radius:50%;box-sizing:border-box;border:1.5px solid #9aa3c7}
+.ldot.queued{border-style:dashed}
+.ldot.run{border-color:#8ab4ff;background:linear-gradient(90deg,#8ab4ff 50%,transparent 50%)}
+.ldot.wait{border-color:#ffb37a}
+.ldot.done{border-color:#f3c969;background:#f3c969}
+.ldot.failed{border-color:#ff8fa3;background:linear-gradient(45deg,transparent 45%,#ff8fa3 45%,#ff8fa3 55%,transparent 55%)}
+.ldot.cancelled{border-color:#5d6588}
+/* orrery */
+.orr .dial{fill:none;stroke:rgba(243,201,105,.35);stroke-width:1}
+.orr .ticks{fill:none;stroke:rgba(243,201,105,.4);stroke-width:6;stroke-dasharray:1 9.5}
+.orr .orbit{fill:none;stroke:rgba(154,163,199,.22);stroke-width:.8}
+.dialg{transform-box:view-box;transform-origin:200px 200px}
+.p-idle .dialg{animation:spin 240s linear infinite}
+.rp{fill:none;stroke:#f3c969;stroke-width:1.2;opacity:0}
+.p-speak .rp{opacity:.3;animation:ripple 2.4s ease-out infinite}
+.p-speak .rp.r2{animation-delay:.3s}.p-speak .rp.r3{animation-delay:.6s}
+.beam,.beamtip{fill:none;stroke-width:2.2;stroke-linecap:round;opacity:0}
+.beam.queued{opacity:1;stroke:rgba(154,163,199,.6);stroke-dasharray:1 5}
+.beam.run{opacity:1;stroke:#8ab4ff;stroke-dasharray:10 6;animation:flow 1s linear infinite}
+.beam.wait{opacity:1;stroke:#ffb37a;stroke-dasharray:3 4}
+.beam.done,.beamtip.done{opacity:1;stroke:#f3c969}
+.pl{fill:#0e1330;stroke:#9aa3c7;stroke-width:1.2}
+.pl.queued{stroke-dasharray:2 2}
+.pl.run{stroke:#8ab4ff}
+.pl.wait{stroke:#ffb37a;fill:rgba(255,179,122,.3)}
+.pl.done{fill:#f3c969;stroke:#f3c969}
+.burst{fill:#f3c969;opacity:0}
+.burst.done{opacity:1}
+.lbl{fill:#9aa3c7;font-size:11px;font-family:Sora,sans-serif;text-anchor:middle;letter-spacing:.14em;text-transform:uppercase}
+.arm{transform-box:view-box;transform-origin:200px 200px}
+.gy{fill:none;stroke:rgba(243,201,105,.75);stroke-width:1}
+.p-idle .arm{animation:spin 24s linear infinite}
+.p-work .arm{animation:spin 6s linear infinite}
+.p-think .arm{animation:spin 1.8s linear infinite}
+.ear{fill:none;stroke:#8ab4ff;stroke-width:3;stroke-dasharray:2 6.4;opacity:0;transform-box:fill-box;transform-origin:center}
+.p-listen .ear{opacity:.9;animation:tremble .7s ease-in-out infinite alternate}
+.core{fill:#f3c969}
+.p-wait .core{fill:#ffb37a}
+.p-wait .gy{stroke:rgba(255,179,122,.8)}
+.v-voice .orbit,.v-voice .dialg,.v-voice .lbl,.v-voice .pl{opacity:.25}
+@keyframes flow{to{stroke-dashoffset:-32}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes tremble{from{transform:scale(.92)}to{transform:scale(1.1)}}
+@keyframes ripple{0%{opacity:0}30%{opacity:.85}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){*{animation:none !important}}
+</style>
+</helmet>
+<div class="sheet">
+<header class="hd">
+<div>
+<span class="eyebrow">Conductor · concept B · a language of its own</span>
+<h1>Orrery</h1>
+</div>
+<p class="lede">Conductor is a brass-and-starlight instrument. The apps are planets on their orbits, and the ledger is the dial around the rim. A plan is a constellation drawn between them. Each star ignites only when its receipt lands, and the chord sounds only when the last one does.</p>
+<div class="legend" aria-label="Status words">
+<span class="lg"><span class="ldot queued"></span>queued</span><span class="lg"><span class="ldot run"></span>running</span><span class="lg"><span class="ldot wait"></span>waiting on you</span><span class="lg"><span class="ldot done"></span>done</span><span class="lg"><span class="ldot failed"></span>failed</span><span class="lg"><span class="ldot cancelled"></span>cancelled</span>
+</div>
+</header>
+<sc-for list="{{rows}}" as="s" hint-placeholder-count="3">
+<section class="row">
+<h2 class="rowh">{{s.label}}<span>{{s.size}}</span></h2>
+<div class="frames">
+<sc-for list="{{s.moments}}" as="m" hint-placeholder-count="10">
+<figure class="col">
+<figcaption><b>{{m.n}}</b>{{m.name}}</figcaption>
+<div class="f f-{{s.id}} v-{{m.id}}">
+<div class="side">
+<sc-if value="{{m.hasSaid}}" hint-placeholder-val="{{ true }}"><p class="said"><span class="who">You</span>{{m.said}}</p></sc-if>
+<sc-if value="{{m.hasAck}}" hint-placeholder-val="{{ false }}"><p class="ack">{{m.ack}}</p></sc-if>
+<sc-if value="{{m.hasSteps}}" hint-placeholder-val="{{ true }}">
+<div class="steps">
+<sc-for list="{{m.steps}}" as="p" hint-placeholder-count="3">
+<div class="step {{p.state}}"><span class="dot" aria-hidden="true"></span><span class="k">{{p.k}}</span><span class="app">{{p.app}}</span><span class="t">{{p.text}}</span><span class="w">{{p.word}}</span></div>
+</sc-for>
+</div>
+</sc-if>
+<sc-for list="{{m.receipts}}" as="r" hint-placeholder-count="1">
+<div class="rc"><svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1 L14 10 L23 12 L14 14 L12 23 L10 14 L1 12 L10 10 Z" fill="#f3c969"></path></svg><span><b>{{r.verb}}</b><span class="app2"> · {{r.app}}</span> · {{r.ent}}</span><sc-if value="{{r.undo}}" hint-placeholder-val="{{ false }}"><button class="mini" type="button">{{r.undo}}</button></sc-if></div>
+</sc-for>
+<sc-if value="{{m.hasConfirm}}" hint-placeholder-val="{{ false }}">
+<div class="cf" role="group" aria-label="Confirmation">
+<span class="q">{{m.confirm.q}}</span>
+<ul><sc-for list="{{m.confirm.items}}" as="it" hint-placeholder-count="3"><li>{{it.t}}</li></sc-for></ul>
+<div class="acts"><button class="yes" type="button">{{m.confirm.yes}}</button><button class="no" type="button">{{m.confirm.no}}</button></div>
+</div>
+</sc-if>
+<sc-for list="{{m.jobs}}" as="j" hint-placeholder-count="1">
+<div class="jb"><div class="r1"><span><b>Job · {{j.app}}</b> · {{j.t}}</span><span class="lbl2">running</span></div><progress max="{{j.of}}" value="{{j.n}}" aria-label="{{j.t}} progress">{{j.n}} of {{j.of}}</progress><span>{{j.n}} of {{j.of}} {{j.unit}}</span></div>
+</sc-for>
+<sc-if value="{{m.hasNote}}" hint-placeholder-val="{{ false }}">
+<div class="nt"><b>{{m.note.head}}</b><span>{{m.note.body}}</span><div><button class="mini" type="button">Undo</button> <button class="mini" type="button">Open in music</button></div></div>
+</sc-if>
+<sc-if value="{{m.hasNarr}}" hint-placeholder-val="{{ false }}"><p class="narr"><span class="who">Conductor</span>{{m.narr}}</p></sc-if>
+<sc-for list="{{m.voice}}" as="v" hint-placeholder-count="0">
+<div class="vl {{v.w}}"><span class="vk">{{v.w}}</span><span class="vt">{{v.t}}</span></div>
+</sc-for>
+<div class="foot">{{m.foot}}</div>
+</div>
+<div class="viz">
+<svg class="orr p-{{m.pres}}" viewBox="0 0 400 400" role="img" aria-label="{{m.vizLabel}}">
+<g aria-hidden="true">
+<g class="dialg"><circle class="dial" cx="200" cy="200" r="192"></circle><circle class="ticks" cx="200" cy="200" r="185"></circle></g>
+<circle class="orbit" cx="200" cy="200" r="70"></circle>
+<circle class="orbit" cx="200" cy="200" r="115"></circle>
+<circle class="orbit" cx="200" cy="200" r="160"></circle>
+<circle class="rp" cx="200" cy="200" r="70"></circle>
+<circle class="rp r2" cx="200" cy="200" r="115"></circle>
+<circle class="rp r3" cx="200" cy="200" r="160"></circle>
+</g>
+<line class="beam {{m.st.pcc}}" x1="200" y1="200" x2="166.3" y2="159.8"></line>
+<line class="beamtip {{m.st.pcc}}" x1="166.3" y1="159.8" x2="155" y2="146.4"></line>
+<line class="beam {{m.st.music}}" x1="200" y1="200" x2="274.7" y2="156.9"></line>
+<line class="beamtip {{m.st.music}}" x1="274.7" y1="156.9" x2="299.6" y2="142.5"></line>
+<line class="beam {{m.st.chess}}" x1="200" y1="200" x2="260" y2="304"></line>
+<line class="beamtip {{m.st.chess}}" x1="260" y1="304" x2="280" y2="338.6"></line>
+<line class="beam {{m.st.mem}}" x1="200" y1="200" x2="66.1" y2="248.8"></line>
+<line class="beamtip {{m.st.mem}}" x1="66.1" y1="248.8" x2="21.5" y2="265"></line>
+<circle class="pl {{m.st.pcc}}" cx="155" cy="146.4" r="7"></circle>
+<circle class="pl {{m.st.music}}" cx="299.6" cy="142.5" r="8"></circle>
+<circle class="pl {{m.st.chess}}" cx="280" cy="338.6" r="7"></circle>
+<circle class="pl {{m.st.mem}}" cx="21.5" cy="265" r="5"></circle>
+<path class="burst {{m.st.pcc}}" d="M155 134.4 L157 144.4 L167 146.4 L157 148.4 L155 158.4 L153 148.4 L143 146.4 L153 144.4 Z"></path>
+<path class="burst {{m.st.music}}" d="M299.6 130.5 L301.6 140.5 L311.6 142.5 L301.6 144.5 L299.6 154.5 L297.6 144.5 L287.6 142.5 L297.6 140.5 Z"></path>
+<path class="burst {{m.st.chess}}" d="M280 326.6 L282 336.6 L292 338.6 L282 340.6 L280 350.6 L278 340.6 L268 338.6 L278 336.6 Z"></path>
+<path class="burst {{m.st.mem}}" d="M21.5 253 L23.5 263 L33.5 265 L23.5 267 L21.5 277 L19.5 267 L9.5 265 L19.5 263 Z"></path>
+<text class="lbl" x="155" y="126">PCC</text>
+<text class="lbl" x="299.6" y="122">music</text>
+<text class="lbl" x="280" y="368">chess</text>
+<text class="lbl" x="36" y="292">ledger</text>
+<circle class="ear" cx="200" cy="200" r="40"></circle>
+<g class="arm"><ellipse class="gy" cx="200" cy="200" rx="30" ry="10"></ellipse><ellipse class="gy" cx="200" cy="200" rx="10" ry="30"></ellipse></g>
+<circle class="core" cx="200" cy="200" r="12"></circle>
+</svg>
+</div>
+</div>
+</figure>
+</sc-for>
+</div>
+</section>
+</sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":7688,"height":2600}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const W = { queued: 'queued', run: 'running', wait: 'waiting on you', done: 'done', job: 'running · job' };
+    const step = (k, app, text, state) => ({ k, app, text, state, word: W[state] });
+    const plan = (a, b, c) => [
+      step('recall', 'ledger', 'from Maya · an album · Oct 26 – Nov 1', a),
+      step('ask', 'music', 'download “Low Tide Atlas”', b),
+      step('ask', 'pcc', 'add task · Sat Nov 7', c),
+    ];
+    const R1 = { app: 'ledger', verb: 'Found', ent: '“Low Tide Atlas” — Kessler Row · from Maya, Thu Oct 29', undo: '' };
+    const R3 = { app: 'pcc', verb: 'Created', ent: 'Task #1287 “Listen to Low Tide Atlas” · Sat Nov 7', undo: 'Undo' };
+    const M = [
+      { id: 'idle', name: 'Idle presence', pres: 'idle', presLabel: 'idle',
+        foot: 'Nothing running · nothing waiting on you · last: 9:41 am, added a task' },
+      { id: 'listen', name: 'You speak · listening', pres: 'listen', presLabel: 'listening',
+        said: 'Find the album Maya sent last week, download it, and put it on my list for Saturday…',
+        foot: 'Hearing you · say “stop” any time' },
+      { id: 'compile', name: 'Thinking · the plan compiles', pres: 'think', presLabel: 'compiling a plan',
+        said: '…and put it on my list for Saturday.', ack: 'On it — checking last week, then asking music and PCC.',
+        steps: plan('queued', 'queued', 'queued'), st: { mem: 'queued', music: 'queued', pcc: 'queued' },
+        foot: 'Constellation drawn · 3 stars · none lit yet' },
+      { id: 'run', name: 'Steps light as they run', pres: 'work', presLabel: 'working',
+        steps: plan('done', 'run', 'queued'), receipts: [R1], st: { mem: 'done', music: 'run', pcc: 'queued' },
+        foot: '1 of 3 lit · music working · PCC queued' },
+      { id: 'speak', name: 'Receipts land · speaking', pres: 'speak', presLabel: 'speaking',
+        steps: plan('done', 'job', 'done'), receipts: [R1, R3], st: { mem: 'done', music: 'run', pcc: 'done' },
+        narr: 'Found it — Low Tide Atlas by Kessler Row. It’s downloading now, and it’s on your list for Saturday.',
+        foot: '2 of 3 lit · the download is a job, still in orbit' },
+      { id: 'confirm', name: 'A confirmation', pres: 'wait', presLabel: 'waiting on you',
+        said: 'Clear out the finished garage tasks.',
+        steps: [step('look', 'pcc', 'Garage · done tasks', 'done'), step('confirm', 'you', 'delete 3 tasks', 'wait'), step('ask', 'pcc', 'delete 3 tasks', 'queued')],
+        confirm: { q: 'Delete 3 done tasks in Garage?', items: [{ t: 'Hang pegboard' }, { t: 'Sort screws' }, { t: 'Drop off old paint' }], yes: 'Delete 3', no: 'Keep them' },
+        st: { pcc: 'wait' }, foot: 'Paused · nothing deleted yet · undo stays available after' },
+      { id: 'job', name: 'A job runs in the background', pres: 'idle', presLabel: 'idle with 2 jobs running',
+        jobs: [{ app: 'music', t: 'Download “Low Tide Atlas”', n: 4, of: 11, unit: 'tracks' }, { app: 'music', t: 'Retag library', n: 112, of: 400, unit: 'files' }],
+        st: { music: 'run' }, foot: '2 jobs in orbit · a note arrives when each ends' },
+      { id: 'jobdone', name: 'The job ends · its note', pres: 'idle', presLabel: 'idle with 1 job running',
+        note: { head: 'Finished · music · 6:12 pm', body: 'Low Tide Atlas — 11 tracks, now in Unsorted.' },
+        jobs: [{ app: 'music', t: 'Retag library', n: 260, of: 400, unit: 'files' }],
+        st: { music: 'run' }, foot: 'Download done (receipt) · retag still running' },
+      { id: 'recall', name: 'Recall from last week', pres: 'speak', presLabel: 'speaking',
+        said: 'What opening did I lose with last week?',
+        steps: [step('recall', 'ledger', 'chess games · Oct 26 – Nov 1', 'done')],
+        receipts: [{ app: 'ledger', verb: 'Recalled', ent: 'Tue Oct 27 · chess · lost with the Caro-Kann, resigned on move 31', undo: '' }],
+        narr: 'Last Tuesday — the Caro-Kann. You resigned on move 31.', st: { mem: 'done' },
+        foot: 'The dial turned back 9 days · chess was not asked' },
+      { id: 'voice', name: 'Voice only, no screen', pres: 'speak', presLabel: 'speaking, screen off',
+        voice: [
+          { w: 'earcon', t: 'one high chime: I hear you' },
+          { w: 'you', t: 'What’s on for Saturday?' },
+          { w: 'plan', t: 'look(pcc) · 0.4 s' },
+          { w: 'conductor', t: 'Two things: listen to Low Tide Atlas, and the garage shelves.' },
+          { w: 'earcon', t: 'the chord resolves down: mic closed' },
+        ],
+        st: { pcc: 'done' }, foot: 'Screen dark; the room speaker carries it all' },
+    ];
+    const names = { pcc: 'PCC', music: 'music', chess: 'chess', mem: 'ledger' };
+    const moments = M.map((m, i) => {
+      const st = Object.assign({ pcc: 'rest', music: 'rest', chess: 'rest', mem: 'rest' }, m.st || {});
+      const parts = Object.keys(names).filter(k => st[k] !== 'rest').map(k => names[k] + ' ' + (W[st[k]] || st[k]));
+      return Object.assign({}, m, {
+        n: String(i + 1).padStart(2, '0'), st,
+        steps: m.steps || [], receipts: m.receipts || [], jobs: m.jobs || [], voice: m.voice || [],
+        confirm: m.confirm || { q: '', items: [], yes: '', no: '' }, note: m.note || { head: '', body: '' },
+        hasSaid: !!m.said, hasAck: !!m.ack, hasSteps: !!(m.steps && m.steps.length), hasConfirm: !!m.confirm,
+        hasNote: !!m.note, hasNarr: !!m.narr,
+        vizLabel: 'Conductor ' + m.presLabel + (parts.length ? '. Planets: ' + parts.join(', ') + '.' : '. All planets at rest.'),
+      });
+    });
+    const rows = [
+      { id: 'desktop', label: 'Desktop', size: '1440 × 900, shown at 50%' },
+      { id: 'phone', label: 'Phone', size: '390 × 844, shown at 77%' },
+      { id: 'wall', label: 'Room / wall', size: '1920 × 1080, shown at 37.5% · type sized to read from 4 m' },
+    ].map(r => Object.assign({}, r, { moments }));
+    return { rows };
+  }
+}
+</script>
+</body>
+</html>
