@@ -94,6 +94,31 @@ class RunCancelRead(BaseModel):
     cancel_requested: bool
 
 
+class JobCancelCreate(BaseModel):
+    """A tap on a job card's Cancel (#90): the job by its app and ref."""
+
+    app: NonBlankStr
+    ref: NonBlankStr
+
+
+class JobCancelRead(BaseModel):
+    """What the app answered to a card's Cancel, and the note it left.
+
+    ``done``/``total`` are the job's count at the moment of the cancel.
+    ``cancel_requested`` is False when the job had already ended; ``status``
+    is the app's own word, so a job still ``working`` has been asked to stop,
+    not stopped. ``message`` is the person's note turn recording the tap.
+    """
+
+    app: str
+    ref: str
+    status: str
+    done: int
+    total: int | None
+    cancel_requested: bool
+    message: MessageRead
+
+
 class TurnActivityRead(BaseModel):
     """What conductor is doing right now for one conversation's in-flight turn.
 

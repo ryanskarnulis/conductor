@@ -42,15 +42,15 @@ from app.ai import interpreter as interpreter_module
 from app.ai.loop import AgentLoop, loop_from_settings
 from app.ai.provider import ChatProvider, ProviderRequestError
 from app.ai.providers.llamacpp import provider_from_settings
-from app.api import rate_limit, routes_agent, turn_activity
+from app.api import rate_limit, routes_agent
 from app.config import get_settings
-from app.db.models import Base
 from app.db.session import get_db
 from app.fleet.thread_store import DbThreadStore
 from app.main import app
 from app.services.job_watcher import JobWatcher
 from app.tools import registry
 from tests import eval_seed
+from tests.eval_db import database_wiper
 from tests.evalstats import (
     Decision,
     GateAborted,
@@ -87,21 +87,6 @@ _SEED_BASE = eval_seed.seed_base()
 
 def _tool_names() -> set[str]:
     return {tool.name for tool in registry.all_tools()}
-
-
-def _wiper(db_session: DbSession) -> Callable[[], None]:
-    """Empty every table (and the in-memory turn registry, keyed by the
-    conversation ids the wipe frees) so the next sample starts clean."""
-
-    def wipe() -> None:
-        db_session.rollback()
-        for table in reversed(Base.metadata.sorted_tables):
-            db_session.execute(table.delete())
-        db_session.commit()
-        db_session.expunge_all()
-        turn_activity._reset()
-
-    return wipe
 
 
 def _watching(
@@ -177,7 +162,7 @@ class _ScriptedRun:
             holder,
             tool_names=_tool_names,
             reset=rate_limit._reset,
-            fresh_db=_wiper(db_session),
+            fresh_db=database_wiper(db_session),
             settle=settle,
         )
 
@@ -474,7 +459,7 @@ def live(
             holder,
             tool_names=_tool_names,
             reset=rate_limit._reset,
-            fresh_db=_wiper(db_session),
+            fresh_db=database_wiper(db_session),
             settle=_watching(session_factory, holder, provider),
         )
 
