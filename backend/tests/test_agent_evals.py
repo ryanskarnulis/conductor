@@ -69,6 +69,7 @@ from app.fleet.thread_store import DbThreadStore
 from app.main import app
 from app.tools import registry
 from tests import eval_seed
+from tests.eval_db import database_wiper
 from tests.evalstats import (
     Decision,
     GateAborted,
@@ -379,7 +380,9 @@ def test_routing_golden(
     golden: Golden,
     eval_client: TestClient,
     delegate_calls: list[tuple[str, str]],
+    db_session: Session,
 ) -> None:
+    wipe = database_wiper(db_session)
     durations: list[float] = []
     samples: list[dict[str, Any]] = []
 
@@ -389,6 +392,10 @@ def test_routing_golden(
         # a fresh rate-limit window: the route allows 10 messages a minute per
         # client, and an escalated scenario takes up to 20 samples from one.
         rate_limit._reset()
+        # An empty database too (#122): #64's recall reads other conversations, so
+        # sample 2 of an identical utterance found sample 1's answered call and
+        # the planner answered from it instead of routing.
+        wipe()
         delegate_calls.clear()
         eval_seed.current.seed = seed
         created = eval_client.post("/api/agent/conversations", json={})
