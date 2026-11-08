@@ -187,9 +187,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   rely on it; multi-worker safety is not a goal.
 - **The live channel** (#38, `app/api/turn_activity.py`): `GET …/events` is
   SSE for the turn in flight: a snapshot on connect (so a reconnect loses
-  nothing), then beats, `plan`, `step_started`, `receipt`, `paused` and
-  `turn_ended`. Step events go through one seam (`app/ai/turn_events.py`);
-  a receipt is the step as the ledger journals it (`ledger.live_step`) and
+  nothing), then beats, `plan`, `step_started`, `receipt`, `paused`,
+  `resumed` (a turn picking up a paused plan: why, the step, an `ask_user`
+  answer as `{s1}` reads it) and `turn_ended`. Step events go through one
+  seam (`app/ai/turn_events.py`); a receipt is the step as the ledger journals it (`ledger.live_step`) and
   lands only once its record exists, and `turn_ended` goes out after the
   ledger commit. Queues and turn state are bounded; a lagging follower is
   resynced from a snapshot. `GET …/activity` stays as the poll fallback.
@@ -200,3 +201,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   a lazy chunk after first paint, and shows nothing the panel doesn't say in
   words. Both read one derivation (`turnView.ts` → `sceneState.ts`), and
   nothing looks done before its receipt says so.
+- **The live plan view** (#89) draws from the same stream: the plan appears
+  queued beside the code-built ack, each step lights on its own event, a
+  `{sN}` stays a dashed ref until its receipt names a title (never filled
+  from an outside title early), and a step that didn't run is `not run`,
+  never `failed`. A pause shows as a card in the plan; the turn that ended on
+  one keeps its stream (`held`) until the next turn, so the answer visibly
+  resumes the same plan. A strand lights only on a real step event.

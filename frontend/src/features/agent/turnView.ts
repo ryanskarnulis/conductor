@@ -1,5 +1,5 @@
 import type { PlanStepData, ReceiptData } from '../../design/components'
-import type { PresenceState } from '../../design/status'
+import { STEP_WORD, type PresenceState } from '../../design/status'
 import type {
   AgentMessage,
   AgentStopReason,
@@ -11,6 +11,7 @@ import type {
   TurnActivity,
 } from '../../types/agent'
 import { activityLabel, appFromTool, lookedAtFromTool, openedAppFromTool } from './delegateCalls'
+import { answerValue, fillParts, valueFromRecord, type RefValue } from './planRefs'
 import { queuedPlanSteps, type TurnStream } from './turnStream'
 
 /** The shell's view of a conversation, derived from today's persisted turns
@@ -24,13 +25,27 @@ export function appLabel(app: string): string {
   return app === 'tasks' ? 'PCC' : app
 }
 
+/** What a paused plan waits on, as a card: conductor's own question (its
+ * options are bare titles), or a write someone must say yes to. */
+export type PauseView =
+  | { kind: 'question'; question: string; options: string[] }
+  | { kind: 'confirm'; appKey: string | null; app: string; question: string; why: string }
+
 export interface ShellTurn {
   key: string
   /** What the person said, or the note they left from the UI. */
   said: string
   note: boolean
+  /** Conductor's code-built ack of the plan, said before anything ran. */
+  ack: string | null
+  /** How this turn picked up a plan that was waiting on the person. */
+  resumedNote: string | null
   steps: (PlanStepData & { appKey: string | null })[]
   receipts: (ReceiptData & { appKey: string })[]
+  /** What the plan waits on, while it waits. */
+  pause: PauseView | null
+  /** One line for a screen reader: what the plan just did or waits on. */
+  announce: string | null
   reply: string | null
   stopReason: AgentStopReason | null
   /** True while the turn is the optimistic, in-flight one. */
@@ -88,31 +103,43 @@ export function receiptFrom(entry: AppRecordEntry, app: string): (ReceiptData & 
 
 type StepSource = Pick<ToolCallRecord, 'tool' | 'arguments' | 'error'> & { app_confirm?: unknown }
 
+/** An error text the loop writes for a call it never dispatched (backend
+ * `run_record.classify`): that step didn't run, which is not the same as failing. */
+const NEVER_RAN = ['not run: ', 'Invalid arguments: ', 'Unknown tool ']
+
+/** A call's end, from its error: failed, or not run (with its reason). */
+function endedBadly(error: string | null): { state: 'failed' | 'not_run'; detail: string } | null {
+  if (error === null) return null
+  const prefix = NEVER_RAN.find((p) => error.startsWith(p))
+  if (prefix === undefined) return { state: 'failed', detail: error }
+  return { state: 'not_run', detail: prefix === NEVER_RAN[0] ? error.slice(prefix.length) : error }
+}
+
 function stepFrom(call: StepSource, waiting: boolean): ShellTurn['steps'][number] {
   const asked = appFromTool(call.tool)
   const opened = openedAppFromTool(call.tool)
-  const failed = call.error !== null
+  const bad = endedBadly(call.error)
   const message = typeof call.arguments.message === 'string' ? call.arguments.message : ''
+  const outcome = (done: ShellTurn['steps'][number]['state']) => ({ state: bad ? bad.state : done, detail: bad?.detail })
   if (asked !== null) {
     const appKey = call.tool.slice('ask_'.length)
-    const state = failed ? 'failed' : call.app_confirm ? (waiting ? 'wait' : 'not_run') : 'done'
-    return { appKey, kind: 'ask', app: appLabel(asked), text: message || `ask ${asked}`, state, detail: failed ? (call.error ?? undefined) : undefined }
+    return { appKey, kind: 'ask', app: appLabel(asked), text: message || `ask ${asked}`, ...outcome(call.app_confirm ? (waiting ? 'wait' : 'not_run') : 'done') }
   }
   if (opened !== null) {
     const appKey = call.tool.slice('open_'.length)
-    return { appKey, kind: 'open', app: appLabel(opened), text: typeof call.arguments.intent === 'string' ? call.arguments.intent : `open ${opened}`, state: failed ? 'failed' : 'done' }
+    return { appKey, kind: 'open', app: appLabel(opened), text: typeof call.arguments.intent === 'string' ? call.arguments.intent : `open ${opened}`, ...outcome('done') }
   }
   if (call.tool === 'confirm') {
     const app = typeof call.arguments.app === 'string' ? call.arguments.app : ''
-    return { appKey: app || null, kind: 'confirm', app: appLabel(app || 'conductor'), text: 'yes', state: failed ? 'failed' : 'done' }
+    return { appKey: app || null, kind: 'confirm', app: appLabel(app || 'conductor'), text: 'yes', ...outcome('done') }
   }
   const looked = lookedAtFromTool(call.tool)
   if (looked !== null) {
     const appKey = call.tool.slice('look_'.length)
-    return { appKey, kind: 'look', app: appLabel(looked), text: `look at ${looked}`, state: failed ? 'failed' : 'done', detail: failed ? (call.error ?? undefined) : undefined }
+    return { appKey, kind: 'look', app: appLabel(looked), text: `look at ${looked}`, ...outcome('done') }
   }
-  if (call.tool === 'list_agents') return { appKey: null, kind: 'look', app: 'conductor', text: 'check the fleet', state: failed ? 'failed' : 'done' }
-  return { appKey: null, kind: 'local', app: 'conductor', text: call.tool, state: failed ? 'failed' : 'done' }
+  if (call.tool === 'list_agents') return { appKey: null, kind: 'look', app: 'conductor', text: 'check the fleet', ...outcome('done') }
+  return { appKey: null, kind: 'local', app: 'conductor', text: call.tool, ...outcome('done') }
 }
 
 /** A landed step as the record it is: the same derivation as a stored turn. */
@@ -126,18 +153,40 @@ function recordOf(receipt: LiveReceipt): StepSource & { app_record: AppRecordEnt
   }
 }
 
-/** A plan step no call has started yet. */
-function queuedFrom(step: PlanBodyStep, waiting: boolean): ShellTurn['steps'][number] {
+/** A plan step no call has started yet. Its words keep any `{sN}` dashed
+ * until that step's receipt exists. */
+function queuedFrom(step: PlanBodyStep, waiting: boolean, values: Record<string, RefValue>): ShellTurn['steps'][number] {
   const app = typeof step.app === 'string' ? step.app : null
-  const text =
+  const said =
     step.do === 'ask' ? step.request : step.do === 'open' ? step.intent : step.do === 'ask_user' ? step.question : step.do === 'confirm' ? step.answer : undefined
+  const words = typeof said === 'string' && said ? fillParts(said, values) : { text: step.do, parts: undefined }
   return {
     appKey: app ? app.replace(/-/g, '_') : null,
     kind: step.do,
     app: appLabel(app ?? 'conductor'),
-    text: typeof text === 'string' && text ? text : step.do,
+    text: words.text,
+    parts: words.parts,
     state: waiting ? 'wait' : 'queued',
   }
+}
+
+/** What each earlier step gave later ones as `{sN}`, only from receipts that
+ * exist (the backend's `from_record`), plus an `ask_user` answer once resumed. */
+function refValues(stream: TurnStream): Record<string, RefValue> {
+  const values: Record<string, RefValue> = {}
+  const plan = stream.plan
+  if (plan) {
+    for (const step of stream.steps) {
+      const receipt = step.receipt
+      const id = plan.steps[plan.start + step.seq - 1]?.id
+      if (!receipt || !id || (receipt.outcome !== 'done' && receipt.outcome !== 'looked_up')) continue
+      if (receipt.kind !== 'ask' && receipt.kind !== 'look' && receipt.kind !== 'open') continue
+      const value = valueFromRecord(receipt.receipts.filter((entry) => entry.source === 'app'))
+      if (value) values[id] = value
+    }
+  }
+  if (stream.resumed?.reason === 'ask_user' && stream.resumed.answer !== null) values[stream.resumed.step ?? 's1'] = answerValue(stream.resumed.answer)
+  return values
 }
 
 /** The in-flight turn's steps from the stream: each landed step from its
@@ -150,7 +199,50 @@ export function streamSteps(stream: TurnStream): ShellTurn['steps'] {
     return { ...stepFrom({ tool: step.tool ?? '', arguments: step.arguments ?? {}, error: null }, false), state: 'run' as const }
   })
   const paused = stream.paused && stream.paused.reason !== 'app_confirm' ? stream.paused.step : null
-  return [...steps, ...queuedPlanSteps(stream).map((step) => queuedFrom(step, step.id === paused))]
+  const values = refValues(stream)
+  return [...steps, ...queuedPlanSteps(stream).map((step) => queuedFrom(step, step.id === paused, values))]
+}
+
+/** What the stream's plan waits on, as a card. */
+export function streamPause(stream: TurnStream): PauseView | null {
+  const paused = stream.paused
+  if (!paused) return null
+  if (paused.reason === 'ask_user') {
+    const step = stream.plan?.steps.find((s) => s.id === paused.step)
+    const question = typeof step?.question === 'string' && step.question ? step.question : (paused.question ?? '')
+    if (!question) return null
+    return { kind: 'question', question, options: (step?.options ?? []).filter((o): o is string => typeof o === 'string' && o !== '') }
+  }
+  if (!paused.question) return null
+  const app = appLabel(paused.app ?? 'conductor')
+  const why = paused.reason === 'gate' ? `Conductor checks before asking ${app}. Say “yes”, or tap.` : `${app} asks before this write. Say “yes”, or tap.`
+  return { kind: 'confirm', appKey: paused.app ? paused.app.replace(/-/g, '_') : null, app, question: paused.question, why }
+}
+
+/** How a resumed turn says it picked the plan up again. */
+export function streamResumedNote(stream: TurnStream): string | null {
+  const resumed = stream.resumed
+  if (!resumed) return null
+  if (resumed.reason === 'ask_user') return resumed.answer ? `Resumed the plan · you answered ${resumed.answer}` : 'Resumed the plan · you answered'
+  if (resumed.reason === 'gate') return 'Resumed the plan · you said yes'
+  return 'You said yes to the app’s question'
+}
+
+/** What a screen reader hears as the plan moves: the question it waits on, or
+ * the latest step that is past queued, in the same words as the panel. */
+function announceFor(steps: ShellTurn['steps'], pause: PauseView | null): string | null {
+  if (pause) {
+    const options = pause.kind === 'question' && pause.options.length > 0 ? ` ${pause.options.join(', or ')}?` : ''
+    return `Waiting on you: ${pause.question}${options}`
+  }
+  if (steps.length === 0) return null
+  let at = -1
+  steps.forEach((step, i) => {
+    if (step.state !== 'queued') at = i
+  })
+  if (at === -1) return `Plan: ${steps.length} step${steps.length === 1 ? '' : 's'}, none started`
+  const step = steps[at]
+  return `Step ${at + 1} of ${steps.length}, ${step.app}: ${STEP_WORD[step.state]}${step.detail ? ` · ${step.detail}` : ''}`
 }
 
 /** The receipt chips the stream's landed steps carry. */
@@ -188,6 +280,7 @@ export function buildTurns(
   pendingText: string | null,
   activity: TurnActivity | null,
   stream: TurnStream | null = null,
+  held: TurnStream | null = null,
 ): ShellTurn[] {
   const turns: ShellTurn[] = []
   const waitingOn = pendingConfirm(messages)
@@ -200,11 +293,20 @@ export function buildTurns(
     const reply = next && next.role === 'assistant' ? next : null
     const isLast = reply !== null && reply === messages[messages.length - 1]
     const calls = reply?.tool_calls ?? []
+    // The turn that ended on a pause keeps the plan the stream drew, so the
+    // plan doesn't vanish the moment its question appears.
+    const kept = held !== null && isLast && reply !== null && held.paused !== null && held.ended?.message_id === reply.id ? held : null
+    const pause = kept ? streamPause(kept) : null
+    const steps = kept ? streamSteps(kept) : calls.map((call) => stepFrom(call, isLast && waitingOn !== null))
     turns.push({
       key: `m${m.id}`,
       said: orphan ? '' : (m.content ?? ''),
       note: !orphan && reply === null,
-      steps: calls.map((call) => stepFrom(call, isLast && waitingOn !== null)),
+      ack: kept?.activity?.ack ?? null,
+      resumedNote: kept ? streamResumedNote(kept) : null,
+      steps,
+      pause,
+      announce: kept ? announceFor(steps, pause) : null,
       receipts: calls.flatMap((call) => {
         const app = appFromTool(call.tool)
           ? call.tool.slice(4)
@@ -223,14 +325,29 @@ export function buildTurns(
     if (reply && !orphan) i++
   }
   if (pendingText !== null && stream !== null && (stream.steps.length > 0 || stream.plan !== null)) {
-    turns.push({ key: 'pending', said: pendingText, note: false, steps: streamSteps(stream), receipts: streamReceipts(stream), reply: null, stopReason: null, live: true })
+    const steps = streamSteps(stream)
+    const pause = streamPause(stream)
+    turns.push({
+      key: 'pending',
+      said: pendingText,
+      note: false,
+      ack: stream.activity?.ack ?? activity?.ack ?? null,
+      resumedNote: streamResumedNote(stream),
+      steps,
+      receipts: streamReceipts(stream),
+      pause,
+      announce: announceFor(steps, pause),
+      reply: null,
+      stopReason: null,
+      live: true,
+    })
   } else if (pendingText !== null) {
     const steps: ShellTurn['steps'] = []
     if (activity?.kind === 'tool' && activity.tool) {
       const step = stepFrom({ tool: activity.tool, arguments: {}, error: null }, false)
       steps.push({ ...step, state: 'run', text: activityLabel(activity).replace(/…$/, '') })
     }
-    turns.push({ key: 'pending', said: pendingText, note: false, steps, receipts: [], reply: null, stopReason: null, live: true })
+    turns.push({ key: 'pending', said: pendingText, note: false, ack: activity?.ack ?? null, resumedNote: null, steps, receipts: [], pause: null, announce: null, reply: null, stopReason: null, live: true })
   }
   return turns
 }

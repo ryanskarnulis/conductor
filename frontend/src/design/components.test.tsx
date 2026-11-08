@@ -57,6 +57,23 @@ describe('design system components', () => {
     expect(list).toHaveTextContent('askPCCadd taskwaiting on you')
   })
 
+  it('shows a ref dashed until it is filled, and says so in words', () => {
+    const { rerender } = render(
+      <PlanSteps steps={[{ kind: 'ask', app: 'PCC', text: 'sort {s1}', state: 'queued', parts: [{ text: 'sort ' }, { ref: 's1', filled: null }] }]} />,
+    )
+    const ref = screen.getByText('what step 1 finds').closest('.cd-ref')
+    expect(ref).toHaveAttribute('data-filled', 'false')
+    expect(screen.getByText('{s1}')).toHaveAttribute('aria-hidden', 'true')
+    rerender(<PlanSteps steps={[{ kind: 'ask', app: 'PCC', text: 'sort “Honey”', state: 'queued', parts: [{ text: 'sort ' }, { ref: 's1', filled: '“Honey”' }] }]} />)
+    expect(screen.getByText('“Honey”')).toHaveAttribute('data-filled', 'true')
+    expect(screen.queryByText('what step 1 finds')).not.toBeInTheDocument()
+  })
+
+  it('disables a question’s choices while the turn is busy', () => {
+    render(<QuestionCard question="Which?" choices={[{ label: 'A' }]} onChoose={vi.fn()} disabled />)
+    expect(screen.getByRole('button', { name: 'A' })).toBeDisabled()
+  })
+
   it('shows Undo only when a receipt has a handle and a handler', () => {
     const onUndo = vi.fn()
     render(

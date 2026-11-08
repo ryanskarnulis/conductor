@@ -10,14 +10,16 @@ export type StrandState = 'queued' | 'run' | 'job' | 'wait' | 'done' | 'failed'
 
 export interface SceneState {
   pres: 'idle' | 'listen' | 'think' | 'work' | 'wait' | 'speak'
-  strands: Record<string, { state: StrandState; since: number }>
+  /** `k` is the strand's place on the plan, so queued strands reach out one after another. */
+  strands: Record<string, { state: StrandState; since: number; k?: number }>
   recall: { state: 'run' | 'done'; since: number } | null
   job: { n: number; of: number; app: string } | null
   confirm: { app: string } | null
   lastStart: { app: string; t: number } | null
   lastReceipt: { app: string; t: number } | null
-  lastFail: null
-  steps: Record<string, never>
+  lastFail: { app: string; t: number } | null
+  /** The apps whose step failed, which is what Glitch reads to glitch. */
+  steps: Record<string, { state: 'failed' }>
   screen: boolean
   /** Changes whenever anything visible changes: the reduced-motion scene redraws on it. */
   idx: number
@@ -62,16 +64,23 @@ export function nextSceneState(prev: SceneState | null, latest: ShellTurn | null
   const strands: SceneState['strands'] = {}
   let lastStart: SceneState['lastStart'] = prev?.lastStart ?? null
   let lastReceipt: SceneState['lastReceipt'] = prev?.lastReceipt ?? null
+  let lastFail: SceneState['lastFail'] = prev?.lastFail ?? null
+  const failed: SceneState['steps'] = {}
   for (const step of latest?.steps ?? []) {
     const app = step.appKey
     if (!app || !(WEB_APPS as readonly string[]).includes(app)) continue
     const state = strandFor(step.state)
     if (!state) continue
+    // A step still queued never dims a strand an earlier step already lit:
+    // the strand shows the latest step that has really begun.
+    if (state === 'queued' && strands[app] && strands[app].state !== 'queued') continue
     const before = prev?.strands[app]
     const since = before && before.state === state ? before.since : now
-    strands[app] = { state, since }
+    strands[app] = state === 'queued' ? { state, since, k: Object.keys(strands).length } : { state, since }
+    if (state === 'failed') failed[app] = { state: 'failed' }
     if (since === now && state === 'run') lastStart = { app, t: now }
     if (since === now && (state === 'done' || state === 'failed')) lastReceipt = { app, t: now }
+    if (since === now && state === 'failed') lastFail = { app, t: now }
   }
   const pres = PRES[presence]
   const changed =
@@ -88,8 +97,8 @@ export function nextSceneState(prev: SceneState | null, latest: ShellTurn | null
     confirm: confirmApp ? { app: confirmApp } : null,
     lastStart,
     lastReceipt,
-    lastFail: null,
-    steps: {},
+    lastFail,
+    steps: failed,
     screen: true,
     idx: (prev?.idx ?? 0) + (changed ? 1 : 0),
   }

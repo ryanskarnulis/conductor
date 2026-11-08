@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cancelTurn, getConversation, getTurnActivity, listConversations, postMessage } from '../../api/agent'
 import { getWorklist } from '../../api/sort'
 import type { AgentMessage, ConversationDetail } from '../../types/agent'
@@ -20,6 +20,7 @@ vi.mock('../../api/agent', () => ({
   getTurnActivity: vi.fn(),
   listConversations: vi.fn(),
   postMessage: vi.fn(),
+  turnEventsUrl: (id: number) => `/api/agent/conversations/${id}/events`,
 }))
 
 const mockList = vi.mocked(listConversations)
@@ -473,5 +474,94 @@ describe('AgentPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/Rate limited/)
+  })
+})
+
+/** A stand-in for the browser's EventSource: the test plays the server. */
+class FakeEventSource {
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
+  static readonly CLOSED = 2
+  static instances: FakeEventSource[] = []
+  readyState = FakeEventSource.CONNECTING
+  onerror: ((event: Event) => void) | null = null
+  private listeners = new Map<string, ((event: MessageEvent<string>) => void)[]>()
+  constructor() {
+    FakeEventSource.instances.push(this)
+  }
+  addEventListener(name: string, listener: (event: MessageEvent<string>) => void) {
+    this.listeners.set(name, [...(this.listeners.get(name) ?? []), listener])
+  }
+  close() {
+    this.readyState = FakeEventSource.CLOSED
+  }
+  emit(name: string, data: unknown, id: number) {
+    this.readyState = FakeEventSource.OPEN
+    const event = new MessageEvent(name, { data: JSON.stringify(data), lastEventId: String(id) })
+    for (const listener of this.listeners.get(name) ?? []) listener(event)
+  }
+}
+
+describe('AgentPage: the live plan view (#89)', () => {
+  beforeEach(() => {
+    FakeEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  const beat = { kind: 'model', tool: null, iteration: 1, ack: 'On it: one question first, then PCC.', elapsed_seconds: 0.3 }
+  const plan = {
+    steps: [
+      { id: 's1', do: 'ask_user', question: 'Which dentist task?', options: ['Dentist appointment', 'Book dentist'] },
+      { id: 's2', do: 'ask', app: 'tasks', request: 'move {s1} to Monday', destructive: false },
+    ],
+    start: 0,
+  }
+
+  it('draws the plan beside the ack, keeps it through the question, and a tap answers the same plan', async () => {
+    let resolveRun: (value: never) => void = () => {}
+    mockPost.mockImplementationOnce(() => new Promise((resolve) => (resolveRun = resolve as (value: never) => void)))
+    mockGet.mockResolvedValue({ ...detail, messages: [] })
+    renderAt('/c/1')
+    await screen.findByLabelText('Message conductor')
+
+    fireEvent.change(screen.getByLabelText('Message conductor'), { target: { value: 'move the dentist thing to Monday' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await screen.findByText('move the dentist thing to Monday')
+    const es = FakeEventSource.instances.at(-1)!
+
+    act(() => {
+      es.emit('turn_started', beat, 1)
+      es.emit('plan', plan, 2)
+    })
+    expect(screen.getByText('On it: one question first, then PCC.')).toBeInTheDocument()
+    const steps = screen.getByRole('list', { name: 'Plan steps' })
+    expect(steps).toHaveTextContent('ask_userconductorWhich dentist task?queued')
+    // {s1} is a dashed ref, written in words for a reader.
+    expect(within(steps).getByText('what step 1 finds')).toBeInTheDocument()
+
+    act(() => es.emit('paused', { reason: 'ask_user', question: 'Which dentist task? (Dentist appointment / Book dentist)', app: null, step: 's1' }, 3))
+    // While the turn is still wrapping up, the card is there but not yet tappable.
+    expect(screen.getByRole('button', { name: 'Book dentist' })).toBeDisabled()
+
+    const asked: ConversationDetail = {
+      ...detail,
+      messages: [
+        message({ id: 10, content: 'move the dentist thing to Monday' }),
+        message({ id: 11, role: 'assistant', content: 'Which dentist task? (Dentist appointment / Book dentist)', stop_reason: 'completed' }),
+      ],
+    }
+    mockGet.mockResolvedValue(asked)
+    act(() => es.emit('turn_ended', { stop_reason: 'completed', message_id: 11 }, 4))
+    resolveRun(undefined as never)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Dentist appointment' })).toBeEnabled())
+    // The plan didn't vanish when the turn ended; the question waits on you.
+    expect(screen.getByRole('list', { name: 'Plan steps' })).toHaveTextContent('waiting on you')
+    expect(screen.getAllByRole('status').map((el) => el.textContent)).toContain('Waiting on you')
+
+    mockPost.mockReturnValue(new Promise(() => {}))
+    fireEvent.click(screen.getByRole('button', { name: 'Book dentist' }))
+    expect(mockPost).toHaveBeenLastCalledWith(1, 'Book dentist')
   })
 })

@@ -195,7 +195,8 @@ def stream_turn_events(
     none), then each event as it is published: ``turn_started``, ``activity``
     (the poll's beat), ``plan`` (the validated plan's steps and where this turn
     starts in it), ``step_started``, ``receipt`` (the step as the ledger
-    journals it), ``paused`` and ``turn_ended`` (after the ledger committed
+    journals it), ``paused``, ``resumed`` (a turn picking up a plan that was
+    waiting on the person) and ``turn_ended`` (after the ledger committed
     the turn), each with a rising ``id``. A quiet stream gets a heartbeat
     comment. The stream ends after ``turn_ended``, or when no turn begins in
     time; a reconnect starts over from a snapshot. 404s for an unknown
