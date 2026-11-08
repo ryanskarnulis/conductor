@@ -697,3 +697,52 @@ Then `ref` and `memory` at n=20, against main's n=20 (#122's investigation):
   differences are sampling. `memory-caribou`'s misses are `look:music`
   (7/20), and `ref-ambiguous` asks tasks instead of asking the person
   (15/20). Both are planner-side follow-ups.
+
+### Memory you can see (#81, 2026-11-08)
+
+"Remember …", "what do you know about me?" and "forget that" are asks to
+`memory`, conductor's own app: one more `ask` enum value and one planner-prompt
+line after the fleet's apps. Saved facts are in State. Compiler on,
+gemma-4-12b, n=5.
+
+Session evals, gate tier. M1 and M2 are new and gated:
+
+| scenario | this change |
+|---|---|
+| S1, S2, S2r, S4, S5, S6, S7, S8, S9 | 5/5 each |
+| S16 | 4/5 (the recap left out the task's name once, as in #72) |
+| **M1** remember, then another day "what day do I sort music?" | **5/5** |
+| **M2** remember, "forget that", then another day "where is the spare key?" | **5/5** |
+
+- M1's later turn compiled to `recall` 5/5 and found the remember turn; the
+  fact was also in State. M2's later turn declined or said it didn't know 5/5:
+  nothing in recall or State still held it.
+- Claims were 52/52 backed (memory's saves count as creates, its forgets as
+  trashes). No infra misses.
+
+Plan-level evals, the shipped line, against main the same day:
+
+| group | floor | main | this change |
+|---|---|---|---|
+| golden | 0.8 | 96/105 | 88/105 |
+| cross | 0.8 | — | 35/35 |
+| ref | 0.85 | 17/20 | 17/20 |
+| control | 0.8 | — | 20/25 |
+| memory | 0.8 | 7/10 | 25/30 |
+| knowledge | 0.65 | — | 15/15 |
+| hard | 0.5 | — | 5/5 |
+| self | 0.55 | 10/15 | 7/15 |
+| holdout | 0.85 | 48/50 | 44/50 |
+| long | 0.7 | — | 38/40 |
+
+- Every group passed its gate. The new memory cases (remember, about-me,
+  forget-that, forget-named) were 20/20.
+- Regressions to watch: `ho-recall` ("what do you remember about the fence
+  project?") went from 5/5 `recall` to 0/5, asking tasks; `local-capabilities`
+  went from 4/5 to 0/5, filed as `knowledge` (the speaker's about-you check
+  still answers it from the facts). Two other wordings of the memory line
+  didn't fix `ho-recall`, and one lost "what do you know about me?".
+- A fact used in another app's request ("a task for my music sorting day")
+  was 0/5 on all three wordings: the planner passes the person's words
+  through, as the prompt tells it to. That case was dropped; it's a planner
+  follow-up.
