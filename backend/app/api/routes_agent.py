@@ -197,8 +197,11 @@ def stream_turn_events(
     starts in it), ``step_started``, ``receipt`` (the step as the ledger
     journals it), ``paused`` and ``turn_ended`` (after the ledger committed
     the turn), each with a rising ``id``. A quiet stream gets a heartbeat
-    comment. The stream ends after ``turn_ended``, or when no turn begins in
-    time; a reconnect starts over from a snapshot. 404s for an unknown
+    comment. A job the conversation started (#76) streams ``job`` events
+    (progress, then its end with the note's message id), and the stream stays
+    open past ``turn_ended`` until the last running job ends. The stream ends
+    after ``turn_ended``, or when no turn begins in time; a reconnect starts
+    over from a snapshot. 404s for an unknown
     conversation. Runs on the event loop and never holds a worker thread.
     """
     _get_or_404(db, conversation_id)

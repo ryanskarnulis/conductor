@@ -20,9 +20,9 @@ keeps the conversation's running jobs (at most :data:`MAX_JOBS`), fed by the
 job watcher through :func:`publish_job`. Each change is a ``job`` event
 (status, ``done``/``total``; ``ended`` with the note's message id when it
 ends), a snapshot lists the running jobs (``jobs``, only when there are
-any), and a stream stays open past
-``turn_ended`` while one runs, ending after the last one's ``job`` event says
-it ended. With no running job a stream behaves exactly as before.
+any), and a stream stays open past ``turn_ended`` while one runs, ending
+after the last one's ``job`` event says it ended. With no running job a
+stream behaves exactly as before.
 
 Each turn also carries its :class:`~app.ai.stop.Stop` (#66): ``POST …/cancel``
 reaches the in-flight turn through here, and a fresh one per turn means a Stop
