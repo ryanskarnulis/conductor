@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tape — ten moments</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap">
+<style>
+body{margin:0;background:#0d0d0b}
+.sheet{width:7688px;min-height:2600px;box-sizing:border-box;padding:96px 64px;background:#0d0d0b;color:#efe9dc;font-family:"Space Grotesk",system-ui,sans-serif}
+.hd{display:flex;gap:64px;align-items:flex-end}
+.eyebrow{display:block;font-family:"JetBrains Mono",monospace;font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:#9a958a}
+.hd h1{margin:8px 0 0;font-weight:700;font-size:128px;letter-spacing:-.04em;line-height:.9}
+.lede{max-width:900px;font-size:21px;line-height:1.45;margin:0}
+.legend{display:flex;gap:12px;flex-wrap:wrap;margin-left:auto}
+.row{margin-top:96px}
+.rowh{margin:0 0 20px;font-weight:700;font-size:28px;letter-spacing:-.02em}
+.rowh span{font-family:"JetBrains Mono",monospace;font-weight:400;color:#9a958a;font-size:14px;margin-left:16px;letter-spacing:0}
+.frames{display:flex;gap:40px;align-items:flex-start}
+.col{margin:0;display:flex;flex-direction:column;gap:12px}
+figcaption{font-size:16px}
+figcaption b{font-family:"JetBrains Mono",monospace;color:#ff7a45;margin-right:8px}
+.f{box-sizing:border-box;background:#0d0d0b;border:1.5px solid #3a3832;overflow:hidden;display:flex;flex-direction:column}
+.f-desktop{width:720px;height:450px}
+.f-phone{width:300px;height:650px;border-radius:30px}
+.f-wall{width:720px;height:405px}
+.v-voice{background:#000}
+.pres{flex:none;height:38px;display:flex;align-items:center;gap:12px;padding:0 18px;border-bottom:1px solid #2a2925}
+.f-phone .pres{height:52px;padding:0 22px}
+.f-wall .pres{height:48px;padding:0 28px}
+.pw{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#ff7a45;min-width:92px}
+.f-wall .pw{font-size:14px;min-width:140px}
+.pres svg{flex:1;height:14px}
+.tape{flex:1;min-height:0;overflow:hidden;padding:16px 18px 12px;display:flex;flex-direction:column;gap:9px}
+.f-phone .tape{padding:16px 18px 18px}
+.f-wall .tape{padding:22px 28px 16px;gap:12px}
+.ln{display:grid;grid-template-columns:62px 1fr auto;gap:10px;align-items:baseline}
+.f-phone .ln{grid-template-columns:1fr auto}
+.f-phone .ln .lab{grid-column:1 / -1;margin-bottom:-6px}
+.f-wall .ln{grid-template-columns:96px 1fr auto;gap:14px}
+.lab{font-family:"JetBrains Mono",monospace;font-size:9.5px;color:#9a958a;text-transform:uppercase;letter-spacing:.06em}
+.f-wall .lab{font-size:12px}
+.tx{min-width:0}
+.said .tx{font-size:21px;font-weight:500;letter-spacing:-.02em;line-height:1.15}
+.f-phone .said .tx{font-size:19px}
+.f-wall .said .tx{font-size:30px}
+.ack .tx{color:#9a958a;font-size:13px}
+.f-wall .ack{display:none}
+.step .tx{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.f-wall .step .tx{font-size:22px}
+.step .tx i{font-style:normal;color:#9a958a;font-weight:400}
+.f-wall .step .tx i{display:none}
+.stamp{font-family:"JetBrains Mono",monospace;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;white-space:nowrap;position:relative}
+.f-wall .stamp{font-size:14px;padding:3px 10px}
+.queued .stamp{color:#9a958a;border:1.5px dashed #6b675f}
+.run .stamp,.job .stamp{color:#ff7a45;border:1.5px solid #ff7a45}
+.run .stamp::after,.job .stamp::after{content:"";position:absolute;left:0;bottom:-5px;height:2px;width:100%;background:#ff7a45;transform-origin:left;animation:sweep 1.2s ease-in-out infinite}
+.wait .stamp{color:#0d0d0b;background:#ffd166;border:1.5px solid #ffd166}
+.done .stamp{color:#0d0d0b;background:#efe9dc;border:1.5px solid #efe9dc}
+.failed .stamp{color:#ff8a8a;border:1.5px solid #ff8a8a}
+.cancelled .stamp{color:#9a958a;border:1.5px solid #6b675f;text-decoration:line-through}
+.queued .tx{color:#9a958a}
+.rc .tx{font-size:12.5px;line-height:1.4}
+.f-wall .rc .tx{font-size:17px}
+.f-wall .rc .app2{display:none}
+.rc .tx b{font-weight:700}
+.rc .lab{color:#efe9dc}
+.mini{min-height:28px;padding:0 9px;border:1.5px solid #6b675f;background:transparent;color:#efe9dc;font:500 11px "Space Grotesk",sans-serif}
+.cf{border:1.5px solid #ffd166;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.cf .q{font-weight:700;font-size:16px;letter-spacing:-.01em}
+.f-wall .cf .q{font-size:24px}
+.cf ul{margin:0;padding-left:16px;font-size:12.5px}
+.cf .acts{display:flex;gap:8px}
+.yes{min-height:34px;padding:0 14px;border:1.5px solid #ffd166;background:#ffd166;color:#0d0d0b;font:700 13px "Space Grotesk",sans-serif}
+.no{min-height:34px;padding:0 14px;border:1.5px solid #efe9dc;background:transparent;color:#efe9dc;font:500 13px "Space Grotesk",sans-serif}
+.f-wall .yes,.f-wall .no{min-height:46px;font-size:17px}
+.jb .tx{font-size:12.5px}
+.f-wall .jb .tx{font-size:17px}
+.jb .bars{font-family:"JetBrains Mono",monospace;color:#ff7a45;letter-spacing:.04em}
+.nt{border:1.5px solid #efe9dc;padding:9px 12px;display:flex;flex-direction:column;gap:4px;font-size:13px}
+.f-wall .nt{font-size:19px}
+.nt b{font-family:"JetBrains Mono",monospace;font-size:10px;text-transform:uppercase;letter-spacing:.08em}
+.narr .tx{font-size:17px;line-height:1.25;letter-spacing:-.01em}
+.f-wall .narr .tx{font-size:25px}
+.narr .lab{color:#ff7a45}
+.vl .tx{font-size:13px}
+.vl.conductor .tx{font-size:16px;font-weight:500}
+.vl.plan .tx{font-family:"JetBrains Mono",monospace;color:#9a958a;font-size:11.5px}
+.vl.cue .tx{color:#9a958a;font-style:italic}
+.f-wall .vl .tx{font-size:18px}
+.foot{margin-top:auto;font-family:"JetBrains Mono",monospace;font-size:9.5px;color:#9a958a;border-top:1px solid #2a2925;padding-top:7px}
+.f-wall .foot{font-size:12px}
+.chip{font-family:"JetBrains Mono",monospace;font-size:13px;font-weight:700;text-transform:uppercase;padding:4px 10px}
+.chip.queued{color:#9a958a;border:1.5px dashed #6b675f}
+.chip.run{color:#ff7a45;border:1.5px solid #ff7a45}
+.chip.wait{color:#0d0d0b;background:#ffd166}
+.chip.done{color:#0d0d0b;background:#efe9dc}
+.chip.failed{color:#ff8a8a;border:1.5px solid #ff8a8a}
+.chip.cancelled{color:#9a958a;border:1.5px solid #6b675f;text-decoration:line-through}
+/* presence line */
+.pl rect{fill:#efe9dc}
+.pl .b{transform-box:fill-box;transform-origin:center;transform:scaleY(.1)}
+.p-listen .b{fill:#ff7a45;animation:vu .5s ease-in-out infinite alternate}
+.p-listen .b.h1{transform:scaleY(.85)}
+.p-listen .b.h2{animation-delay:.12s;transform:scaleY(.6)}
+.p-listen .b.h3{animation-delay:.25s;transform:scaleY(.35)}
+.pl .scan{opacity:0;fill:#ff7a45}
+.p-think .scan,.p-work .scan{opacity:1;animation:scan 1.4s ease-in-out infinite alternate}
+.p-work .scan{animation-duration:2.4s}
+.p-idle .caret{animation:blink 1.6s steps(1) infinite}
+.p-listen .caret,.p-think .caret,.p-work .caret{opacity:0}
+.p-speak .b{transform:scaleY(.25)}
+.p-speak .b.h1{transform:scaleY(.5)}
+.p-wait .caret{fill:#ffd166}
+@keyframes vu{from{transform:scaleY(.15)}to{transform:scaleY(1)}}
+@keyframes scan{from{transform:translateX(0)}to{transform:translateX(370px)}}
+@keyframes blink{0%{opacity:1}50%{opacity:0}}
+@keyframes sweep{0%{transform:scaleX(0)}100%{transform:scaleX(1)}}
+@media (prefers-reduced-motion:reduce){*,*::after{animation:none !important}}
+</style>
+</helmet>
+<div class="sheet">
+<header class="hd">
+<div>
+<span class="eyebrow">Conductor · concept C · a language of its own</span>
+<h1>Tape</h1>
+</div>
+<p class="lede">No orb and no avatar. The screen is the ledger, set as type. Your words print in large letters, the compiled plan prints as numbered lines, and each line is stamped DONE only when its receipt is written. One signal color, and complete silence: the honesty rule is the whole visual idea.</p>
+<div class="legend" aria-label="Status words">
+<span class="chip queued">queued</span><span class="chip run">running</span><span class="chip wait">waiting on you</span><span class="chip done">done</span><span class="chip failed">failed</span><span class="chip cancelled">cancelled</span>
+</div>
+</header>
+<sc-for list="{{rows}}" as="s" hint-placeholder-count="3">
+<section class="row">
+<h2 class="rowh">{{s.label}}<span>{{s.size}}</span></h2>
+<div class="frames">
+<sc-for list="{{s.moments}}" as="m" hint-placeholder-count="10">
+<figure class="col">
+<figcaption><b>{{m.n}}</b>{{m.name}}</figcaption>
+<div class="f f-{{s.id}} v-{{m.id}}">
+<div class="pres">
+<span class="pw">{{m.presLabel}}</span>
+<svg class="pl p-{{m.pres}}" viewBox="0 0 400 24" preserveAspectRatio="none" role="img" aria-label="{{m.vizLabel}}">
+<rect class="b h1" x="2" y="0" width="4" height="24"></rect><rect class="b h2" x="22" y="0" width="4" height="24"></rect><rect class="b h3" x="42" y="0" width="4" height="24"></rect><rect class="b h1" x="62" y="0" width="4" height="24"></rect><rect class="b h2" x="82" y="0" width="4" height="24"></rect><rect class="b h3" x="102" y="0" width="4" height="24"></rect><rect class="b h1" x="122" y="0" width="4" height="24"></rect><rect class="b h2" x="142" y="0" width="4" height="24"></rect><rect class="b h3" x="162" y="0" width="4" height="24"></rect><rect class="b h1" x="182" y="0" width="4" height="24"></rect><rect class="b h2" x="202" y="0" width="4" height="24"></rect><rect class="b h3" x="222" y="0" width="4" height="24"></rect><rect class="b h1" x="242" y="0" width="4" height="24"></rect><rect class="b h2" x="262" y="0" width="4" height="24"></rect><rect class="b h3" x="282" y="0" width="4" height="24"></rect><rect class="b h1" x="302" y="0" width="4" height="24"></rect><rect class="b h2" x="322" y="0" width="4" height="24"></rect><rect class="b h3" x="342" y="0" width="4" height="24"></rect><rect class="b h1" x="362" y="0" width="4" height="24"></rect><rect class="b h2" x="382" y="0" width="4" height="24"></rect>
+<rect class="scan" x="0" y="0" width="30" height="24"></rect>
+<rect class="caret" x="0" y="0" width="10" height="24"></rect>
+</svg>
+</div>
+<div class="tape">
+<sc-if value="{{m.hasSaid}}" hint-placeholder-val="{{ true }}"><div class="ln said"><span class="lab">you</span><span class="tx">{{m.said}}</span><span></span></div></sc-if>
+<sc-if value="{{m.hasAck}}" hint-placeholder-val="{{ false }}"><div class="ln ack"><span class="lab">ack</span><span class="tx">{{m.ack}}</span><span></span></div></sc-if>
+<sc-for list="{{m.steps}}" as="p" hint-placeholder-count="3">
+<div class="ln step {{p.state}}"><span class="lab">{{p.n}} {{p.k}}</span><span class="tx">{{p.app}} <i>· {{p.text}}</i></span><span class="stamp">{{p.word}}</span></div>
+</sc-for>
+<sc-for list="{{m.receipts}}" as="r" hint-placeholder-count="1">
+<div class="ln rc"><span class="lab">receipt</span><span class="tx"><b>{{r.verb}}</b><span class="app2"> · {{r.app}}</span> · {{r.ent}}</span><sc-if value="{{r.undo}}" hint-placeholder-val="{{ false }}"><button class="mini" type="button">{{r.undo}}</button></sc-if></div>
+</sc-for>
+<sc-if value="{{m.hasConfirm}}" hint-placeholder-val="{{ false }}">
+<div class="cf" role="group" aria-label="Confirmation">
+<span class="q">{{m.confirm.q}}</span>
+<ul><sc-for list="{{m.confirm.items}}" as="it" hint-placeholder-count="3"><li>{{it.t}}</li></sc-for></ul>
+<div class="acts"><button class="yes" type="button">{{m.confirm.yes}}</button><button class="no" type="button">{{m.confirm.no}}</button></div>
+</div>
+</sc-if>
+<sc-for list="{{m.jobs}}" as="j" hint-placeholder-count="1">
+<div class="ln jb run"><span class="lab">job</span><span class="tx">{{j.app}} · {{j.t}} · <span class="bars">{{j.bars}}</span> {{j.n}} of {{j.of}}</span><span class="stamp">running</span></div>
+</sc-for>
+<sc-if value="{{m.hasNote}}" hint-placeholder-val="{{ false }}">
+<div class="nt"><b>{{m.note.head}}</b><span>{{m.note.body}}</span><div><button class="mini" type="button">Undo</button> <button class="mini" type="button">Open in music</button></div></div>
+</sc-if>
+<sc-if value="{{m.hasNarr}}" hint-placeholder-val="{{ false }}"><div class="ln narr"><span class="lab">conductor</span><span class="tx">{{m.narr}}</span><span></span></div></sc-if>
+<sc-for list="{{m.voice}}" as="v" hint-placeholder-count="0">
+<div class="ln vl {{v.w}}"><span class="lab">{{v.w}}</span><span class="tx">{{v.t}}</span><span></span></div>
+</sc-for>
+<div class="foot">{{m.foot}}</div>
+</div>
+</div>
+</figure>
+</sc-for>
+</div>
+</section>
+</sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":7688,"height":2600}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const W = { queued: 'queued', run: 'running', wait: 'waiting on you', done: 'done', job: 'running · job' };
+    const step = (k, app, text, state) => ({ k, app, text, state, word: W[state] });
+    const plan = (a, b, c) => [
+      step('recall', 'ledger', 'from Maya · an album · Oct 26 – Nov 1', a),
+      step('ask', 'music', 'download “Low Tide Atlas”', b),
+      step('ask', 'pcc', 'add task · Sat Nov 7', c),
+    ];
+    const R1 = { app: 'ledger', verb: 'Found', ent: '“Low Tide Atlas” — Kessler Row · from Maya, Thu Oct 29', undo: '' };
+    const R3 = { app: 'pcc', verb: 'Created', ent: 'Task #1287 “Listen to Low Tide Atlas” · Sat Nov 7', undo: 'Undo' };
+    const M = [
+      { id: 'idle', name: 'Idle presence', pres: 'idle', presLabel: 'idle',
+        foot: 'Nothing running · nothing waiting on you · last: 9:41 am, added a task' },
+      { id: 'listen', name: 'You speak · listening', pres: 'listen', presLabel: 'listening',
+        said: 'Find the album Maya sent last week, download it, and put it on my list for Saturday…',
+        foot: 'Words print as they are heard · say “stop” any time' },
+      { id: 'compile', name: 'Thinking · the plan compiles', pres: 'think', presLabel: 'compiling',
+        said: '…and put it on my list for Saturday.', ack: 'On it — checking last week, then asking music and PCC.',
+        steps: plan('queued', 'queued', 'queued'),
+        foot: 'Plan printed · 3 lines · none stamped yet' },
+      { id: 'run', name: 'Steps light as they run', pres: 'work', presLabel: 'working',
+        steps: plan('done', 'run', 'queued'), receipts: [R1],
+        foot: '1 of 3 stamped · music working · PCC queued' },
+      { id: 'speak', name: 'Receipts land · speaking', pres: 'speak', presLabel: 'speaking',
+        steps: plan('done', 'job', 'done'), receipts: [R1, R3],
+        narr: 'Found it — Low Tide Atlas by Kessler Row. It’s downloading now, and it’s on your list for Saturday.',
+        foot: '2 of 3 stamped · the download is a job, still running' },
+      { id: 'confirm', name: 'A confirmation', pres: 'wait', presLabel: 'waiting on you',
+        said: 'Clear out the finished garage tasks.',
+        steps: [step('look', 'pcc', 'Garage · done tasks', 'done'), step('confirm', 'you', 'delete 3 tasks', 'wait'), step('ask', 'pcc', 'delete 3 tasks', 'queued')],
+        confirm: { q: 'Delete 3 done tasks in Garage?', items: [{ t: 'Hang pegboard' }, { t: 'Sort screws' }, { t: 'Drop off old paint' }], yes: 'Delete 3', no: 'Keep them' },
+        foot: 'Paused · nothing deleted yet · undo stays available after' },
+      { id: 'job', name: 'A job runs in the background', pres: 'idle', presLabel: 'idle · 2 jobs',
+        jobs: [{ app: 'music', t: 'Download “Low Tide Atlas”', n: 4, of: 11 }, { app: 'music', t: 'Retag library', n: 112, of: 400 }],
+        foot: '2 jobs running · a note prints when each ends' },
+      { id: 'jobdone', name: 'The job ends · its note', pres: 'idle', presLabel: 'idle · 1 job',
+        note: { head: 'Finished · music · 6:12 pm', body: 'Low Tide Atlas — 11 tracks, now in Unsorted.' },
+        jobs: [{ app: 'music', t: 'Retag library', n: 260, of: 400 }],
+        foot: 'Download done (receipt) · retag still running' },
+      { id: 'recall', name: 'Recall from last week', pres: 'speak', presLabel: 'speaking',
+        said: 'What opening did I lose with last week?',
+        steps: [step('recall', 'ledger', 'chess games · Oct 26 – Nov 1', 'done')],
+        receipts: [{ app: 'ledger', verb: 'Recalled', ent: 'Tue Oct 27 · chess · lost with the Caro-Kann, resigned on move 31', undo: '' }],
+        narr: 'Last Tuesday — the Caro-Kann. You resigned on move 31.',
+        foot: 'Quoted from the ledger, Oct 27 · chess was not asked' },
+      { id: 'voice', name: 'Voice only, no screen', pres: 'speak', presLabel: 'speaking · no screen',
+        voice: [
+          { w: 'cue', t: 'no tones: the speaker’s light is the only cue' },
+          { w: 'you', t: 'What’s on for Saturday?' },
+          { w: 'plan', t: 'look(pcc) · 0.4 s' },
+          { w: 'conductor', t: 'Two things: listen to Low Tide Atlas, and the garage shelves.' },
+        ],
+        foot: 'The words are the interface · ≤2 sentences' },
+    ];
+    const bars = (n, of) => { const f = Math.round(n / of * 11); return '■'.repeat(f) + '□'.repeat(11 - f); };
+    const moments = M.map((m, i) => {
+      const steps = (m.steps || []).map((p, j) => Object.assign({}, p, { n: '0' + (j + 1) }));
+      const running = steps.filter(p => p.state === 'run' || p.state === 'job').map(p => p.app);
+      return Object.assign({}, m, {
+        n: String(i + 1).padStart(2, '0'), steps,
+        receipts: m.receipts || [], voice: m.voice || [],
+        jobs: (m.jobs || []).map(j => Object.assign({}, j, { bars: bars(j.n, j.of) })),
+        confirm: m.confirm || { q: '', items: [], yes: '', no: '' }, note: m.note || { head: '', body: '' },
+        hasSaid: !!m.said, hasAck: !!m.ack, hasConfirm: !!m.confirm, hasNote: !!m.note, hasNarr: !!m.narr,
+        vizLabel: 'Conductor ' + m.presLabel + (running.length ? '. Running: ' + running.join(', ') + '.' : '.'),
+      });
+    });
+    const rows = [
+      { id: 'desktop', label: 'Desktop', size: '1440 × 900, shown at 50%' },
+      { id: 'phone', label: 'Phone', size: '390 × 844, shown at 77%' },
+      { id: 'wall', label: 'Room / wall', size: '1920 × 1080, shown at 37.5% · type sized to read from 4 m' },
+    ].map(r => Object.assign({}, r, { moments }));
+    return { rows };
+  }
+}
+</script>
+</body>
+</html>

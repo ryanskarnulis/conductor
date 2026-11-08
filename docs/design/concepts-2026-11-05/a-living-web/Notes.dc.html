@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Living Web — motion, sound and rules</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&amp;family=JetBrains+Mono:wght@400&amp;display=swap">
+<style>
+body{margin:0;background:#0a0c12}
+h2{margin:0 0 12px;font-weight:300;font-size:15px;letter-spacing:.32em;text-transform:uppercase;color:#9be7ff}
+p{margin:0 0 10px}
+ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+b{font-weight:600;color:#e8edf5}
+code{font-family:"JetBrains Mono",monospace;font-size:13px;color:#c9b2f4}
+td,th{padding:7px 10px;border-bottom:1px solid rgba(199,211,228,.14);text-align:left;vertical-align:top}
+th{font-weight:600;color:#939db0;font-size:12px;letter-spacing:.14em;text-transform:uppercase}
+</style>
+</helmet>
+<div style="width: 1200px; height: 1400px; box-sizing: border-box; padding: 64px; background: #0a0c12; color: #c7d3e4; font-family: Inter, system-ui, sans-serif; font-size: 15px; line-height: 1.55; display: flex; flex-direction: column; gap: 28px">
+<div>
+<span style="font-size: 12px; letter-spacing: .32em; text-transform: uppercase; color: #939db0">Concept A · notes</span>
+<h1 style="margin: 6px 0 0; font-weight: 300; font-size: 44px; letter-spacing: .38em; text-transform: uppercase; color: #e8edf5">Living Web</h1>
+<p style="margin-top: 14px; font-size: 18px; font-weight: 300; max-width: 900px">What makes it distinct: it is Night-Silk you already own, brought to life. The launcher’s web becomes conductor’s body. Apps are anchor points on the rim, and every plan is visible as thread. It is the calmest of the three and the cheapest to build, since it reuses <code>silk.css</code> as is.</p>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px 40px">
+<section>
+<h2>Motion</h2>
+<ul>
+<li><b>Idle:</b> the hub breathes on a 6 s cycle. Nothing else moves.</li>
+<li><b>Listening:</b> three rings around the hub tremble with your voice level (mic RMS, smoothed over 80 ms).</li>
+<li><b>Thinking:</b> a violet dashed ring spins, as if spinning the plan. When the plan validates, its strands draw out to each app at 300 ms each, as dotted queued thread.</li>
+<li><b>Running:</b> dashes flow outward along the strand and stop at 80% of the way. They never touch the app.</li>
+<li><b>Receipt:</b> the last 20% of the strand draws in 180 ms, the anchor fills green and the receipt row slides in. All three happen on the same event.</li>
+<li><b>Speaking:</b> rings ripple from the hub, paced by the TTS audio envelope.</li>
+<li><b>Waiting on you:</b> the hub and anchor turn amber and pulse slowly (1.6 s).</li>
+</ul>
+</section>
+<section>
+<h2>Sound: yes, quiet</h2>
+<ul>
+<li>Each app is a tuned silk string: PCC D, music A, chess E, ledger low G.</li>
+<li>A receipt plucks its app’s string once. Queued and running steps make no sound.</li>
+<li>Earcons: a rising pluck when the mic opens, and a falling one when it closes.</li>
+<li>A confirmation sounds two soft amber plucks, once, without repeating.</li>
+<li>Default: on in room mode, off on desktop and phone. There is one mute, and it is remembered.</li>
+</ul>
+</section>
+<section>
+<h2>Honesty: the look follows the ledger</h2>
+<table style="border-collapse: collapse; width: 100%; font-size: 14px">
+<tr><th>Ledger state</th><th>Strand</th><th>Anchor</th></tr>
+<tr><td>queued</td><td>dotted, still</td><td>dashed ring</td></tr>
+<tr><td>running</td><td>flowing dashes, stops at 80%</td><td>cyan ring</td></tr>
+<tr><td>waiting on you</td><td>amber dashes</td><td>amber pulse</td></tr>
+<tr><td>done (receipt)</td><td>solid green, all the way</td><td>filled knot</td></tr>
+<tr><td>failed</td><td>strand frays (gap at 80%)</td><td>rose cross</td></tr>
+<tr><td>cancelled</td><td>strand fades to grey</td><td>hollow, struck</td></tr>
+</table>
+<p style="margin-top: 10px">Only a receipt event can draw the last 20% of a strand. A job that is still running keeps its strand open.</p>
+</section>
+<section>
+<h2>Reduced motion and screen readers</h2>
+<ul>
+<li>Reduced motion stops every loop. States stay readable from shape and word alone: dotted, dashed, solid, filled. The prototype has a toggle to preview this.</li>
+<li>Every step row carries its status word, so color is never the only signal.</li>
+<li>The web is one <code>role="img"</code> whose label is generated from the ledger (“music running, PCC queued”).</li>
+<li>Receipts, confirmations and finished notes are announced through one polite live region. Streaming dashes and progress ticks are never announced.</li>
+<li>Text holds AA contrast using Night-Silk’s checked tokens.</li>
+</ul>
+</section>
+<section>
+<h2>Room / wall mode</h2>
+<ul>
+<li>The web fills the left half. The right half shows only what you said, step words and the narration, at about 3× size.</li>
+<li>Step details are hidden. The words “running” and “done” are readable from 4 m.</li>
+<li>A finished note stays for 20 s, then folds into the web as a knot.</li>
+</ul>
+</section>
+<section>
+<h2>Budgets: first render ≤1 s, 60 fps</h2>
+<ul>
+<li>Inline SVG, about 40 nodes per surface. No WebGL and no canvas. Fonts are Inter plus a mono face, both already in the gateway.</li>
+<li>Animations use only <code>transform</code>, <code>opacity</code> and <code>stroke-dashoffset</code>. Nothing animates layout.</li>
+<li>The view is a pure function of ledger events from the push channel (#38). The first paint shows the current ledger snapshot, with no intro animation.</li>
+</ul>
+</section>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":1400}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

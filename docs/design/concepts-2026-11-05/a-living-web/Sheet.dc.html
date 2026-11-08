@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Living Web — ten moments</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&amp;family=JetBrains+Mono:wght@400;600&amp;display=swap">
+<style>
+body{margin:0;background:#0a0c12}
+.sheet{width:7688px;min-height:2600px;box-sizing:border-box;padding:96px 64px;background:radial-gradient(ellipse at 20% 0%,#131726 0%,#0a0c12 55%);color:#e8edf5;font-family:Inter,system-ui,sans-serif}
+.hd{display:flex;gap:64px;align-items:flex-end}
+.eyebrow{display:block;font-size:14px;letter-spacing:.32em;text-transform:uppercase;color:#939db0}
+.hd h1{margin:8px 0 0;font-weight:300;font-size:72px;letter-spacing:.38em;text-transform:uppercase}
+.lede{max-width:880px;font-size:20px;font-weight:300;line-height:1.5;color:#c7d3e4;margin:0}
+.legend{display:flex;gap:10px;flex-wrap:wrap;margin-left:auto}
+.row{margin-top:96px}
+.rowh{margin:0 0 20px;font-weight:300;text-transform:uppercase;letter-spacing:.3em;font-size:22px;color:#e8edf5}
+.rowh span{color:#939db0;letter-spacing:.06em;text-transform:none;font-size:15px;margin-left:16px}
+.frames{display:flex;gap:40px;align-items:flex-start}
+.col{margin:0;display:flex;flex-direction:column;gap:12px}
+figcaption{font-size:15px;color:#939db0}
+figcaption b{color:#9be7ff;font-weight:600;margin-right:8px;font-family:"JetBrains Mono",monospace}
+.f{position:relative;box-sizing:border-box;background:#0a0c12;border:1px solid rgba(199,211,228,.22);border-radius:12px;overflow:hidden;display:grid}
+.f-desktop{width:720px;height:450px;grid-template-columns:420px 300px}
+.f-phone{width:300px;height:650px;grid-template-rows:250px 400px;border-radius:30px}
+.f-wall{width:720px;height:405px;grid-template-columns:390px 330px;border-radius:4px}
+.viz{position:relative;background:radial-gradient(circle at 50% 50%,#131726,#0a0c12 70%);min-height:0}
+.viz svg{width:100%;height:100%;display:block}
+.v-voice .viz{background:#06070b}
+.side{padding:18px 18px 14px 4px;display:flex;flex-direction:column;gap:8px;font-size:12px;line-height:1.45;overflow:hidden;min-width:0;min-height:0}
+.f-phone .side{padding:4px 16px 18px;font-size:11.5px}
+.f-wall .side{font-size:15px;padding:26px 26px 18px 0;gap:12px}
+.who{display:block;font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;color:#939db0;margin-bottom:2px}
+.said{margin:0;font-size:14px;font-weight:300}
+.f-wall .said{font-size:22px}
+.ack{margin:0;color:#9be7ff}
+.steps{display:flex;flex-direction:column;gap:4px}
+.step{display:grid;grid-template-columns:44px 42px 1fr auto;gap:6px;align-items:center;padding:4px 8px;border-radius:8px;border:1px solid rgba(199,211,228,.14)}
+.f-phone .step{grid-template-columns:40px 1fr auto}
+.f-phone .step .app{display:none}
+.f-wall .step{grid-template-columns:70px 1fr auto;padding:6px 10px}
+.f-wall .step .t{display:none}
+.k{font-family:"JetBrains Mono",monospace;font-size:10.5px;color:#c9b2f4}
+.f-wall .k{font-size:14px}
+.app{font-size:10.5px;color:#939db0}
+.t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w{font-size:10px;padding:1px 7px;border-radius:999px;border:1px solid;white-space:nowrap}
+.f-wall .w{font-size:13px;padding:2px 10px}
+.queued .w{color:#939db0;border-style:dashed}
+.run .w,.job .w{color:#9be7ff;background:rgba(155,231,255,.12)}
+.wait .w{color:#eec98a;background:rgba(238,201,138,.14)}
+.done .w{color:#0a0c12;background:#8fdcaa;border-color:#8fdcaa;font-weight:600}
+.step.done{border-color:rgba(143,220,170,.4)}
+.step.run,.step.job{border-color:rgba(155,231,255,.4)}
+.step.wait{border-color:rgba(238,201,138,.5)}
+.rc{display:flex;gap:8px;align-items:flex-start;padding:6px 9px;border-radius:9px;background:rgba(143,220,170,.08);border:1px solid rgba(143,220,170,.3)}
+.rc svg{flex:none;margin-top:4px}
+.rc b{color:#8fdcaa}
+.rc .ent{flex:1;min-width:0}
+.f-wall .rc .app2{display:none}
+.mini{min-height:26px;padding:0 9px;border-radius:7px;border:1px solid rgba(199,211,228,.3);background:transparent;color:#e8edf5;font:500 11px Inter,sans-serif}
+.cf{border:1px solid #eec98a;border-radius:12px;padding:10px 12px;background:rgba(238,201,138,.08);display:flex;flex-direction:column;gap:6px}
+.cf .q{font-weight:600;font-size:13px}
+.f-wall .cf .q{font-size:20px}
+.cf ul{margin:0;padding-left:16px;color:#c7d3e4}
+.cf .acts{display:flex;gap:8px}
+.yes{min-height:32px;padding:0 12px;border-radius:9px;border:1px solid #eec98a;background:#eec98a;color:#0a0c12;font:600 12px Inter,sans-serif}
+.no{min-height:32px;padding:0 12px;border-radius:9px;border:1px solid rgba(199,211,228,.4);background:transparent;color:#e8edf5;font:500 12px Inter,sans-serif}
+.f-wall .yes,.f-wall .no{min-height:44px;font-size:16px}
+.jb{padding:8px 10px;border-radius:10px;border:1px solid rgba(155,231,255,.35);background:rgba(155,231,255,.06);display:flex;flex-direction:column;gap:5px}
+.jb .r1{display:flex;justify-content:space-between;gap:6px}
+.jb .lbl2{color:#9be7ff;white-space:nowrap}
+progress{appearance:none;-webkit-appearance:none;width:100%;height:4px;border:0;border-radius:4px;background:rgba(199,211,228,.15);overflow:hidden}
+progress::-webkit-progress-bar{background:rgba(199,211,228,.15)}
+progress::-webkit-progress-value{background:#9be7ff}
+progress::-moz-progress-bar{background:#9be7ff}
+.nt{padding:9px 11px;border-radius:10px;border:1px solid #8fdcaa;background:rgba(143,220,170,.1);display:flex;flex-direction:column;gap:4px}
+.nt b{color:#8fdcaa}
+.f-wall .nt{font-size:18px}
+.narr{margin:0;font-size:14px;font-weight:300;line-height:1.45}
+.f-wall .narr{font-size:21px}
+.narr .who{color:#9be7ff}
+.vl{display:grid;grid-template-columns:72px 1fr;gap:8px;align-items:baseline}
+.vl .vk{font-size:9.5px;letter-spacing:.18em;text-transform:uppercase;color:#939db0}
+.vl.conductor .vt{color:#e8edf5;font-size:13px}
+.vl.earcon .vt{color:#c9b2f4;font-style:italic}
+.vl.plan .vt{font-family:"JetBrains Mono",monospace;color:#c9b2f4}
+.f-wall .vl .vt{font-size:16px}
+.foot{margin-top:auto;font-size:10.5px;color:#939db0;border-top:1px solid rgba(199,211,228,.12);padding-top:7px}
+.f-wall .foot{font-size:13px}
+.chip{font-size:13px;padding:4px 12px;border-radius:999px;border:1px solid}
+.chip.queued{color:#939db0;border-style:dashed}
+.chip.run{color:#9be7ff;background:rgba(155,231,255,.12)}
+.chip.wait{color:#eec98a;background:rgba(238,201,138,.14)}
+.chip.done{color:#0a0c12;background:#8fdcaa;border-color:#8fdcaa;font-weight:600}
+.chip.failed{color:#f28fa4;background:rgba(242,143,164,.14)}
+.chip.cancelled{color:#939db0;text-decoration:line-through}
+/* web */
+.web .spoke,.web .ring{stroke:rgba(199,211,228,.12);fill:none;stroke-width:.7}
+.web .base{stroke:rgba(199,211,228,.26);stroke-width:.9}
+.prog,.tip{fill:none;stroke-width:2.4;stroke-linecap:round;opacity:0}
+.prog.queued{opacity:1;stroke:rgba(199,211,228,.55);stroke-dasharray:1 6}
+.prog.run{opacity:1;stroke:#9be7ff;stroke-dasharray:4 7;animation:flow 1.1s linear infinite}
+.prog.wait{opacity:1;stroke:#eec98a;stroke-dasharray:2 5}
+.prog.done,.tip.done{opacity:1;stroke:#8fdcaa}
+.an{fill:#0f131d;stroke:rgba(199,211,228,.5);stroke-width:1.2;transform-box:fill-box;transform-origin:center}
+.an.queued{stroke-dasharray:2 3}
+.an.run{stroke:#9be7ff}
+.an.wait{stroke:#eec98a;fill:rgba(238,201,138,.25);animation:pulse 1.6s ease-in-out infinite}
+.an.done{fill:#8fdcaa;stroke:#8fdcaa}
+.lbl{fill:#939db0;font-size:11px;font-family:Inter,sans-serif;text-anchor:middle;letter-spacing:.18em;text-transform:uppercase}
+.hub{fill:#9be7ff;transform-box:fill-box;transform-origin:center}
+.halo{fill:rgba(155,231,255,.14)}
+.lr,.sp,.wv{fill:none;transform-box:fill-box;transform-origin:center;opacity:0}
+.lr{stroke:#9be7ff;stroke-width:1}
+.sp{stroke:#c9b2f4;stroke-width:1.4;stroke-dasharray:5 9}
+.wv{stroke:#9be7ff;stroke-width:1}
+.p-idle .hub{animation:breathe 6s ease-in-out infinite}
+.p-listen .lr{opacity:.6;animation:tremble .8s ease-in-out infinite alternate}
+.p-listen .lr.l2{animation-delay:.2s}.p-listen .lr.l3{animation-delay:.4s}
+.p-think .sp{opacity:1;animation:spin 3.6s linear infinite}
+.p-work .hub{animation:breathe 1.4s ease-in-out infinite}
+.p-speak .wv{opacity:.35;animation:emit 2.4s ease-out infinite}
+.p-speak .wv.w2{animation-delay:1.2s}
+.p-wait .hub{fill:#eec98a}
+.p-wait .halo{fill:rgba(238,201,138,.16)}
+.v-voice .web .ring,.v-voice .web .spoke,.v-voice .web .base,.v-voice .lbl,.v-voice .an{opacity:.25}
+@keyframes flow{to{stroke-dashoffset:-22}}
+@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
+@keyframes tremble{from{transform:scale(.94)}to{transform:scale(1.08)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes emit{from{transform:scale(1);opacity:.5}to{transform:scale(4.2);opacity:0}}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.3)}}
+@media (prefers-reduced-motion:reduce){*{animation:none !important}}
+</style>
+</helmet>
+<div class="sheet">
+<header class="hd">
+<div>
+<span class="eyebrow">Conductor · concept A · grows from Night-Silk</span>
+<h1>Living Web</h1>
+</div>
+<p class="lede">The fleet is a web and conductor is the spider at its center. A plan is thread spun out to the apps. A strand reaches its app only when that app’s receipt comes back; until then it stops short, dashed and moving.</p>
+<div class="legend" aria-label="Status words">
+<span class="chip queued">queued</span><span class="chip run">running</span><span class="chip wait">waiting on you</span><span class="chip done">done</span><span class="chip failed">failed</span><span class="chip cancelled">cancelled</span>
+</div>
+</header>
+<sc-for list="{{rows}}" as="s" hint-placeholder-count="3">
+<section class="row">
+<h2 class="rowh">{{s.label}}<span>{{s.size}}</span></h2>
+<div class="frames">
+<sc-for list="{{s.moments}}" as="m" hint-placeholder-count="10">
+<figure class="col">
+<figcaption><b>{{m.n}}</b>{{m.name}}</figcaption>
+<div class="f f-{{s.id}} v-{{m.id}}">
+<div class="viz">
+<svg class="web p-{{m.pres}}" viewBox="0 0 400 400" role="img" aria-label="{{m.vizLabel}}">
+<g aria-hidden="true">
+<polygon class="ring" points="260,200 252,230 230,252 200,260 170,252 148,230 140,200 148,170 170,148 200,140 230,148 252,170"></polygon>
+<polygon class="ring" points="305,200 291,252.5 252.5,291 200,305 147.5,291 109,252.5 95,200 109,147.5 147.5,109 200,95 252.5,109 291,147.5"></polygon>
+<polygon class="ring" points="350,200 330,275 275,330 200,350 125,330 70,275 50,200 70,125 125,70 200,50 275,70 330,125"></polygon>
+<path class="spoke" d="M200 200L390 200M200 200L364.5 295M200 200L295 364.5M200 200L200 390M200 200L105 364.5M200 200L35.5 295M200 200L10 200M200 200L35.5 105M200 200L105 35.5M200 200L200 10M200 200L295 35.5M200 200L364.5 105"></path>
+<line class="base" x1="200" y1="200" x2="70" y2="80"></line>
+<line class="base" x1="200" y1="200" x2="330" y2="80"></line>
+<line class="base" x1="200" y1="200" x2="335" y2="315"></line>
+<line class="base" x1="200" y1="200" x2="65" y2="320"></line>
+</g>
+<line class="prog {{m.st.pcc}}" x1="200" y1="200" x2="96" y2="104"></line>
+<line class="tip {{m.st.pcc}}" x1="96" y1="104" x2="70" y2="80"></line>
+<line class="prog {{m.st.music}}" x1="200" y1="200" x2="304" y2="104"></line>
+<line class="tip {{m.st.music}}" x1="304" y1="104" x2="330" y2="80"></line>
+<line class="prog {{m.st.chess}}" x1="200" y1="200" x2="308" y2="292"></line>
+<line class="tip {{m.st.chess}}" x1="308" y1="292" x2="335" y2="315"></line>
+<line class="prog {{m.st.mem}}" x1="200" y1="200" x2="92" y2="296"></line>
+<line class="tip {{m.st.mem}}" x1="92" y1="296" x2="65" y2="320"></line>
+<circle class="an {{m.st.pcc}}" cx="70" cy="80" r="8"></circle>
+<circle class="an {{m.st.music}}" cx="330" cy="80" r="8"></circle>
+<circle class="an {{m.st.chess}}" cx="335" cy="315" r="8"></circle>
+<circle class="an {{m.st.mem}}" cx="65" cy="320" r="8"></circle>
+<text class="lbl" x="70" y="60">PCC</text>
+<text class="lbl" x="330" y="60">music</text>
+<text class="lbl" x="335" y="344">chess</text>
+<text class="lbl" x="65" y="349">ledger</text>
+<circle class="lr" cx="200" cy="200" r="26"></circle>
+<circle class="lr l2" cx="200" cy="200" r="34"></circle>
+<circle class="lr l3" cx="200" cy="200" r="42"></circle>
+<circle class="sp" cx="200" cy="200" r="38"></circle>
+<circle class="wv" cx="200" cy="200" r="22"></circle>
+<circle class="wv w2" cx="200" cy="200" r="22"></circle>
+<circle class="halo" cx="200" cy="200" r="24"></circle>
+<circle class="hub" cx="200" cy="200" r="12"></circle>
+</svg>
+</div>
+<div class="side">
+<sc-if value="{{m.hasSaid}}" hint-placeholder-val="{{ true }}"><p class="said"><span class="who">You</span>{{m.said}}</p></sc-if>
+<sc-if value="{{m.hasAck}}" hint-placeholder-val="{{ false }}"><p class="ack">{{m.ack}}</p></sc-if>
+<sc-if value="{{m.hasSteps}}" hint-placeholder-val="{{ true }}">
+<div class="steps">
+<sc-for list="{{m.steps}}" as="p" hint-placeholder-count="3">
+<div class="step {{p.state}}"><span class="k">{{p.k}}</span><span class="app">{{p.app}}</span><span class="t">{{p.text}}</span><span class="w">{{p.word}}</span></div>
+</sc-for>
+</div>
+</sc-if>
+<sc-for list="{{m.receipts}}" as="r" hint-placeholder-count="1">
+<div class="rc"><svg width="8" height="8" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4.5" fill="#8fdcaa"></circle></svg><span class="ent"><b>{{r.verb}}</b><span class="app2"> · {{r.app}}</span> · {{r.ent}}</span><sc-if value="{{r.undo}}" hint-placeholder-val="{{ false }}"><button class="mini" type="button">{{r.undo}}</button></sc-if></div>
+</sc-for>
+<sc-if value="{{m.hasConfirm}}" hint-placeholder-val="{{ false }}">
+<div class="cf" role="group" aria-label="Confirmation">
+<span class="q">{{m.confirm.q}}</span>
+<ul><sc-for list="{{m.confirm.items}}" as="it" hint-placeholder-count="3"><li>{{it.t}}</li></sc-for></ul>
+<div class="acts"><button class="yes" type="button">{{m.confirm.yes}}</button><button class="no" type="button">{{m.confirm.no}}</button></div>
+</div>
+</sc-if>
+<sc-for list="{{m.jobs}}" as="j" hint-placeholder-count="1">
+<div class="jb"><div class="r1"><span><b>Job · {{j.app}}</b> · {{j.t}}</span><span class="lbl2">running</span></div><progress max="{{j.of}}" value="{{j.n}}" aria-label="{{j.t}} progress">{{j.n}} of {{j.of}}</progress><span>{{j.n}} of {{j.of}} {{j.unit}}</span></div>
+</sc-for>
+<sc-if value="{{m.hasNote}}" hint-placeholder-val="{{ false }}">
+<div class="nt"><b>{{m.note.head}}</b><span>{{m.note.body}}</span><div><button class="mini" type="button">Undo</button> <button class="mini" type="button">Open in music</button></div></div>
+</sc-if>
+<sc-if value="{{m.hasNarr}}" hint-placeholder-val="{{ false }}"><p class="narr"><span class="who">Conductor</span>{{m.narr}}</p></sc-if>
+<sc-for list="{{m.voice}}" as="v" hint-placeholder-count="0">
+<div class="vl {{v.w}}"><span class="vk">{{v.w}}</span><span class="vt">{{v.t}}</span></div>
+</sc-for>
+<div class="foot">{{m.foot}}</div>
+</div>
+</div>
+</figure>
+</sc-for>
+</div>
+</section>
+</sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":7688,"height":2600}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const W = { queued: 'queued', run: 'running', wait: 'waiting on you', done: 'done', job: 'running · job' };
+    const step = (k, app, text, state) => ({ k, app, text, state, word: W[state] });
+    const plan = (a, b, c) => [
+      step('recall', 'ledger', 'from Maya · an album · Oct 26 – Nov 1', a),
+      step('ask', 'music', 'download “Low Tide Atlas”', b),
+      step('ask', 'pcc', 'add task · Sat Nov 7', c),
+    ];
+    const R1 = { app: 'ledger', verb: 'Found', ent: '“Low Tide Atlas” — Kessler Row · from Maya, Thu Oct 29', undo: '' };
+    const R3 = { app: 'pcc', verb: 'Created', ent: 'Task #1287 “Listen to Low Tide Atlas” · Sat Nov 7', undo: 'Undo' };
+    const M = [
+      { id: 'idle', name: 'Idle presence', pres: 'idle', presLabel: 'idle',
+        foot: 'Nothing running · nothing waiting on you · last: 9:41 am, added a task' },
+      { id: 'listen', name: 'You speak · listening', pres: 'listen', presLabel: 'listening',
+        said: 'Find the album Maya sent last week, download it, and put it on my list for Saturday…',
+        foot: 'Hearing you · say “stop” any time' },
+      { id: 'compile', name: 'Thinking · the plan compiles', pres: 'think', presLabel: 'compiling a plan',
+        said: '…and put it on my list for Saturday.', ack: 'On it — checking last week, then asking music and PCC.',
+        steps: plan('queued', 'queued', 'queued'), st: { mem: 'queued', music: 'queued', pcc: 'queued' },
+        foot: 'Plan · 3 steps · validated · nothing has run yet' },
+      { id: 'run', name: 'Steps light as they run', pres: 'work', presLabel: 'working',
+        steps: plan('done', 'run', 'queued'), receipts: [R1], st: { mem: 'done', music: 'run', pcc: 'queued' },
+        foot: '1 of 3 done · music working · PCC queued' },
+      { id: 'speak', name: 'Receipts land · speaking', pres: 'speak', presLabel: 'speaking',
+        steps: plan('done', 'job', 'done'), receipts: [R1, R3], st: { mem: 'done', music: 'run', pcc: 'done' },
+        narr: 'Found it — Low Tide Atlas by Kessler Row. It’s downloading now, and it’s on your list for Saturday.',
+        foot: '2 of 3 done · the download is a job, still running' },
+      { id: 'confirm', name: 'A confirmation', pres: 'wait', presLabel: 'waiting on you',
+        said: 'Clear out the finished garage tasks.',
+        steps: [step('look', 'pcc', 'Garage · done tasks', 'done'), step('confirm', 'you', 'delete 3 tasks', 'wait'), step('ask', 'pcc', 'delete 3 tasks', 'queued')],
+        confirm: { q: 'Delete 3 done tasks in Garage?', items: [{ t: 'Hang pegboard' }, { t: 'Sort screws' }, { t: 'Drop off old paint' }], yes: 'Delete 3', no: 'Keep them' },
+        st: { pcc: 'wait' }, foot: 'Paused · nothing deleted yet · undo stays available after' },
+      { id: 'job', name: 'A job runs in the background', pres: 'idle', presLabel: 'idle with 2 jobs running',
+        jobs: [{ app: 'music', t: 'Download “Low Tide Atlas”', n: 4, of: 11, unit: 'tracks' }, { app: 'music', t: 'Retag library', n: 112, of: 400, unit: 'files' }],
+        st: { music: 'run' }, foot: '2 jobs running · a note arrives when each ends' },
+      { id: 'jobdone', name: 'The job ends · its note', pres: 'idle', presLabel: 'idle with 1 job running',
+        note: { head: 'Finished · music · 6:12 pm', body: 'Low Tide Atlas — 11 tracks, now in Unsorted.' },
+        jobs: [{ app: 'music', t: 'Retag library', n: 260, of: 400, unit: 'files' }],
+        st: { music: 'run' }, foot: 'Download done (receipt) · retag still running' },
+      { id: 'recall', name: 'Recall from last week', pres: 'speak', presLabel: 'speaking',
+        said: 'What opening did I lose with last week?',
+        steps: [step('recall', 'ledger', 'chess games · Oct 26 – Nov 1', 'done')],
+        receipts: [{ app: 'ledger', verb: 'Recalled', ent: 'Tue Oct 27 · chess · lost with the Caro-Kann, resigned on move 31', undo: '' }],
+        narr: 'Last Tuesday — the Caro-Kann. You resigned on move 31.', st: { mem: 'done' },
+        foot: 'From the ledger · chess was not asked' },
+      { id: 'voice', name: 'Voice only, no screen', pres: 'speak', presLabel: 'speaking, screen off',
+        voice: [
+          { w: 'earcon', t: 'one plucked strand, rising: I hear you' },
+          { w: 'you', t: 'What’s on for Saturday?' },
+          { w: 'plan', t: 'look(pcc) · 0.4 s' },
+          { w: 'conductor', t: 'Two things: listen to Low Tide Atlas, and the garage shelves.' },
+          { w: 'earcon', t: 'strand settles, falling: mic closed' },
+        ],
+        st: { pcc: 'done' }, foot: 'Screen dark; the room speaker carries it all' },
+    ];
+    const names = { pcc: 'PCC', music: 'music', chess: 'chess', mem: 'ledger' };
+    const moments = M.map((m, i) => {
+      const st = Object.assign({ pcc: 'rest', music: 'rest', chess: 'rest', mem: 'rest' }, m.st || {});
+      const parts = Object.keys(names).filter(k => st[k] !== 'rest').map(k => names[k] + ' ' + (W[st[k]] || st[k]));
+      return Object.assign({}, m, {
+        n: String(i + 1).padStart(2, '0'), st,
+        steps: m.steps || [], receipts: m.receipts || [], jobs: m.jobs || [], voice: m.voice || [],
+        confirm: m.confirm || { q: '', items: [], yes: '', no: '' }, note: m.note || { head: '', body: '' },
+        hasSaid: !!m.said, hasAck: !!m.ack, hasSteps: !!(m.steps && m.steps.length), hasConfirm: !!m.confirm,
+        hasNote: !!m.note, hasNarr: !!m.narr,
+        vizLabel: 'Conductor ' + m.presLabel + (parts.length ? '. Strands: ' + parts.join(', ') + '.' : '. All strands at rest.'),
+      });
+    });
+    const rows = [
+      { id: 'desktop', label: 'Desktop', size: '1440 × 900, shown at 50%' },
+      { id: 'phone', label: 'Phone', size: '390 × 844, shown at 77%' },
+      { id: 'wall', label: 'Room / wall', size: '1920 × 1080, shown at 37.5% · type sized to read from 4 m' },
+    ].map(r => Object.assign({}, r, { moments }));
+    return { rows };
+  }
+}
+</script>
+</body>
+</html>
