@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentMessage, LiveReceipt, ToolCallRecord } from '../../types/agent'
 import { nextSceneState } from './sceneState'
 import { applyTurnEvent, EMPTY_STREAM, type TurnEventName, type TurnStream } from './turnStream'
-import { buildTurns, pendingConfirm, presenceFor, receiptFrom } from './turnView'
+import { buildTurns, pendingConfirm, presenceFor, PROPOSAL_QUESTION, receiptFrom } from './turnView'
 
 function msg(over: Partial<AgentMessage>): AgentMessage {
   return { id: 1, conversation_id: 1, role: 'user', content: 'hi', tool_calls: null, stop_reason: null, created_at: '2026-11-06T18:00:00Z', ...over }
@@ -50,6 +50,20 @@ describe('pendingConfirm', () => {
   it('lapses once anything else is said', () => {
     const messages = [msg({ id: 1 }), msg({ id: 2, role: 'assistant', tool_calls: [askTasks({ app_confirm: confirm })] }), msg({ id: 3, content: 'what’s due today?' })]
     expect(pendingConfirm(messages)).toBeNull()
+  })
+
+  it('shows a think’s proposal on the confirm card until anything else is said (#78)', () => {
+    const proposal = msg({ id: 3, role: 'assistant', content: 'I thought over it… Shall I go ahead?', stop_reason: 'think_proposal' as AgentMessage['stop_reason'] })
+    expect(pendingConfirm([msg({ id: 1 }), msg({ id: 2, role: 'assistant' }), proposal])).toMatchObject({ app: 'conductor', question: PROPOSAL_QUESTION })
+    expect(pendingConfirm([msg({ id: 1 }), proposal, msg({ id: 4, content: 'thanks' })])).toBeNull()
+  })
+})
+
+describe('a think step', () => {
+  it('shows as a running job by its problem, never as done (#78)', () => {
+    const think: ToolCallRecord = { tool: 'think', arguments: { problem: 'plan my week', inputs: [] }, result: 'thinking it over in the background', error: null }
+    const [turn] = buildTurns([msg({ id: 1, content: 'plan my week' }), msg({ id: 2, role: 'assistant', tool_calls: [think] })], null, null)
+    expect(turn.steps).toMatchObject([{ kind: 'think', app: 'conductor', text: 'plan my week', state: 'job' }])
   })
 })
 

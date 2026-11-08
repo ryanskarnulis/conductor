@@ -87,6 +87,10 @@ class Driver(Protocol):
         """Assistant messages that arrived since the last turn without one
         being asked for (a job reporting back, S4)."""
 
+    def settle(self) -> None:
+        """Background work gets its turn now: running jobs are read and a
+        ``think`` runs to its end (#78)."""
+
     def supports(self, capability: str) -> bool: ...
 
 
@@ -120,6 +124,12 @@ class Advance:
 
 
 @dataclass(frozen=True)
+class Settle:
+    """The person waits: background work (jobs, a ``think``, #78) finishes
+    and posts its note before they speak again."""
+
+
+@dataclass(frozen=True)
 class StopAfter:
     """Say ``text``, and press Stop once ``app`` has made ``writes`` writes in
     this turn — mid-delegate, from another thread, as a person would."""
@@ -130,7 +140,7 @@ class StopAfter:
     label: str | None = None
 
 
-Step = Say | ConfirmIfAsked | NewConversation | Advance | StopAfter
+Step = Say | ConfirmIfAsked | NewConversation | Advance | Settle | StopAfter
 
 
 # --- the session a check reads ------------------------------------------------------
@@ -303,6 +313,9 @@ def _run_step(step: Step, driver: Driver, session: Session) -> TurnRecord | None
     if isinstance(step, Advance):
         world.advance()
         return None
+    if isinstance(step, Settle):
+        driver.settle()
+        return None
     if isinstance(step, StopAfter):
         if not driver.supports("stop"):
             raise Unsupported("stop")
@@ -468,6 +481,9 @@ class LoopDriver:
             seconds=seconds,
         )
 
+    def settle(self) -> None:
+        self._settle()
+
     def stop(self) -> None:
         assert self._cancel_path is not None and self._conversation is not None
         path = re.sub(r"\{[^}]+\}", str(self._conversation), self._cancel_path)
@@ -523,6 +539,7 @@ __all__ = [
     "Sample",
     "Say",
     "Scenario",
+    "Settle",
     "Session",
     "StopAfter",
     "TurnRecord",

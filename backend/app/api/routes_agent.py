@@ -30,7 +30,7 @@ from fastapi.responses import Response
 from fastapi.sse import EventSourceResponse, format_sse_event
 from sqlalchemy.orm import Session
 
-from app.ai import confirmation, turn_context, turn_events
+from app.ai import confirmation, foreground, turn_context, turn_events
 from app.ai.loop import AgentLoop, AgentRunFailed, LoopActivity, loop_from_settings
 from app.ai.plan import PausedPlan
 from app.ai.providers.llamacpp import provider_from_settings
@@ -346,6 +346,8 @@ def post_message(
         )
 
     stop = turn_activity.begin(conversation_id)
+    # The GPU is the person's while their turn runs: a think yields (#78).
+    foreground.entered()
 
     def publish(kind: str, payload: dict[str, Any]) -> None:
         turn_activity.publish(conversation_id, stop, kind, payload)
@@ -397,6 +399,7 @@ def post_message(
         db.commit()
         ended.update(stop_reason=run.stop_reason, message_id=assistant_message.id)
     finally:
+        foreground.left()
         turn_activity.end(conversation_id, stop, **ended)
     return MessageExchange(
         user_message=MessageRead.model_validate(user_message),

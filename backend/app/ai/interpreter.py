@@ -30,6 +30,11 @@ same as the loop's. What it runs, across apps (#72):
 - A step whose receipt carries a job ref detaches: the app accepted the work
   and the reply says so now ("queued 40"); the ledger's job row and the
   watcher (:mod:`app.services.job_watcher`) follow it from there.
+- ``think`` (#78), always last: handed to the background as a job conductor
+  owns (:mod:`app.ai.think`, run by :mod:`app.services.thinker`) with what
+  its ``inputs`` found; code replies at once. Its proposal posts later as
+  the job's note and waits like a gate: ``confirm`` yes runs it as a normal
+  plan, no (or anything else) lets it lapse.
 - The direct answers (:mod:`app.ai.speaker`), ``self`` from the ledger.
 
 Independent reads (:func:`plans.reads_only`: asks to different apps, phrased
@@ -60,13 +65,23 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
-from app.ai import compiler, control, dataflow, narrator, run_record, speaker, turn_events
+from app.ai import (
+    compiler,
+    control,
+    dataflow,
+    narrator,
+    run_record,
+    speaker,
+    think,
+    turn_events,
+)
 from app.ai import glance as glances
 from app.ai import plan as plans
 from app.ai import trace as run_trace
 from app.ai.provider import ChatResult, ProviderError, ToolCall
 from app.ai.plan import Ledgered, PausedPlan, TurnPlan
 from app.ai.stop import STOPPED_ERROR, Stop, current_stop
+from app.config import get_settings
 from app.fleet.context import current_delegation_context
 from app.fleet.glance import GlanceError, GlanceReader, read_glance
 from app.fleet.jobs import JobCanceller, cancel_job
@@ -80,6 +95,7 @@ logger = structlog.get_logger(__name__)
 
 _AFTER_FAILURE = f"{run_record.NOT_RUN_PREFIX}an earlier step of the plan didn't finish"
 _LEFT_IT = "Okay, I left it."
+_SET_ASIDE = "Okay, I set that plan aside. Nothing changed."
 _CONFIRM_TOOL = "confirm"
 
 
@@ -99,6 +115,8 @@ class _Run:
     restate: bool = True
     # What the ledger says control steps act on (#74), read only if needed.
     view: control.View = field(default_factory=lambda: control.View(None))
+    # Each step's record by id, for a think's inputs (#78).
+    found: dict[str, ToolCallRecord] = field(default_factory=dict)
 
 
 class Interpreter:
@@ -143,7 +161,9 @@ class Interpreter:
         if _stopped(stop):
             return loop._stop("cancelled", [], 0, []), TurnPlan(status="ran", note="stopped")
         pending = current_delegation_context().pending_confirm
-        gate = paused if paused is not None and paused.reason == "gate" else None
+        # Code's question and a think's proposal (#78) both take a yes that
+        # runs a paused plan.
+        gate = paused if paused is not None and paused.reason in ("gate", "proposal") else None
         checks = plans.Checks(
             fleet=self._fleet,
             calls_per_app=current_delegation_context().calls_per_turn_per_app,
@@ -194,6 +214,8 @@ class Interpreter:
             ms=compile_ms,
             fallback=reason,
         )
+        if reason is None and not get_settings().conductor_think and _thinks(plan):
+            reason = "kind:think"  # the lane is switched off: the loop takes it
         if reason is not None:
             return None, TurnPlan(
                 body=body, status="fell_back", note=reason, acted=False, repaired=compiled.repaired
@@ -288,6 +310,8 @@ class Interpreter:
         undoing: tuple[plans.Undo, int, tuple[int, ...]] | None = None,
     ) -> AgentRunResult:
         rest = plan.steps[1:]
+        if gate is not None and gate.reason == "proposal":
+            return self._proposal(state, turn, gate, step.answer)
         if gate is not None:
             # Conductor's own question: a yes runs the paused plan from the gated step.
             turn.body = gate.body
@@ -324,6 +348,30 @@ class Interpreter:
             return self._finish(state, turn, rest, 1)
         return self._execute(state, turn, rest, 1, {})
 
+    def _proposal(
+        self, state: _Run, turn: TurnPlan, proposal: PausedPlan, answer: str
+    ) -> AgentRunResult:
+        """The person's answer to a think's proposal (#78). Yes runs it as a
+        normal plan: a destructive ask to an app that doesn't confirm still
+        stops at code's gate, and an app still asks its own question. No sets
+        it aside; nothing runs."""
+        turn.body = proposal.body
+        turn.ends = proposal.plan_id
+        if answer == "no":
+            turn.ends_as = "set_aside"
+            turn.note = "set the proposal aside"
+            return self._loop._finish("completed", _SET_ASIDE, [], 1, state.messages)
+        turn.ends_as = "accepted"
+        accepted = plans.load(proposal.body)
+        assert isinstance(accepted, plans.StepPlan)
+        ack = plans.ack(accepted)
+        if ack is not None:
+            turn.ack = ack
+            self._loop._emit(state.on_activity, _activity("model", ack=ack))
+        turn_events.resumed("proposal")
+        logger.info("proposal_accepted", plan=proposal.plan_id, steps=len(accepted.steps))
+        return self._execute(state, turn, accepted.steps, 0, {})
+
     # --- running steps ---------------------------------------------------------------------
 
     def _execute(
@@ -357,7 +405,7 @@ class Interpreter:
                     if isinstance(read, plans.Look) and not self._went_well(results[n]):
                         results[n] = self._look_fell_back(state, read, results[n], steps)
                 for read, got in zip(group, results, strict=True):
-                    self._keep(values, read, got)
+                    self._keep(state, values, read, got)
                 after = index + len(group)
                 asked = next(
                     (
@@ -400,6 +448,8 @@ class Interpreter:
                     record = self._look_fell_back(state, step, record, steps)
                     if record.app_confirm and record.app_confirm.get("question"):
                         return self._app_asked(state, turn, steps, position + 1, step, values)
+            elif isinstance(step, plans.Think):
+                return self._think(state, turn, step, values)
             elif isinstance(step, plans.Open):
                 filled = dataflow.fill(step.intent, values)
                 refusal = _refusal(step, filled, confirms=False)
@@ -411,13 +461,17 @@ class Interpreter:
             if record is None or not self._went_well(record):
                 turn.note = f"stopped after {step.id}"
                 return self._finish(state, turn, steps[index + 1 :], 1)
-            self._keep(values, step, record)
+            self._keep(state, values, step, record)
             index += 1
         return self._finish(state, turn, [], 1)
 
     @staticmethod
-    def _keep(values: dict[str, dataflow.Value], step: plans.Step, record: ToolCallRecord) -> None:
-        """What a step gives later steps as ``{sN}``, from its receipt."""
+    def _keep(
+        state: _Run, values: dict[str, dataflow.Value], step: plans.Step, record: ToolCallRecord
+    ) -> None:
+        """What a step gives later steps as ``{sN}``, from its receipt; and
+        its record, for a think's inputs (#78)."""
+        state.found[step.id] = record
         value = dataflow.from_record(record.app_record)
         if value is not None:
             values[step.id] = value
@@ -442,6 +496,32 @@ class Interpreter:
             turn.resume_at, turn.pause_app = resume_at, step.app
             self._carry(turn, resume_at, values)
         return self._finish(state, turn, [], 1)
+
+    def _think(
+        self,
+        state: _Run,
+        turn: TurnPlan,
+        step: plans.Think,
+        values: dict[str, dataflow.Value],
+    ) -> AgentRunResult:
+        """Hand a think to the background (#78): its record carries the job
+        and what its inputs found; the reply is code's, at once. The thinker
+        runs it on the 26B later; nothing here calls a model."""
+        loop = self._loop
+        record = think.record(step, state.found, values)
+        loop._emit(state.on_activity, _activity("tool", tool=think.TOOL))
+        seq = len(state.records) + 1
+        turn_events.step_started(seq, record.tool, record.arguments)
+        earlier = list(state.records)
+        state.records.append(record)
+        turn_events.receipt(seq, record)
+        ref = think.ref_of(record)
+        turn.note = f"thinking in the background ({ref})"
+        logger.info("plan_think_detached", ref=ref, inputs=list(step.inputs))
+        line = narrator.record_line(earlier, state.trace.surface)
+        reply = think.thinking_reply(line, state.trace.surface)
+        state.trace.narration = {"path": "code:think", "appended": [], "model_calls": 0}
+        return loop._finish("completed", reply, state.records, 1, state.messages)
 
     @staticmethod
     def _carry(turn: TurnPlan, start: int, values: dict[str, dataflow.Value]) -> None:
@@ -747,6 +827,12 @@ def _refusal(
     if not confirms:
         return f"outside text from {source} can't go to {step.app}, which doesn't confirm changes"
     return None
+
+
+def _thinks(plan: plans.Plan) -> bool:
+    return isinstance(plan, plans.StepPlan) and any(
+        isinstance(step, plans.Think) for step in plan.steps
+    )
 
 
 def _activity(

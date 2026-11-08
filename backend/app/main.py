@@ -18,6 +18,7 @@ from app.fleet.manifests import fleet_from_settings
 from app.fleet.tools import build_delegate_tools, default_client_factory, render_fleet_section
 from app.logging_config import RequestIDMiddleware, configure_logging
 from app.services.job_watcher import JobWatcher
+from app.services.thinker import Thinker, think_provider_from_settings
 
 logger = structlog.get_logger(__name__)
 
@@ -47,8 +48,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     watcher: JobWatcher | None = None
     if get_settings().conductor_job_watcher:
         narrate = get_settings().conductor_narrator
+        # Conductor's own think jobs (#78) run on the 26B, in the background.
+        thinker = (
+            Thinker(SessionLocal, fleet, provider=think_provider_from_settings)
+            if get_settings().conductor_think
+            else None
+        )
         watcher = JobWatcher(
-            SessionLocal, fleet, provider=provider_from_settings if narrate else None
+            SessionLocal,
+            fleet,
+            provider=provider_from_settings if narrate else None,
+            thinker=thinker,
         )
         watcher.start()
     app.state.job_watcher = watcher

@@ -90,6 +90,13 @@ class Settings(BaseSettings):
     # The job watcher (#76, app/services/job_watcher.py): polls running jobs
     # and posts one note when each ends. Off in tests (they drive it directly).
     conductor_job_watcher: bool = True
+    # The escalation lane (#78, app/ai/think.py): a plan's `think` step runs
+    # as a background job on this model (thinking on, json_schema), and its
+    # proposal waits for the person's yes. Off: `think` falls back to the loop,
+    # as before #78. The timeout covers a long thought plus a model swap.
+    conductor_think: bool = True
+    conductor_think_model: str = "gemma-4-26b-a4b"
+    conductor_think_timeout_seconds: float = 600.0
     # Diagnostics (#62), both off by default. One JSONL record per turn
     # (app/ai/trace.py), and the exact bytes of every model call
     # (app/ai/context_capture.py; heavy, a debugging switch).

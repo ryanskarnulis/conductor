@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from app.ai import narrator, run_record, turn_events
+from app.ai import narrator, run_record, think, turn_events
 from app.ai import plan as plans
 from app.ai.plan import RunningJob, TurnPlan
 from app.fleet.jobs import FINISHED, JobError, JobGone, JobRead
@@ -118,7 +118,20 @@ def _cancel_one(interp: Interpreter, state: _Run, job: RunningJob) -> str:
     app = interp._fleet.get(job.app)
     record = ToolCallRecord(tool=tool, arguments=arguments)
     line: str
-    if app is None or app.agent is None:
+    if job.app == think.APP:
+        # Conductor's own think (#78): no app to ask; the thinker stops it.
+        think.request_cancel(job.ref)
+        answer = JobRead(
+            ref=job.ref,
+            status="canceled",
+            title=job.title,
+            untrusted=job.untrusted,
+            cancel_requested=True,
+        )
+        line = f"Stopped thinking over {think.subject(job.title)}. Nothing was changed."
+        record.result = line
+        record.app_record = [_receipt(job, answer)]
+    elif app is None or app.agent is None:
         record.error = f"{run_record.NOT_RUN_PREFIX}conductor can't reach {job.app}"
         line = f"I can't reach {job.app} to stop {subject}."
     else:

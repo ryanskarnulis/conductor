@@ -20,6 +20,10 @@ watcher polls every job not yet noted through the jobs contract
 Polls never use the model, have short timeouts and forward no headers. Only
 the note is narrated, outside any database transaction.
 
+A ``think`` (#78) is a job conductor owns (``app = "conductor"``): there is
+no app to poll, so each sweep hands it to the thinker
+(:mod:`app.services.thinker`), which runs it on the 26B and posts its note.
+
 In-process on purpose: conductor is single-worker (CLAUDE.md), so one daemon
 thread started and stopped with the app's lifespan is enough, and a restart
 resumes from the ledger's rows. :meth:`JobWatcher.sweep` is also the test and
@@ -38,12 +42,13 @@ from typing import Any
 import structlog
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.ai import narrator, turn_events
+from app.ai import narrator, think, turn_events
 from app.ai.provider import ChatProvider, ChatResult
 from app.fleet.jobs import JobError, JobGone, JobRead, JobReader, read_job
 from app.fleet.manifests import Fleet
 from app.services import ledger
 from app.services.ledger import WatchedJob
+from app.services.thinker import Thinker
 
 logger = structlog.get_logger(__name__)
 
@@ -90,6 +95,7 @@ class JobWatcher:
         provider: ProviderFactory | None = None,
         clock: Clock | None = None,
         tick: float = TICK_SECONDS,
+        thinker: Thinker | None = None,
     ) -> None:
         self._sessions = session_factory
         self._fleet = fleet
@@ -97,6 +103,8 @@ class JobWatcher:
         self._provider = provider
         self._clock: Clock = clock or (lambda: datetime.now(UTC))
         self._tick = tick
+        # Runs conductor's own think jobs (#78); none: they wait.
+        self._thinker = thinker
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         # One sweep at a time in this process; the ledger's claim covers the rest.
@@ -117,6 +125,8 @@ class JobWatcher:
         if self._thread is not None:
             self._thread.join(timeout=timeout)
             self._thread = None
+        if self._thinker is not None:
+            self._thinker.join(timeout=timeout)
         logger.info("job_watcher_stopped")
 
     def _run(self) -> None:
@@ -147,6 +157,8 @@ class JobWatcher:
             return posted
 
     def _watch(self, job: WatchedJob, now: datetime, *, force: bool) -> int:
+        if job.app == think.APP:
+            return 0 if self._thinker is None else self._thinker.tick(job, now, force=force)
         age = now - job.created_at
         lost = age >= GIVE_UP_AFTER
         app = self._fleet.get(job.app)

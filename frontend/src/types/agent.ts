@@ -169,7 +169,7 @@ export interface TurnPause {
  * the step it waited on (null for an app's own question); `answer` is an
  * `ask_user` answer exactly as `{s1}` will read it. */
 export interface TurnResumed {
-  reason: 'ask_user' | 'gate' | 'app_confirm'
+  reason: 'ask_user' | 'gate' | 'app_confirm' | 'proposal'
   step: string | null
   answer: string | null
 }

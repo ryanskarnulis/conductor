@@ -34,6 +34,7 @@ from tests.session_harness import (
     Say,
     Scenario,
     Session,
+    Settle,
     StopAfter,
 )
 
@@ -531,7 +532,13 @@ def _s14(session: Session) -> None:
 S14 = Scenario(
     "S14",
     "plan my week around the garage project: a concrete plan, confirmed before writing",
-    (Say("plan my week around the garage project", label="propose"), Say("yes", label="go")),
+    # A think (#78) answers at once and posts its proposal later: the person
+    # waits for it before saying yes. Today's loop asks in the turn.
+    (
+        Say("plan my week around the garage project", label="propose"),
+        Settle(),
+        Say("yes", label="go"),
+    ),
     (_s14,),
     script=lambda w: [
         _ask("tasks", "what's in the garage project?"),

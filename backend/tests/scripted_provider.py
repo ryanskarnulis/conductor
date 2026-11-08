@@ -50,6 +50,8 @@ class ScriptedProvider:
                 "messages": list(messages),
                 "tools": list(tools or []),
                 "response_format": response_format,
+                "enable_thinking": enable_thinking,
+                "max_tokens": max_tokens,
             }
         )
         assert self._turns, "provider called more times than scripted"

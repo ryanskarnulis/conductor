@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from pydantic import BaseModel
@@ -41,6 +42,16 @@ class ToolCallArgumentsError(ProviderResponseError):
     def __init__(self, tool_name: str, detail: str) -> None:
         super().__init__(f"tool call {tool_name!r}: {detail}")
         self.tool_name = tool_name
+
+
+@dataclass(frozen=True)
+class Sampling:
+    """A model's sampling profile, sent with every request (each model has its
+    own: ``../agent-standard/model-profile.md``; the ``think`` lane's 26B, #78)."""
+
+    temperature: float
+    top_p: float
+    top_k: int
 
 
 class ToolSpec(BaseModel):
@@ -128,6 +139,7 @@ __all__ = [
     "ProviderError",
     "ProviderRequestError",
     "ProviderResponseError",
+    "Sampling",
     "ToolCall",
     "ToolCallArgumentsError",
     "ToolSpec",

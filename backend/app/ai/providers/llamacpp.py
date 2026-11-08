@@ -32,6 +32,7 @@ from app.ai.provider import (
     ChatResult,
     ProviderRequestError,
     ProviderResponseError,
+    Sampling,
     ToolCall,
     ToolCallArgumentsError,
     ToolSpec,
@@ -108,9 +109,13 @@ class LlamaCppProvider:
         timeout_seconds: float = 300.0,
         client: httpx.Client | None = None,
         capture: ContextCapture | None = None,
+        sampling: Sampling | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
+        # The model's sampling profile; the 12B's unless a caller brings its
+        # own (the 26B's ``think``, #78).
+        self._sampling = sampling or Sampling(_TEMPERATURE, _TOP_P, _TOP_K)
         # Context capture (#62): ``None``, the default, sends one request per
         # call and records nothing.
         self._capture = capture
@@ -127,6 +132,12 @@ class LlamaCppProvider:
         return self._model
 
     def close(self) -> None:
+        self._client.close()
+
+    def abort(self) -> None:
+        """Cut off a call in flight from another thread (a ``think`` yielding
+        the GPU, #78): the connection closes, the call raises, and llama-server
+        stops generating for a client that left. The provider is spent."""
         self._client.close()
 
     def __enter__(self) -> LlamaCppProvider:
@@ -178,11 +189,11 @@ class LlamaCppProvider:
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": list(messages),
-            "temperature": _TEMPERATURE,
-            "top_p": _TOP_P,
+            "temperature": self._sampling.temperature,
+            "top_p": self._sampling.top_p,
             # llama-server accepts these OpenAI extensions as plain body fields
             # (no SDK extra_body indirection needed).
-            "top_k": _TOP_K,
+            "top_k": self._sampling.top_k,
             "chat_template_kwargs": {"enable_thinking": enable_thinking},
         }
         if max_tokens is not None:
@@ -209,7 +220,8 @@ class LlamaCppProvider:
             response = self._client.send(request)
             if wire is not None:
                 wire.response = response
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, RuntimeError) as exc:
+            # A RuntimeError is a client closed under the call (``abort``).
             log.error("llm_request_failed", error=str(exc))
             raise ProviderRequestError(f"llama-server request failed: {exc}") from exc
         duration_ms = round((time.monotonic() - started) * 1000)

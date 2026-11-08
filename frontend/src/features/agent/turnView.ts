@@ -57,6 +57,9 @@ export interface PendingConfirmView {
   question: string
 }
 
+/** The confirm card's line for a think's proposal (#78). */
+export const PROPOSAL_QUESTION = 'Run the plan above?'
+
 const VERBS: [RegExp, string][] = [
   [/^(create|add|new)/, 'Created'],
   [/^(update|edit|rename|set|reschedule|move)/, 'Updated'],
@@ -139,6 +142,8 @@ function stepFrom(call: StepSource, waiting: boolean): ShellTurn['steps'][number
     return { appKey, kind: 'look', app: appLabel(looked), text: `look at ${looked}`, ...outcome('done') }
   }
   if (call.tool === 'list_agents') return { appKey: null, kind: 'look', app: 'conductor', text: 'check the fleet', ...outcome('done') }
+  // A think (#78) detached as a job: it runs on, its proposal comes later.
+  if (call.tool === 'think') return { appKey: null, kind: 'think', app: 'conductor', text: typeof call.arguments.problem === 'string' ? call.arguments.problem : 'think it over', ...outcome('job') }
   return { appKey: null, kind: 'local', app: 'conductor', text: call.tool, ...outcome('done') }
 }
 
@@ -225,6 +230,7 @@ export function streamResumedNote(stream: TurnStream): string | null {
   if (!resumed) return null
   if (resumed.reason === 'ask_user') return resumed.answer ? `Resumed the plan · you answered ${resumed.answer}` : 'Resumed the plan · you answered'
   if (resumed.reason === 'gate') return 'Resumed the plan · you said yes'
+  if (resumed.reason === 'proposal') return 'Running the proposed plan · you said yes'
   return 'You said yes to the app’s question'
 }
 
@@ -260,9 +266,12 @@ export function streamReceipts(stream: TurnStream): ShellTurn['receipts'] {
 /** The question the conversation's last turn leaves waiting, if any — the
  * frontend twin of backend `confirmation.pending`: a later call to the same
  * app in that turn voids it. */
-export function pendingConfirm(messages: AgentMessage[]): (PendingConfirmView & { raw: AppConfirm }) | null {
+export function pendingConfirm(messages: AgentMessage[]): (PendingConfirmView & { raw: Pick<AppConfirm, 'app'> }) | null {
   const last = messages[messages.length - 1]
   if (!last || last.role !== 'assistant') return null
+  // A think's proposal (#78), posted as its job's note: the reply lists the
+  // plan, and a yes runs exactly that.
+  if ((last.stop_reason as string | null) === 'think_proposal') return { app: 'conductor', question: PROPOSAL_QUESTION, raw: { app: 'conductor' } }
   let live: AppConfirm | null = null
   for (const call of last.tool_calls ?? []) {
     const app = call.tool.startsWith('ask_') ? call.tool.slice(4) : call.tool === 'confirm' ? String(call.arguments.app ?? '') : null

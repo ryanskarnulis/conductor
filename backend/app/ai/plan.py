@@ -20,10 +20,10 @@ interpreter can run a valid plan yet: it runs ``ask``/``open``/``ask_user``/
 ``confirm`` plans across apps, with ``{sN}`` data flow between them (#72),
 ``look`` (#73: a plain read of an app's glance, offered only for apps whose
 manifest declares one), the control steps ``cancel``/``amend``/``undo`` on
-their own (#74; on a running job through the jobs runtime, #76), and the
-direct answers; every
-other kind (``recall``, ``think``) falls back to the loop until its issue
-lands (#78, #80). :func:`reads_only` says which asks may run in parallel.
+their own (#74; on a running job through the jobs runtime, #76), ``think``
+as the last step (#78: a background job whose proposal waits for a yes), and
+the direct answers; every other kind (``recall``) falls back to the loop
+until its issue lands (#80). :func:`reads_only` says which asks may run in parallel.
 Pure: no I/O.
 """
 
@@ -48,7 +48,7 @@ StepKind = Literal[
 ]
 
 # What the interpreter runs; the rest fall back to the loop.
-RUNNABLE_KINDS: frozenset[str] = frozenset({"ask", "look", "open", "ask_user", "confirm"})
+RUNNABLE_KINDS: frozenset[str] = frozenset({"ask", "look", "open", "ask_user", "confirm", "think"})
 # Control steps (#74): they act on what's waiting or on what just ran, so each
 # runs as a plan of its own (:mod:`app.ai.control`).
 CONTROL_KINDS: frozenset[str] = frozenset({"cancel", "amend", "undo"})
@@ -459,9 +459,12 @@ def fallback_reason(
             return f"kind:{control.do}"
         return None
     namers: set[str] = set()
-    for step in plan.steps:
+    for index, step in enumerate(plan.steps):
         if step.do not in RUNNABLE_KINDS:
             return f"kind:{step.do}"
+        if step.do == "think" and index != len(plan.steps) - 1:
+            # A think comes back later as a proposal (#78): nothing can follow it.
+            return "think_not_last"
         if set(REF.findall(step_text(step))) - namers:
             return "data_flow"
         if isinstance(step, Ask | AskUser):
@@ -531,7 +534,8 @@ def step_text(step: BaseModel) -> str:
     return " ".join(str(getattr(step, name)) for name in STEP_TEXT_FIELDS if hasattr(step, name))
 
 
-PauseReason = Literal["ask_user", "gate", "app_confirm"]
+# ``proposal``: a think's proposal (#78), posted as its job's note; a yes runs it.
+PauseReason = Literal["ask_user", "gate", "app_confirm", "proposal"]
 PlanStatus = Literal["ran", "answered", "paused", "fell_back", "invalid"]
 
 
@@ -552,9 +556,10 @@ class TurnPlan(BaseModel):
     ack: str | None = None
     repaired: bool = False
     # A control step that ended the waiting plan (#74): its ledger id, and
-    # whether it was ``cancelled`` or ``amended`` (the amended words run on).
+    # whether it was ``cancelled`` or ``amended`` (the amended words run on);
+    # a think's proposal (#78) is ``accepted`` by a yes or ``set_aside``.
     ends: int | None = None
-    ends_as: Literal["cancelled", "amended"] | None = None
+    ends_as: Literal["cancelled", "amended", "accepted", "set_aside"] | None = None
 
 
 @dataclass(frozen=True)
