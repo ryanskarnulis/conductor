@@ -28,9 +28,10 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import Response
 from fastapi.sse import EventSourceResponse, format_sse_event
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.ai import confirmation, turn_context, turn_events
+from app.ai import confirmation, job_control, narrator, turn_context, turn_events
+from app.ai.plan import RunningJob
 from app.ai.loop import AgentLoop, AgentRunFailed, LoopActivity, loop_from_settings
 from app.ai.plan import PausedPlan
 from app.ai.providers.llamacpp import provider_from_settings
@@ -41,12 +42,17 @@ from app.config import get_settings
 from app.db.models import Conversation
 from app.db.session import SessionLocal, get_db
 from app.fleet.context import DelegationContext, ThreadStore, use_delegation_context
+from app.fleet import jobs as fleet_jobs
+from app.fleet.jobs import JobCanceller, JobError, JobGone
+from app.fleet.manifests import Fleet
 from app.fleet.thread_cleanup import SubagentThreadCleanup
 from app.fleet.thread_store import DbThreadStore
 from app.schemas.conversations import (
     ConversationCreate,
     ConversationDetail,
     ConversationRead,
+    JobCancelCreate,
+    JobCancelRead,
     MessageCreate,
     MessageExchange,
     MessageRead,
@@ -87,6 +93,29 @@ def get_thread_cleanup(request: Request) -> SubagentThreadCleanup | None:
     if fleet is None:
         return None
     return SubagentThreadCleanup(fleet, SessionLocal)
+
+
+def get_session_factory() -> sessionmaker[Session]:
+    """Where the live channel reads the running jobs a connecting page missed
+    (#90); tests override this dependency."""
+    return SessionLocal
+
+
+def get_job_canceller() -> JobCanceller:
+    """The jobs contract's cancel (#76), by name at call time so a test may
+    swap it; tests override this dependency."""
+    return fleet_jobs.cancel_job
+
+
+def get_job_fleet(request: Request) -> Fleet:
+    """The fleet discovered at startup; tests override this dependency."""
+    fleet: Fleet | None = getattr(request.app.state, "fleet", None)
+    if fleet is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="the fleet has not been discovered yet",
+        )
+    return fleet
 
 
 def _stored_turns(db: Session, conversation_id: int) -> list[dict[str, Any]]:
@@ -188,6 +217,7 @@ def stream_turn_events(
     request: Request,
     # Closed before the stream starts: a stream never holds a database connection.
     db: Session = Depends(get_db, scope="function"),
+    sessions: sessionmaker[Session] = Depends(get_session_factory),
 ) -> EventSourceResponse:
     """The conversation's turn as it happens, over Server-Sent Events (#38).
 
@@ -200,20 +230,30 @@ def stream_turn_events(
     the turn), each with a rising ``id``. A quiet stream gets a heartbeat
     comment. A job the conversation started (#76) streams ``job`` events
     (progress, then its end with the note's message id), and the stream stays
-    open past ``turn_ended`` until the last running job ends. The stream ends
+    open past ``turn_ended`` until the last running job ends; the first
+    snapshot also lists the jobs the ledger says are still running (#90), so a
+    page that connects later finds them. The stream ends
     after ``turn_ended``, or when no turn begins in time; a reconnect starts
     over from a snapshot. 404s for an unknown
     conversation. Runs on the event loop and never holds a worker thread.
     """
     _get_or_404(db, conversation_id)
+
+    def seed() -> list[dict[str, Any]]:
+        # Its own session, read after the stream subscribed: never the request's.
+        with sessions() as session:
+            return ledger.running_job_events(session, conversation_id, limit=turn_activity.MAX_JOBS)
+
     return EventSourceResponse(
-        _sse(request, conversation_id),
+        _sse(request, conversation_id, seed),
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-async def _sse(request: Request, conversation_id: int) -> AsyncIterator[bytes]:
-    events = turn_activity.follow(conversation_id)
+async def _sse(
+    request: Request, conversation_id: int, seed: turn_activity.JobSeed
+) -> AsyncIterator[bytes]:
+    events = turn_activity.follow(conversation_id, seed=seed)
     try:
         async for event in events:
             if isinstance(event, turn_activity.Heartbeat):
@@ -250,6 +290,105 @@ def cancel_turn(
         background_tasks.add_task(stop.pass_on)
     logger.info("agent_turn_cancel", conversation_id=conversation_id, live=stop is not None)
     return RunCancelRead(cancel_requested=stop is not None)
+
+
+@router.post(
+    "/conversations/{conversation_id}/jobs/cancel",
+    response_model=JobCancelRead,
+    dependencies=[Depends(rate_limit("agent_notes", per_min_attr="fleet_actions_per_min"))],
+)
+def cancel_job(
+    conversation_id: int,
+    data: JobCancelCreate,
+    db: Session = Depends(get_db),
+    fleet: Fleet = Depends(get_job_fleet),
+    canceller: JobCanceller = Depends(get_job_canceller),
+) -> JobCancelRead:
+    """Stop a job from its card (#90). **No model runs.**
+
+    The same cancel as saying "stop" (#76, :mod:`app.ai.job_control`): the
+    owning app's ``POST …/jobs/{ref}/cancel``, whose answer carries the job's
+    ``done`` count at that moment. The tap is the person's own act, so it is
+    recorded as their note turn (as ``POST …/notes`` does) with the cancel
+    and its receipt on the ledger; nothing is put in conductor's mouth. The
+    job ends at the app's next safe boundary and the watcher posts its one
+    note then.
+
+    **404** for a job this conversation didn't start; **502** when the app
+    can't be reached or won't answer (nothing is recorded: nothing happened);
+    **410** when the app no longer knows the job. A job that had already
+    ended answers 200 with ``cancel_requested: false`` and how far it got.
+    """
+    conversation = _get_or_404(db, conversation_id)
+    job = ledger.conversation_job(db, conversation_id, data.app, data.ref)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    app = fleet.get(job.app)
+    if app is None or app.agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"conductor can't reach {job.app}"
+        )
+    try:
+        answer = canceller(app, job.ref)
+    except JobGone as exc:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(exc)) from exc
+    except JobError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    running = RunningJob(
+        app=job.app,
+        ref=job.ref,
+        status=job.status,
+        done=job.done,
+        total=job.total,
+        title=job.title,
+        untrusted=job.untrusted,
+    )
+    named = answer.title or job.title
+    outside = answer.untrusted if answer.title else job.untrusted
+    subject = narrator.job_subject(job.app, named, outside)
+    note = conversations_service.append_user_message(
+        db, conversation, job_control.card_note(job.app, subject, answer)
+    )
+    ledger.note_job_cancel(db, conversation, note, job, job_control.cancel_receipt(running, answer))
+    db.commit()
+    db.refresh(note)
+    db.refresh(job)
+    live = answer.cancel_requested is not False
+    if live and job.noted_at is None:
+        # The card shows the answer now and the watcher's one note ends it; a
+        # job that had already ended is the watcher's to close, never reopened.
+        turn_events.job(
+            conversation_id,
+            {
+                "app": job.app,
+                "ref": job.ref,
+                "status": job.status,
+                "done": job.done,
+                "total": job.total,
+                "title": job.title,
+                "untrusted": job.untrusted,
+                "ended": False,
+                "cancel_requested": True,
+            },
+        )
+    logger.info(
+        "agent_job_cancel",
+        conversation_id=conversation_id,
+        app=job.app,
+        ref=job.ref,
+        status=answer.status,
+        done=answer.done,
+        live=live,
+    )
+    return JobCancelRead(
+        app=job.app,
+        ref=job.ref,
+        status=answer.status,
+        done=answer.done,
+        total=answer.total,
+        cancel_requested=live,
+        message=MessageRead.model_validate(note),
+    )
 
 
 @router.post(
