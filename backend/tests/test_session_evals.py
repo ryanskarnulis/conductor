@@ -64,7 +64,7 @@ from tests.fake_world import World, write_fixture_fleet
 from tests.receipt_claims import Tally
 from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
 from tests.session_harness import LoopDriver, Sample, Scenario, WorldHolder, run_sample, sample_line
-from tests.session_scenarios import S2, S3, S4, S9, S10, S11, S12, S16, SCENARIOS
+from tests.session_scenarios import S2, S3, S4, S5, S6, S9, S10, S11, S12, S15, S16, SCENARIOS
 
 _LIVE = os.environ.get("CONDUCTOR_AGENT_EVALS") == "1"
 _FRONTIER = os.environ.get("CONDUCTOR_FRONTIER_EVALS") == "1"
@@ -228,6 +228,27 @@ COMPILED_SCRIPTS: dict[str, Callable[[World], list[Any]]] = {
         _S4_NOTE,
     ],
     S10.id: lambda w: [_plan(_ask_step("music", "sort my whole library"))],
+    # Memory (#80). S5 on a fresh world: nothing on record, said plainly.
+    S5.id: lambda w: [
+        _plan({"do": "recall", "query": "garage shelves decision"}),
+        text_turn("I have no record of a decision about the garage shelves."),
+    ],
+    # S6: the new conversation's State matches "that Caribou song" to Odessa.
+    S6.id: lambda w: [
+        _plan(_ask_step("music", "grab the song Odessa by Caribou")),
+        text_turn("Saved “Odessa” by Caribou."),
+        _plan(_ask_step("music", "put Odessa by Caribou in the house folder")),
+        text_turn("Filed “Odessa” under house."),
+    ],
+    S15.id: lambda w: [
+        _S3_PLAN,
+        text_turn("Queued “Honey” by Caribou and added “sort Honey” for the weekend."),
+        _plan(
+            _ask_step("music", "download the other album by Caribou"),
+            _ask_step("tasks", "add a task to sort {s1} this weekend"),
+        ),
+        text_turn("Queued “Suddenly” and added “sort Suddenly” for the weekend."),
+    ],
     S11.id: lambda w: [
         _S3_PLAN,
         text_turn("Queued “Honey” by Caribou and added “sort Honey” for the weekend."),
@@ -238,11 +259,47 @@ COMPILED_SCRIPTS: dict[str, Callable[[World], list[Any]]] = {
 }
 
 
-@pytest.mark.parametrize("scenario", [S4, S10, S11], ids=lambda s: s.id)
+@pytest.mark.parametrize("scenario", [S4, S5, S6, S10, S11, S15], ids=lambda s: s.id)
 def test_compiled_golden_script_passes(scenario: Scenario, compiled: _ScriptedRun) -> None:
     sample = compiled.run(scenario, COMPILED_SCRIPTS[scenario.id](World()))
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
     assert compiled.provider._turns == [], "the golden script wasn't fully consumed"
+
+
+def _is_planner(request: dict[str, Any]) -> bool:
+    form = request.get("response_format") or {}
+    return bool(form.get("json_schema", {}).get("name") == "plan")
+
+
+def test_compiled_s6_finds_the_song_in_state_across_conversations(
+    compiled: _ScriptedRun,
+) -> None:
+    # #80: the entity registry, not the planner, carries "Odessa" across days.
+    sample = compiled.run(S6, COMPILED_SCRIPTS[S6.id](World()))
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    planner = [r for r in compiled.provider.requests if _is_planner(r)]
+    opening = planner[-1]["messages"][1]["content"]
+    assert "Matches for words in the message, from earlier conversations" in opening
+    assert '"Odessa" (outside text)' in opening
+
+
+def test_compiled_s15_sees_no_matches_from_its_own_conversation(compiled: _ScriptedRun) -> None:
+    # Matches are leads from *other* conversations: S15's second turn points
+    # back ("their other album") within one conversation, so its planner input
+    # is what it was before #80.
+    sample = compiled.run(S15, COMPILED_SCRIPTS[S15.id](World()))
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    planner = [r for r in compiled.provider.requests if _is_planner(r)]
+    assert "Matches for words" not in planner[-1]["messages"][1]["content"]
+
+
+def test_compiled_s5_a_guessed_decision_still_gets_codes_no_record(
+    compiled: _ScriptedRun,
+) -> None:
+    script = COMPILED_SCRIPTS[S5.id](World())
+    script[-1] = text_turn("You picked the wooden shelves.")
+    sample = compiled.run(S5, script)
+    assert "no record" in (sample.session.last.reply or "")
 
 
 def test_compiled_s11_says_what_cant_be_undone_when_the_narrator_doesnt(

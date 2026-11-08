@@ -120,7 +120,10 @@ def test_what_v1_runs_and_what_falls_back(fleet: Fleet) -> None:
 
     assert reason(steps(ask("tasks", "add milk"), ask("tasks", "add eggs"))) is None
     assert reason({"answer": "chat"}) is None
-    assert reason(steps({"do": "recall", "query": "the fence project"})) == "kind:recall"
+    # #80: recall runs over the ledger, and names what it resolved for {sN}.
+    assert reason(steps({"do": "recall", "query": "the fence project"})) is None
+    recalled = steps({"do": "recall", "query": "that Caribou song"}, ask("music", "file {s1}"))
+    assert reason(recalled) is None
     # #73: a look runs, but gives nothing to {sN}: a glance is not a name.
     assert reason(steps({"do": "look", "app": "tasks"})) is None
     assert reason(steps({"do": "look", "app": "tasks"}, ask("music", "grab {s1}"))) == "data_flow"
@@ -239,14 +242,14 @@ def test_a_single_app_plan_runs_and_is_on_the_ledger(
 
 
 def test_a_plan_v1_cant_run_falls_back_to_the_loop(run_with: Any, db_session: Session) -> None:
-    provider = ScriptedProvider(
-        [plan_turn(steps({"do": "recall", "query": "today"})), text_turn("Nothing due today.")]
-    )
+    # A glance names nothing for {s1} (#73), so this plan can't run yet.
+    looked = steps({"do": "look", "app": "tasks"}, ask("tasks", "move {s1} to friday"))
+    provider = ScriptedProvider([plan_turn(looked), text_turn("Nothing due today.")])
     reply = run_with(provider, "what's due today?")
     assert reply["content"] == "Nothing due today."
     assert provider.requests[1]["tools"]  # the loop's own call, with tools
     compiled, loop_plan = _plans(db_session)
-    assert (compiled.status, compiled.note, compiled.acted) == ("fell_back", "kind:recall", False)
+    assert (compiled.status, compiled.note, compiled.acted) == ("fell_back", "data_flow", False)
     assert (loop_plan.source, loop_plan.acted) == ("loop", True)
 
 

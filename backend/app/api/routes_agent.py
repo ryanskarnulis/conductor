@@ -61,6 +61,7 @@ from app.schemas.conversations import (
 )
 from app.services import conversations as conversations_service
 from app.services import ledger
+from app.services import memory as memory_service
 
 logger = structlog.get_logger(__name__)
 
@@ -462,6 +463,7 @@ def post_message(
         earlier=lambda: conversations_service.earlier_calls(db, conversation.id),
         entities=lambda: ledger.recent_entities(db, conversation.id),
         jobs=lambda: ledger.running_job_lines(db, conversation.id),
+        matches=lambda: memory_service.matches(db, data.content, conversation.id),
     )
     user_message = conversations_service.append_user_message(db, conversation, data.content)
     turn = ledger.open_turn(db, conversation, user_message, surface=data.surface, panel=data.panel)
@@ -506,6 +508,7 @@ def post_message(
                     paused=_paused_plan(db, conversation.id),
                     self_facts=lambda: ledger.self_report(db, conversation.id),
                     control_view=lambda: ledger.control_view(db, conversation.id),
+                    recall=lambda query: memory_service.recall(db, query),
                 )
         except AgentRunFailed as exc:
             logger.error(
