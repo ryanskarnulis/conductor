@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import {
@@ -45,6 +45,9 @@ import { useConversation } from './useConversation'
 import { useConversations } from './useConversations'
 import { useTurnActivity } from './useTurnActivity'
 import { delegateAckText } from './voiceAck'
+
+// The memory list (#81) is its own lazy chunk: the entry never carries it.
+const MemoryPanel = lazy(() => import('../memory/MemoryPanel'))
 
 // Long enough for the send-off line to be read, short enough that it still
 // feels like one motion rather than a page that forgot to redirect.
@@ -181,6 +184,7 @@ export function AgentPage() {
 
   const [draft, setDraft] = useState('')
   const [threadsOpen, setThreadsOpen] = useState(false)
+  const [memoryOpen, setMemoryOpen] = useState(false)
   const [sound, setSoundState] = useState(soundOn)
   const convoEndRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLElement>(null)
@@ -355,6 +359,15 @@ export function AgentPage() {
         </span>
         <Presence state={presence.state} label={presence.label} live />
         <span className="shell-bar-spacer" />
+        <button
+          type="button"
+          className="shell-iconbtn"
+          aria-expanded={memoryOpen}
+          aria-controls="shell-memory"
+          onClick={() => setMemoryOpen((open) => !open)}
+        >
+          Memory
+        </button>
         <button type="button" className="shell-iconbtn shell-sound" aria-pressed={sound} onClick={toggleSound}>
           {sound ? 'Sound: on' : 'Sound'}
         </button>
@@ -403,7 +416,11 @@ export function AgentPage() {
         <ShellScene getState={getSceneState} phone={phone} reducedMotion={reducedMotion} panelRef={panelRef} deviceRef={deviceRef} />
 
         <section className="shell-panel" ref={panelRef} aria-label="Conductor chat">
-          {activeId === null ? (
+          {memoryOpen ? (
+            <Suspense fallback={null}>
+              <MemoryPanel conversationId={activeId} onClose={() => setMemoryOpen(false)} onChanged={refreshThread} />
+            </Suspense>
+          ) : activeId === null ? (
             <div className="shell-welcome">
               <h1>Conductor</h1>
               <p>

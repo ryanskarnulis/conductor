@@ -1,0 +1,100 @@
+/* Memory you can see (#81): the memory list, a lazy chunk with its own styles.
+   Each fact is the design system's MemoryFact (`.cd-fact`, violet: conductor's
+   own memory, not an app). */
+
+.memory {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.memory-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-8) 0;
+}
+
+.memory-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--violet);
+}
+
+.memory-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-8) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  scrollbar-width: thin;
+}
+
+.memory-intro,
+.memory-empty,
+.memory-gone {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--silk);
+}
+
+.memory-empty,
+.memory-gone {
+  color: var(--muted);
+}
+
+.memory-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.memory-fact {
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.memory-fact .body {
+  width: 100%;
+}
+
+.memory-fact q {
+  font-size: 14.5px;
+  overflow-wrap: anywhere;
+}
+
+.memory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.memory-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 36px;
+  padding: 0 var(--space-4);
+  border-radius: 8px;
+  border: 1px solid var(--violet);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+
+.shell[data-view='phone'] .memory-head {
+  padding: var(--space-5) var(--space-6) 0;
+}
+
+.shell[data-view='phone'] .memory-body {
+  padding: var(--space-4) var(--space-6) var(--space-6);
+}
