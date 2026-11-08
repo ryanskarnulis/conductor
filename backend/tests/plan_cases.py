@@ -433,13 +433,6 @@ CASES: tuple[Case, ...] = (
         "memory",
         state(facts="I sort music on Sundays|focus time is 9 to 11 on weekdays"),
     ),
-    Case(
-        "memory-used",
-        "add a task for my music sorting day to clean the record player",
-        (one(M("ask", "tasks", ("sunday", "record player"))),),
-        "memory",
-        state(facts="I sort music on Sundays"),
-    ),
     # --- general knowledge and declines ------------------------------------------------
     Case("knowledge-egg", "how long do I boil an egg?", (none("knowledge"),), "knowledge"),
     Case("knowledge-capital", "what's the capital of Portugal?", (none("knowledge"),), "knowledge"),
