@@ -650,6 +650,33 @@ def test_a_cancel_cuts_a_try_in_flight(
     assert _job(db_session).status == "canceled"
 
 
+def test_a_job_cards_cancel_stops_a_think_with_no_app_to_ask(
+    run_with: Any,
+    client: TestClient,
+    fleet: Fleet,
+    session_factory: sessionmaker[Session],
+    db_session: Session,
+) -> None:
+    _detach(run_with)
+    ref = _job(db_session).ref
+
+    def no_app(*_: Any) -> Any:
+        raise AssertionError("a think's cancel never reaches an app")
+
+    app.dependency_overrides[routes_agent.get_job_fleet] = lambda: fleet
+    app.dependency_overrides[routes_agent.get_job_canceller] = lambda: no_app
+    response = client.post(
+        f"/api/agent/conversations/{run_with.conversation}/jobs/cancel",
+        json={"app": think.APP, "ref": ref},
+    )
+    assert response.status_code == 200, response.text
+    assert think.cancel_requested(ref)
+    watcher, _, provider = _thinker(session_factory, fleet, GOOD)
+    assert watcher.sweep(force=True) == 1
+    assert provider.requests == []
+    assert "stopped thinking" in _notes(run_with)[0]["content"]
+
+
 # --- the pieces ------------------------------------------------------------------------------
 
 

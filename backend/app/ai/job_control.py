@@ -119,18 +119,10 @@ def _cancel_one(interp: Interpreter, state: _Run, job: RunningJob) -> str:
     record = ToolCallRecord(tool=tool, arguments=arguments)
     line: str
     if job.app == think.APP:
-        # Conductor's own think (#78): no app to ask; the thinker stops it.
-        think.request_cancel(job.ref)
-        answer = JobRead(
-            ref=job.ref,
-            status="canceled",
-            title=job.title,
-            untrusted=job.untrusted,
-            cancel_requested=True,
-        )
+        answer = cancel_think(job.ref, job.title, job.untrusted)
         line = f"Stopped thinking over {think.subject(job.title)}. Nothing was changed."
         record.result = line
-        record.app_record = [_receipt(job, answer)]
+        record.app_record = [cancel_receipt(job, answer)]
     elif app is None or app.agent is None:
         record.error = f"{run_record.NOT_RUN_PREFIX}conductor can't reach {job.app}"
         line = f"I can't reach {job.app} to stop {subject}."
@@ -149,7 +141,7 @@ def _cancel_one(interp: Interpreter, state: _Run, job: RunningJob) -> str:
         else:
             line = _cancelled_line(job.app, subject, answer)
             record.result = line
-            record.app_record = [_receipt(job, answer)]
+            record.app_record = [cancel_receipt(job, answer)]
     logger.info("job_cancel_step", app=job.app, ref=job.ref, ok=record.error is None)
     state.records.append(record)
     turn_events.receipt(seq, record)
@@ -167,7 +159,33 @@ def _cancelled_line(app: str, subject: str, answer: JobRead) -> str:
     return f"Asked {app} to stop {subject}: {progress} when I asked. I'll post a note when it ends."
 
 
-def _receipt(job: RunningJob, answer: JobRead) -> dict[str, Any]:
+def cancel_think(ref: str, title: str | None, untrusted: bool) -> JobRead:
+    """Stop conductor's own think (#78): no app to ask, so the thinker's flag
+    is set (a try in flight is cut off, none starts) and the answer is code's,
+    in the jobs contract's shape, so the receipt and note paths are shared."""
+    think.request_cancel(ref)
+    return JobRead(
+        ref=ref, status="canceled", title=title, untrusted=untrusted, cancel_requested=True
+    )
+
+
+def card_note(app: str, subject: str, answer: JobRead) -> str:
+    """What the person's tap on a job card's Cancel (#90) leaves on the
+    thread, in their own voice and built by code from the app's answer: the
+    ``done`` count at the moment they asked, never a promise it has stopped
+    before the app says so."""
+    progress = narrator.job_progress(answer.done, answer.total)
+    if answer.cancel_requested is False or (
+        answer.status in FINISHED and answer.status != "canceled"
+    ):
+        ended = {"completed": "finished", "failed": "failed"}.get(answer.status, "ended")
+        return f"Tried to stop {subject} from its card, but it had already {ended}: {progress}."
+    if answer.status == "canceled":
+        return f"Stopped {subject} from its card: {progress} when I asked."
+    return f"Asked {app} to stop {subject} from its card: {progress} when I asked."
+
+
+def cancel_receipt(job: RunningJob, answer: JobRead) -> dict[str, Any]:
     """The cancel as a v1.1 record entry, built by code from the app's answer:
     a write when the job was still running, else only a read of how it ended."""
     title = answer.title or job.title

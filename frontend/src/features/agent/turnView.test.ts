@@ -56,6 +56,9 @@ describe('pendingConfirm', () => {
     const proposal = msg({ id: 3, role: 'assistant', content: 'I thought over it… Shall I go ahead?', stop_reason: 'think_proposal' as AgentMessage['stop_reason'] })
     expect(pendingConfirm([msg({ id: 1 }), msg({ id: 2, role: 'assistant' }), proposal])).toMatchObject({ app: 'conductor', question: PROPOSAL_QUESTION })
     expect(pendingConfirm([msg({ id: 1 }), proposal, msg({ id: 4, content: 'thanks' })])).toBeNull()
+    // Another job's plain note posted after it doesn't hide it (#90's grouping).
+    const note = msg({ id: 4, role: 'assistant', content: 'Your playlist is in.', stop_reason: 'job_note' })
+    expect(pendingConfirm([msg({ id: 1 }), proposal, note])).toMatchObject({ app: 'conductor' })
   })
 })
 

@@ -3,6 +3,7 @@ import type {
   AgentMessage,
   Conversation,
   ConversationDetail,
+  JobCancelResult,
   MessageExchange,
   TurnActivity,
 } from '../types/agent'
@@ -76,4 +77,16 @@ export function turnEventsUrl(conversationId: number): string {
 export async function cancelTurn(conversationId: number): Promise<{ cancel_requested: boolean }> {
   const res = await apiClient(`/api/agent/conversations/${conversationId}/cancel`, { method: 'POST' })
   return (await res.json()) as { cancel_requested: boolean }
+}
+
+/** Stop a background job from its card (#90): the app's cancel, no model, and
+ * the tap recorded as the person's own note. The result carries the job's
+ * `done` count at the moment of the cancel. */
+export async function cancelJob(conversationId: number, app: string, ref: string): Promise<JobCancelResult> {
+  const res = await apiClient(`/api/agent/conversations/${conversationId}/jobs/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ app, ref }),
+  })
+  return (await res.json()) as JobCancelResult
 }

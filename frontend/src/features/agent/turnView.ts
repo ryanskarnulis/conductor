@@ -13,6 +13,7 @@ import type {
 import { activityLabel, appFromTool, lookedAtFromTool, openedAppFromTool } from './delegateCalls'
 import { answerValue, fillParts, valueFromRecord, type RefValue } from './planRefs'
 import { queuedPlanSteps, type TurnStream } from './turnStream'
+import { JOB_NOTE } from '../../types/agent'
 
 /** The shell's view of a conversation, derived from today's persisted turns
  * (messages, their delegate calls and the apps' typed records) plus the live
@@ -50,6 +51,10 @@ export interface ShellTurn {
   stopReason: AgentStopReason | null
   /** True while the turn is the optimistic, in-flight one. */
   live: boolean
+  /** The reply is a background job's one note (#90), not an answer to anything. */
+  jobNote?: boolean
+  /** When a job's note was posted. */
+  at?: string | null
 }
 
 export interface PendingConfirmView {
@@ -194,13 +199,23 @@ function refValues(stream: TurnStream): Record<string, RefValue> {
   return values
 }
 
+/** Whether a landed step started long work that is still going (#76). */
+function detached(receipt: LiveReceipt): boolean {
+  return receipt.receipts.some((entry) => entry.source === 'app' && entry.job != null && !['completed', 'failed', 'canceled'].includes(entry.job.status))
+}
+
 /** The in-flight turn's steps from the stream: each landed step from its
  * receipt, a started one as running, and the plan's remaining steps as
  * queued. Nothing is shown done before its receipt arrived. */
 export function streamSteps(stream: TurnStream): ShellTurn['steps'] {
   const waitingOnApp = stream.paused?.reason === 'app_confirm'
   const steps = stream.steps.map((step) => {
-    if (step.receipt) return stepFrom(recordOf(step.receipt), waitingOnApp)
+    if (step.receipt) {
+      const landed = stepFrom(recordOf(step.receipt), waitingOnApp)
+      // A step whose receipt carries a job still running went to the
+      // background: queued, not done (#90).
+      return landed.state === 'done' && detached(step.receipt) ? { ...landed, state: 'job' as const } : landed
+    }
     return { ...stepFrom({ tool: step.tool ?? '', arguments: step.arguments ?? {}, error: null }, false), state: 'run' as const }
   })
   const paused = stream.paused && stream.paused.reason !== 'app_confirm' ? stream.paused.step : null
@@ -263,11 +278,19 @@ export function streamReceipts(stream: TurnStream): ShellTurn['receipts'] {
   })
 }
 
+/** The newest message that is part of the conversation itself: a background
+ * job's note (#76) is neither said nor answered, so it never takes the place
+ * of the last turn (it doesn't void a waiting question on the server either). */
+export function lastExchange(messages: AgentMessage[]): AgentMessage | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].stop_reason !== JOB_NOTE) return messages[i]
+  return undefined
+}
+
 /** The question the conversation's last turn leaves waiting, if any — the
  * frontend twin of backend `confirmation.pending`: a later call to the same
  * app in that turn voids it. */
 export function pendingConfirm(messages: AgentMessage[]): (PendingConfirmView & { raw: Pick<AppConfirm, 'app'> }) | null {
-  const last = messages[messages.length - 1]
+  const last = lastExchange(messages)
   if (!last || last.role !== 'assistant') return null
   // A think's proposal (#78), posted as its job's note: the reply lists the
   // plan, and a yes runs exactly that.
@@ -299,8 +322,9 @@ export function buildTurns(
     // mid-thread) still shows, as a turn with nothing said.
     const orphan = m.role === 'assistant'
     const next = orphan ? m : messages[i + 1]
-    const reply = next && next.role === 'assistant' ? next : null
-    const isLast = reply !== null && reply === messages[messages.length - 1]
+    // A job's note (#76) answers nothing: it is never the reply to what you said.
+    const reply = next && next.role === 'assistant' && (orphan || next.stop_reason !== JOB_NOTE) ? next : null
+    const isLast = reply !== null && reply === lastExchange(messages)
     const calls = reply?.tool_calls ?? []
     // The turn that ended on a pause keeps the plan the stream drew, so the
     // plan doesn't vanish the moment its question appears.
@@ -328,8 +352,10 @@ export function buildTurns(
         return (call.app_record ?? []).map((entry) => receiptFrom(entry, app)).filter((r): r is NonNullable<typeof r> => r !== null)
       }),
       reply: reply?.content ?? null,
-      stopReason: reply?.stop_reason ?? null,
+      stopReason: reply?.stop_reason === JOB_NOTE ? null : (reply?.stop_reason ?? null),
       live: false,
+      jobNote: reply?.stop_reason === JOB_NOTE,
+      at: reply?.stop_reason === JOB_NOTE ? reply.created_at : null,
     })
     if (reply && !orphan) i++
   }

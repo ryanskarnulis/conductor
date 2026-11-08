@@ -22,7 +22,9 @@ job watcher through :func:`publish_job`. Each change is a ``job`` event
 ends), a snapshot lists the running jobs (``jobs``, only when there are
 any), and a stream stays open past ``turn_ended`` while one runs, ending
 after the last one's ``job`` event says it ended. With no running job a
-stream behaves exactly as before.
+stream behaves exactly as before. A stream is also seeded from the ledger's
+running jobs when it connects (#90, :func:`follow`), which is how a page
+reloaded mid-job finds them.
 
 Each turn also carries its :class:`~app.ai.stop.Stop` (#66): ``POST …/cancel``
 reaches the in-flight turn through here, and a fresh one per turn means a Stop
@@ -47,7 +49,7 @@ import asyncio
 import itertools
 import threading
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
@@ -74,6 +76,9 @@ HEARTBEAT_SECONDS = 15.0
 IDLE_SECONDS = 30.0
 # What the browser waits before reconnecting a dropped stream, in ms.
 RETRY_MS = 2_000
+
+# Reads a conversation's running jobs from the record (a ``job`` event each).
+JobSeed = Callable[[], list[dict[str, Any]]]
 
 
 @dataclass(frozen=True)
@@ -280,6 +285,7 @@ async def follow(
     *,
     heartbeat: float | None = None,
     idle: float | None = None,
+    seed: JobSeed | None = None,
 ) -> AsyncGenerator[TurnEvent | Heartbeat, None]:
     """The conversation's stream: a snapshot, then each event as it happens.
 
@@ -288,6 +294,12 @@ async def follow(
     many others follow the same conversation). Quiet stretches yield a
     :class:`Heartbeat` every ``heartbeat`` seconds. Closing the iterator
     unsubscribes at once.
+
+    ``seed`` (#90) reads the conversation's running jobs from the record: a
+    snapshot lists them beside the channel's own, so a page that connects
+    after a restart, or long after the turn ended, still finds them. It runs
+    only once this stream is subscribed and its snapshot is numbered, so a
+    job that ends while it runs still reaches the stream as an event.
     """
     heartbeat = HEARTBEAT_SECONDS if heartbeat is None else heartbeat
     idle = IDLE_SECONDS if idle is None else idle
@@ -300,6 +312,7 @@ async def follow(
             _deliver(oldest, _CLOSE)
         first = _snapshot(channel)
     try:
+        first = await _seeded(first, seed)
         yield first
         # What this stream has seen, so it ends in event order: a turn in
         # flight, and the jobs still running (#76).
@@ -321,6 +334,7 @@ async def follow(
             if item == _RESYNC:
                 with _LOCK:
                     event = _snapshot(_CHANNELS.setdefault(conversation_id, _Channel()))
+                event = await _seeded(event, seed)
                 turn_on, running = _seen(event)
                 floor = event.id
                 yield event
@@ -345,6 +359,24 @@ async def follow(
                         return
     finally:
         _unsubscribe(conversation_id, follower)
+
+
+async def _seeded(snapshot: TurnEvent, seed: JobSeed | None) -> TurnEvent:
+    """``snapshot`` plus the jobs ``seed`` reads that the channel doesn't hold
+    (the channel's own report is newer). A seed that fails adds nothing."""
+    if seed is None:
+        return snapshot
+    try:
+        found = await asyncio.to_thread(seed)
+    except Exception as exc:
+        logger.warning("job_seed_failed", error=str(exc), error_type=type(exc).__name__)
+        return snapshot
+    held = list(snapshot.data.get("jobs") or [])
+    keys = {_job_key(job) for job in held}
+    fresh = [job for job in found if _job_key(job) not in keys]
+    if not fresh:
+        return snapshot
+    return replace(snapshot, data={**snapshot.data, "jobs": [*held, *fresh][:MAX_JOBS]})
 
 
 def _seen(snapshot: TurnEvent) -> tuple[bool, set[str]]:

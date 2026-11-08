@@ -46,6 +46,8 @@ export interface AppRecordEntry {
   reason?: string | null
   undo?: { handle: string; how: string } | { none: string } | null
   untrusted?: boolean
+  /** Set when the call started long work that went on after the turn (#76). */
+  job?: { ref: string; status: string; done?: number | null; total?: number | null } | null
 }
 
 /** What conductor keeps of an app's `confirm_required` (backend AppConfirm). */
@@ -71,13 +73,16 @@ export type AgentStopReason =
   | 'timed_out'
   | 'internal_error'
 
+/** The `stop_reason` of the one note a background job posts when it ends (#76). */
+export const JOB_NOTE = 'job_note'
+
 export interface AgentMessage {
   id: number
   conversation_id: number
   role: 'user' | 'assistant'
   content: string | null
   tool_calls: ToolCallRecord[] | null
-  stop_reason: AgentStopReason | null
+  stop_reason: AgentStopReason | typeof JOB_NOTE | null
   created_at: string
 }
 
@@ -181,6 +186,38 @@ export interface TurnSnapshot {
   steps?: LiveStep[]
   paused?: TurnPause | null
   resumed?: TurnResumed | null
+  /** The jobs still running (#76, #90), whether or not a turn is in flight. */
+  jobs?: JobEvent[]
+}
+
+/** A background job as the stream reports it (backend `job` event, #76):
+ * its A2A status, how far it got, and once it ended, the note's message id.
+ * `title` is the app's text when `untrusted`: a label, never markup. */
+export interface JobEvent {
+  app: string
+  ref: string
+  status: 'submitted' | 'working' | 'input_required' | 'completed' | 'failed' | 'canceled' | string
+  done: number
+  total: number | null
+  title: string | null
+  untrusted: boolean
+  ended: boolean
+  /** On an end: `ended` (the app said so), or `lost`/`gone` (conductor lost track). */
+  how?: 'ended' | 'lost' | 'gone' | null
+  note_message_id?: number | null
+  /** Set by a card's Cancel: the app was asked to stop. */
+  cancel_requested?: boolean
+}
+
+/** The app's answer to a card's Cancel (backend `JobCancelRead`). */
+export interface JobCancelResult {
+  app: string
+  ref: string
+  status: string
+  done: number
+  total: number | null
+  cancel_requested: boolean
+  message: AgentMessage
 }
 
 export interface TurnEnded {

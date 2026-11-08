@@ -445,6 +445,78 @@ def running_job_lines(db: Session, conversation_id: int) -> list[str]:
     return lines
 
 
+def running_job_events(db: Session, conversation_id: int, *, limit: int) -> list[dict[str, Any]]:
+    """The conversation's running jobs as the live channel's ``job`` events
+    carry them (#90), from the ledger's last report: what a page that
+    connects after a restart, or long after the turn ended, reads."""
+    return [
+        {
+            "app": job.app,
+            "ref": job.ref,
+            "status": job.status,
+            "done": job.done,
+            "total": job.total,
+            "title": job.title,
+            "untrusted": job.untrusted,
+            "ended": False,
+        }
+        for job in running_jobs(db, conversation_id, limit=limit)
+    ]
+
+
+def conversation_job(db: Session, conversation_id: int, app: str, ref: str) -> LedgerJob | None:
+    """A job this conversation started, ended or not; ``None`` when no step of
+    this conversation started it (another conversation's job is not ours to touch)."""
+    return db.execute(
+        select(LedgerJob)
+        .join(LedgerStep, LedgerStep.id == LedgerJob.started_by_step_id)
+        .join(LedgerPlan, LedgerPlan.id == LedgerStep.plan_id)
+        .join(LedgerTurn, LedgerTurn.id == LedgerPlan.turn_id)
+        .where(
+            LedgerTurn.conversation_id == conversation_id,
+            LedgerJob.app == app,
+            LedgerJob.ref == ref,
+        )
+    ).scalar_one_or_none()
+
+
+def note_job_cancel(
+    db: Session,
+    conversation: Conversation,
+    message: ConversationMessage,
+    job: LedgerJob,
+    entry: dict[str, Any],
+) -> None:
+    """The person's tap on a job card's Cancel (#90) as a note turn of their
+    own, with the cancel as its one step and its receipt (``entry``, built by
+    code from the app's answer, :func:`app.ai.job_control.cancel_receipt`).
+    Journaling the receipt files the answer's report on the job's row, so its
+    ``done`` count is the one the app gave. Never costs the cancel itself."""
+    turn = note_turn(db, conversation, message)
+    if turn is None:
+        return
+
+    def write() -> None:
+        plan = LedgerPlan(turn_id=turn.id, source="ui", status="ran")
+        db.add(plan)
+        db.flush()
+        step = LedgerStep(
+            plan_id=plan.id,
+            seq=1,
+            kind="cancel",
+            app=job.app,
+            tool=run_record.JOB_CANCEL_PREFIX + job.app,
+            arguments={"ref": job.ref},
+            outcome="done",
+            result=message.content,
+        )
+        db.add(step)
+        db.flush()
+        _journal_receipt(db, step, job.app, 1, entry)
+
+    _safely(db, "ledger_job_cancel_failed", write)
+
+
 def _clip(text: str, limit: int = 80) -> str:
     flat = " ".join(text.split())
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
