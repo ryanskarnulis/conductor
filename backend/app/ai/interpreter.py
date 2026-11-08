@@ -21,6 +21,9 @@ same as the loop's. What it runs, across apps (#72):
   person's words and the apps' receipts from every conversation and day,
   cited by day and conversation. No app, no model. ``{sN}`` on it is the one
   entity it resolved, if one clearly answers.
+- ``ask(app="memory")`` (#81): conductor's own app, run by code
+  (:mod:`app.services.facts`): remember, forget or list what the person
+  saved, in their own words. No agent, no model, no budget, no gate.
 - ``ask_user``: the plan pauses on the question; the person's answer resumes
   the same plan, ``{s1}`` replaced by their words.
 - ``{sN}`` in a step's text: the main title step N's receipt touched, quoted,
@@ -74,6 +77,7 @@ from app.ai import (
     compiler,
     control,
     dataflow,
+    facts,
     memory,
     narrator,
     run_record,
@@ -101,6 +105,9 @@ logger = structlog.get_logger(__name__)
 
 # How a recall step reads the ledger (#80): its query in, what memory found out.
 MemoryReader = Callable[[str], memory.Recalled]
+# The memory app (#81): the step's request and the person's words in; its
+# result line and receipts out.
+MemoryApp = Callable[[str, str], tuple[str, list[dict[str, Any]]]]
 
 _AFTER_FAILURE = f"{run_record.NOT_RUN_PREFIX}an earlier step of the plan didn't finish"
 _LEFT_IT = "Okay, I left it."
@@ -128,6 +135,8 @@ class _Run:
     found: dict[str, ToolCallRecord] = field(default_factory=dict)
     # Memory over the ledger (#80): a recall step's query in, what it found out.
     memory: MemoryReader | None = None
+    # The memory app (#81): what an ask to ``memory`` reaches.
+    memory_app: MemoryApp | None = None
 
 
 class Interpreter:
@@ -166,12 +175,14 @@ class Interpreter:
         self_facts: Callable[[], str] | None,
         control_view: Callable[[], Ledgered] | None = None,
         recall: MemoryReader | None = None,
+        memory_app: MemoryApp | None = None,
     ) -> tuple[AgentRunResult | None, TurnPlan]:
         """The turn's result, or ``None`` when the loop should take it; and the plan."""
         loop = self._loop
         state = _Run(
             words, actor, trace, on_activity, stop, view=control.View(control_view), memory=recall
         )
+        state.memory_app = memory_app
         if _stopped(stop):
             return loop._stop("cancelled", [], 0, []), TurnPlan(status="ran", note="stopped")
         pending = current_delegation_context().pending_confirm
@@ -448,12 +459,17 @@ class Interpreter:
                 refusal = _refusal(step, filled, confirms=confirms)
                 if refusal is not None:
                     return self._refuse(state, turn, steps, index, filled, refusal)
-                if step.destructive and not confirms and step.id != gate_passed:
+                if step.app == facts.APP:
+                    record: ToolCallRecord | None = self._memory_app(state, filled.text)
+                elif step.destructive and not confirms and step.id != gate_passed:
                     turn.status, turn.pause = "paused", "gate"
                     turn.resume_at, turn.pause_app = position, step.app
                     self._carry(turn, position, values)
                     return self._gate(state, step, filled.text)
-                record = self._dispatch(state, ask_tool_name(step.app), {"message": filled.text})
+                else:
+                    record = self._dispatch(
+                        state, ask_tool_name(step.app), {"message": filled.text}
+                    )
                 if record is not None and record.app_confirm and record.app_confirm.get("question"):
                     return self._app_asked(state, turn, steps, position + 1, step, values)
             elif isinstance(step, plans.Look):
@@ -711,6 +727,31 @@ class Interpreter:
         turn_events.receipt(len(state.records), record)
         return record
 
+    def _memory_app(self, state: _Run, request: str) -> ToolCallRecord:
+        """An ask to ``memory`` (#81): run by code over the saved facts, filed
+        as ``ask_memory`` with v1.1 receipts like any app's. The fact comes
+        from the person's own words, so a turn that only said "yes" gives
+        none."""
+        from app.ai.loop import ToolCallRecord  # noqa: PLC0415
+
+        arguments = {"message": request}
+        self._loop._emit(state.on_activity, _activity("tool", tool=facts.TOOL))
+        turn_events.step_started(len(state.records) + 1, facts.TOOL, arguments)
+        record = ToolCallRecord(tool=facts.TOOL, arguments=arguments)
+        if state.memory_app is None:
+            record.error = "couldn't reach memory: it isn't available here"
+        else:
+            try:
+                said = state.words if state.restate else ""
+                record.result, record.app_record = state.memory_app(request, said)
+            except Exception as exc:
+                logger.warning("plan_memory_failed", error=str(exc), error_type=type(exc).__name__)
+                record.error = "couldn't reach memory: it couldn't be read or written"
+        logger.info("plan_memory", ok=record.error is None)
+        state.records.append(record)
+        turn_events.receipt(len(state.records), record)
+        return record
+
     def _look_fell_back(
         self,
         state: _Run,
@@ -849,7 +890,7 @@ def _read_group(steps: Sequence[plans.Step], start: int) -> list[plans.Ask | pla
     group: list[plans.Ask | plans.Look] = []
     for step in steps[start:]:
         if not isinstance(step, plans.Look) and not (
-            isinstance(step, plans.Ask) and plans.reads_only(step)
+            isinstance(step, plans.Ask) and plans.reads_only(step) and step.app != facts.APP
         ):
             break
         if any(read.app == step.app for read in group):

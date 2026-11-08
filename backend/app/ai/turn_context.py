@@ -5,7 +5,8 @@ replays chat turns: the model sees the system prompt and the tool schemas
 (byte-identical turn to turn), then one user message holding
 
 1. the state block (:mod:`app.ai.state_block`), with the entity registry's
-   matches from earlier conversations (#80, :mod:`app.services.memory`),
+   matches from earlier conversations (#80, :mod:`app.services.memory`) and
+   the facts the person saved (#81, :mod:`app.services.facts`),
 2. "Before this turn:" (:mod:`app.ai.recall`): this conversation's record,
    requests and last exchange, plus earlier conversations' calls that share
    words with what the person just said when the registry has no match,
@@ -49,6 +50,7 @@ def build(
     entities: Callable[[], Sequence[state_block.Entity] | None] | None = None,
     jobs: Callable[[], Sequence[str]] | None = None,
     matches: Callable[[], Sequence[state_block.Match]] | None = None,
+    facts: Callable[[], Sequence[state_block.Fact]] | None = None,
 ) -> str:
     """The context that opens the turn (without the person's words, which the
     loop adds last). ``history`` is this conversation's stored turns;
@@ -58,7 +60,8 @@ def build(
     ``history``. ``jobs`` are the ledger's running jobs (#76), likewise.
     ``matches`` are the entity registry's leads from earlier conversations
     (#80); when it finds any, the word-matched calls from ``earlier`` are left
-    out (they'd say the same thing twice)."""
+    out (they'd say the same thing twice). ``facts`` are what the person asked
+    conductor to remember (#81)."""
     try:
         turns = list(history())
     except Exception as exc:
@@ -94,8 +97,16 @@ def build(
             logger.warning(
                 "turn_context_jobs_failed", error=str(exc), error_type=type(exc).__name__
             )
+    saved: list[state_block.Fact] = []
+    if facts is not None:
+        try:
+            saved = list(facts())
+        except Exception as exc:
+            logger.warning(
+                "turn_context_facts_failed", error=str(exc), error_type=type(exc).__name__
+            )
     try:
-        block = state_block.render(today, now, turns, recent, running, leads)
+        block = state_block.render(today, now, turns, recent, running, leads, saved)
         before = recall.section(recall.Recall.of(turns), hits)
     except Exception as exc:
         # A stored turn conductor can't read: the calendar alone, never no turn.

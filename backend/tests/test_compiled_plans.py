@@ -69,7 +69,8 @@ def test_the_schema_is_built_from_the_fleet_with_a_ceiling_not_a_limit(fleet: Fl
     assert set(kinds) == {
         "ask", "look", "open", "ask_user", "recall", "cancel", "amend", "confirm", "undo", "think"
     }  # fmt: skip
-    assert kinds["ask"]["properties"]["app"]["enum"] == ["music", "tasks"]
+    # memory (#81) is conductor's own app, always offered.
+    assert kinds["ask"]["properties"]["app"]["enum"] == ["memory", "music", "tasks"]
     assert kinds["open"]["properties"]["app"]["enum"] == ["chess"]
     for item in kinds.values():  # llama-server's strict grammar: all required, nothing else
         assert set(item["required"]) == set(item["properties"])

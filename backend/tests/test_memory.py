@@ -200,7 +200,7 @@ def test_the_opening_stays_bounded_with_matches() -> None:
     matched = [line for line in block.splitlines() if line.startswith("- music song")]
     assert len(matched) == state_block.MAX_MATCHES
     assert sum(len(line) for line in matched) + 90 <= state_block.MATCHES_MAX_CHARS
-    assert turn_context.MAX_CHARS <= 10_500
+    assert turn_context.MAX_CHARS <= 11_500
 
 
 # --- through the route ----------------------------------------------------------------------
@@ -418,7 +418,7 @@ def test_quiet_topics_are_built_by_code_and_follow_the_conversation(
     assert turns[0].terms == ["garage", "shelve", "steel"]
     assert db_session.execute(select(LedgerTopic)).scalars().all()  # never in any API
     paths = set(app.openapi()["paths"])
-    assert not [path for path in paths if "topic" in path or "memory" in path]
+    assert not [path for path in paths if "topic" in path]
 
 
 def test_a_backlog_is_indexed_oldest_first_and_once(db_session: Session) -> None:

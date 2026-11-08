@@ -295,7 +295,32 @@ def _say(
     record = driver.say(text, surface=surface)
     record.label = label
     session.turns.append(record)
+    session.world.receipts.extend(memory_writes(record))
     return record
+
+
+# Conductor's own memory app (#81): what each of its writes counts as.
+_MEMORY_KINDS = {"remember": "create", "forget": "trash"}
+
+
+def memory_writes(record: TurnRecord) -> list[Receipt]:
+    """The memory app's writes in a turn, as world receipts: a saved fact is
+    a create, a forgotten one a trash. Memory is an app conductor runs, so its
+    replies are held to its receipts like any other app's."""
+    found: list[Receipt] = []
+    for call in record.tools:
+        if call.get("tool") != "ask_memory":
+            continue
+        for entry in call.get("app_record") or []:
+            kind = _MEMORY_KINDS.get(str(entry.get("tool")))
+            if kind is None or entry.get("outcome") != "done":
+                continue
+            for ref in entry.get("touched") or []:
+                title = str(ref.get("title"))
+                found.append(
+                    Receipt("memory", kind, f"memory:{ref.get('id')}", title, record.index)
+                )
+    return found
 
 
 def _run_step(step: Step, driver: Driver, session: Session) -> TurnRecord | None:

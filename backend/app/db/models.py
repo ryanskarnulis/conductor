@@ -155,6 +155,9 @@ class LedgerTurn(Base, TimestampMixin):
     topic_id: Mapped[int | None] = mapped_column(
         ForeignKey("ledger_topics.id"), default=None, index=True
     )
+    # Forgotten (#81): the person had a saved fact said here forgotten (or this
+    # turn forgot one). Out of memory's index, recall and every model replay.
+    forgotten_at: Mapped[datetime | None] = mapped_column(default=None)
 
     plans: Mapped[list[LedgerPlan]] = relationship(back_populates="turn", order_by="LedgerPlan.id")
 
@@ -352,4 +355,23 @@ class LedgerJob(Base, TimestampMixin):
     noted_at: Mapped[datetime | None] = mapped_column(default=None, index=True)
     note_message_id: Mapped[int | None] = mapped_column(
         ForeignKey("conversation_messages.id"), default=None
+    )
+
+
+class MemoryFact(Base, TimestampMixin, SoftDeleteMixin):
+    """Something the person asked conductor to remember (#81), in their words.
+
+    Written only by code from the person's own words: a "remember …" turn, or
+    an edit in the memory list. ``source_turn_id`` is the turn it came from
+    (the remember turn, or the note turn of the edit that last changed it;
+    null for an edit made outside a conversation). Forgetting soft-deletes it
+    and takes its source turn out of memory (``LedgerTurn.forgotten_at``).
+    """
+
+    __tablename__ = "memory_facts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    text: Mapped[str]
+    source_turn_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ledger_turns.id"), default=None, index=True
     )

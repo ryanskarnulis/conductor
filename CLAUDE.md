@@ -150,6 +150,18 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   guessed (code appends it). The state block's matches are registry leads
   from other conversations, only when the words point back; outside titles
   stay quoted labels.
+- **Memory you can see** (#81, `app/ai/facts.py`, `app/services/facts.py`).
+  "Remember …", "what do you know about me?" and "forget that" are asks to
+  `memory`, conductor's own app: one `ask` enum value and one planner-prompt
+  line, run by code (no agent, model, budget or gate). A fact is cut from the
+  person's own words, never a model's; outside text never becomes one. Its
+  receipts have no undo handle and no registry entity. Saved facts ride the
+  state block (capped) and the speaker's facts. Forgetting soft-deletes the
+  fact and `unindex`es the turn it was said in and the one that forgot it
+  (`forgotten_at`: off topics, entities, recall, matches and receipt quotes,
+  blanked in every replay); the visible transcript keeps the words. The
+  memory list (`/api/memory/facts`, a lazy UI chunk) shows each fact's
+  source; its edits and forgets are the person's note turns.
 - **Data flows as quoted data, never as control** (#72, `app/ai/dataflow.py`).
   Code fills `{sN}` from step N's receipt: its main touched title (job refs
   skipped, up to 3 joined), cleaned and quoted. No title, or more than 3,

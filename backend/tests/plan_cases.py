@@ -172,6 +172,9 @@ def state(**parts: str) -> str:
         lines += ["Recent entities (newest first, as of then):", f"- {parts['recent']}"]
     if parts.get("matches"):
         lines.append(f"Matches for words in the message: {parts['matches']}")
+    if parts.get("facts"):
+        lines.append("Facts the person asked you to remember (their words, as of when saved):")
+        lines += [f'- "{fact}" (saved Tuesday 2026-11-03)' for fact in parts["facts"].split("|")]
     lines.append("[End of state]")
     return "\n".join(lines)
 
@@ -401,6 +404,41 @@ CASES: tuple[Case, ...] = (
         "when did I last download something by Caribou?",
         (one(M("recall", words=("caribou",))), one(M("ask", "music", ("caribou",)))),
         "memory",
+    ),
+    # Memory you can see (#81): asks to conductor's own memory app.
+    Case(
+        "memory-remember",
+        "remember I sort music on Sundays",
+        (one(M("ask", "memory", ("sort music", "sunday"))),),
+        "memory",
+    ),
+    Case(
+        "memory-about-me",
+        "what do you know about me?",
+        (one(M("ask", "memory")), none("self")),
+        "memory",
+        state(facts="I sort music on Sundays|focus time is 9 to 11 on weekdays"),
+    ),
+    Case(
+        "memory-forget-that",
+        "forget that",
+        (one(M("ask", "memory", ("forget",))),),
+        "memory",
+        state(facts="the spare key is under the blue pot"),
+    ),
+    Case(
+        "memory-forget-named",
+        "forget that I sort music on Sundays",
+        (one(M("ask", "memory", ("forget", "sunday"))),),
+        "memory",
+        state(facts="I sort music on Sundays|focus time is 9 to 11 on weekdays"),
+    ),
+    Case(
+        "memory-used",
+        "add a task for my music sorting day to clean the record player",
+        (one(M("ask", "tasks", ("sunday", "record player"))),),
+        "memory",
+        state(facts="I sort music on Sundays"),
     ),
     # --- general knowledge and declines ------------------------------------------------
     Case("knowledge-egg", "how long do I boil an egg?", (none("knowledge"),), "knowledge"),

@@ -68,6 +68,7 @@ from app.schemas.conversations import (
     TurnActivityRead,
 )
 from app.services import conversations as conversations_service
+from app.services import facts as facts_service
 from app.services import ledger
 from app.services import memory as memory_service
 
@@ -476,6 +477,7 @@ def post_message(
         entities=lambda: ledger.recent_entities(db, conversation.id),
         jobs=lambda: ledger.running_job_lines(db, conversation.id),
         matches=lambda: memory_service.matches(db, data.content, conversation.id),
+        facts=lambda: facts_service.for_state(db, data.content),
     )
     user_message = conversations_service.append_user_message(db, conversation, data.content)
     turn = ledger.open_turn(db, conversation, user_message, surface=data.surface, panel=data.panel)
@@ -520,9 +522,18 @@ def post_message(
                     conversation_id=str(conversation_id),
                     stop=stop,
                     paused=_paused_plan(db, conversation.id),
-                    self_facts=lambda: ledger.self_report(db, conversation.id),
+                    self_facts=lambda: "\n\n".join(
+                        (ledger.self_report(db, conversation.id), facts_service.self_lines(db))
+                    ),
                     control_view=lambda: ledger.control_view(db, conversation.id),
                     recall=lambda query: memory_service.recall(db, query),
+                    memory_app=lambda request, words: facts_service.handle(
+                        db,
+                        request,
+                        words,
+                        conversation_id=conversation.id,
+                        turn_id=turn.id if turn is not None else None,
+                    ),
                 )
         except AgentRunFailed as exc:
             logger.error(

@@ -66,6 +66,8 @@ from tests.receipt_claims import Tally
 from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
 from tests.session_harness import LoopDriver, Sample, Scenario, WorldHolder, run_sample, sample_line
 from tests.session_scenarios import (
+    FORGET_GONE,
+    REMEMBER_USED,
     S2,
     S3,
     S4,
@@ -305,6 +307,21 @@ COMPILED_SCRIPTS: dict[str, Callable[[World], list[Any]]] = {
         ),
         text_turn("Queued “Suddenly” and added “sort Suddenly” for the weekend."),
     ],
+    # Memory you can see (#81): the fact is in the new conversation's State.
+    REMEMBER_USED.id: lambda w: [
+        _plan(_ask_step("memory", "remember I sort music on Sundays")),
+        text_turn("Got it: “I sort music on Sundays”."),
+        text_turn(json.dumps({"answer": "chat"})),
+        text_turn('{"about_you": true, "reply": "You sort music on Sundays."}'),
+    ],
+    FORGET_GONE.id: lambda w: [
+        _plan(_ask_step("memory", "remember the spare key is under the blue pot")),
+        text_turn("Got it: “the spare key is under the blue pot”."),
+        _plan(_ask_step("memory", "forget that")),
+        text_turn("Forgot “the spare key is under the blue pot”."),
+        _plan({"do": "recall", "query": "spare key"}),
+        text_turn("I have no record of where the spare key is."),
+    ],
     S11.id: lambda w: [
         _S3_PLAN,
         text_turn("Queued “Honey” by Caribou and added “sort Honey” for the weekend."),
@@ -315,7 +332,11 @@ COMPILED_SCRIPTS: dict[str, Callable[[World], list[Any]]] = {
 }
 
 
-@pytest.mark.parametrize("scenario", [S4, S5, S6, S10, S11, S14, S15], ids=lambda s: s.id)
+@pytest.mark.parametrize(
+    "scenario",
+    [S4, S5, S6, S10, S11, S14, S15, REMEMBER_USED, FORGET_GONE],
+    ids=lambda s: s.id,
+)
 def test_compiled_golden_script_passes(scenario: Scenario, compiled: _ScriptedRun) -> None:
     sample = compiled.run(scenario, COMPILED_SCRIPTS[scenario.id](World()))
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
@@ -337,6 +358,30 @@ def test_compiled_s6_finds_the_song_in_state_across_conversations(
     opening = planner[-1]["messages"][1]["content"]
     assert "Matches for words in the message, from earlier conversations" in opening
     assert '"Odessa" (outside text)' in opening
+
+
+def test_compiled_m1_puts_the_saved_fact_in_state_and_m2_takes_it_out(
+    compiled: _ScriptedRun,
+) -> None:
+    # #81: remember → the fact is in State another day; forget → it is gone
+    # from State and from recall.
+    sample = compiled.run(REMEMBER_USED, COMPILED_SCRIPTS[REMEMBER_USED.id](World()))
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    planner = [r for r in compiled.provider.requests if _is_planner(r)]
+    assert '- "I sort music on Sundays" (saved ' in planner[-1]["messages"][1]["content"]
+    sample = compiled.run(FORGET_GONE, COMPILED_SCRIPTS[FORGET_GONE.id](World()))
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    planner = [r for r in compiled.provider.requests if _is_planner(r)]
+    assert "blue pot" not in planner[-1]["messages"][1]["content"]
+    recalled = sample.session.turn("after").tools[0]
+    assert recalled["tool"] == "recall" and recalled["app_record"] == []
+
+
+def test_a_memory_reply_claiming_an_app_write_fails(compiled: _ScriptedRun) -> None:
+    script = COMPILED_SCRIPTS[REMEMBER_USED.id](World())
+    script[1] = text_turn("Got “I sort music on Sundays”, and queued your Sunday playlist.")
+    sample = compiled.run(REMEMBER_USED, script)
+    _fails(sample, "unbacked claim")
 
 
 def test_compiled_s15_sees_no_matches_from_its_own_conversation(compiled: _ScriptedRun) -> None:

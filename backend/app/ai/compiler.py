@@ -21,6 +21,7 @@ from typing import Any
 
 import structlog
 
+from app.ai import facts
 from app.ai import plan as plans
 from app.ai.provider import ChatResult
 from app.fleet.manifests import Fleet
@@ -64,6 +65,8 @@ def _app_lines(fleet: Fleet) -> str:
             f"  Glance: {_holds(app.glance.holds)}.\n"
             f"  Asks that go here: {quoted}"
         )
+    # Memory (#81): conductor's own app, after the fleet's.
+    lines.append(facts.PROMPT_LINE)
     return "\n".join(lines)
 
 

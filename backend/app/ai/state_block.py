@@ -23,7 +23,10 @@ It holds, each line only when there is something to say:
 - matches (#80): things from earlier conversations the entity registry finds
   for the person's words when they point back at something ("that Caribou
   song"), each with the day and the person's words when it was last touched.
-  Leads, as of then: the same quoting rules.
+  Leads, as of then: the same quoting rules;
+- facts you saved (#81): what the person asked conductor to remember, in
+  their own words, quoted, the ones that share words with the message first,
+  then the newest (capped).
 
 Pure: no session, no I/O.
 """
@@ -49,8 +52,12 @@ MAX_MATCHES = 3
 MAX_SAID_CHARS = 100
 # The matches' share of the block: three lines and their heading.
 MATCHES_MAX_CHARS = 900
+# Facts the person saved (#81): how many, each one's length, and their share.
+MAX_FACTS = 8
+MAX_FACT_CHARS = 120
+FACTS_MAX_CHARS = MAX_FACTS * (MAX_FACT_CHARS + 40) + 90
 # The block is never longer than this (asserted in the tests).
-MAX_CHARS = 2400 + MATCHES_MAX_CHARS
+MAX_CHARS = 2400 + MATCHES_MAX_CHARS + FACTS_MAX_CHARS
 
 _HEADER = "[State at the start of this turn — written by conductor, not the person]"
 _FOOTER = "[End of state]"
@@ -93,6 +100,15 @@ class Match:
 
 
 @dataclass(frozen=True)
+class Fact:
+    """Something the person asked conductor to remember (#81), in their words,
+    with the day it was saved."""
+
+    text: str
+    day: str
+
+
+@dataclass(frozen=True)
 class Now:
     """What the client told conductor about where the person is."""
 
@@ -128,6 +144,7 @@ def render(
     entities: Sequence[Entity] | None = None,
     jobs: Sequence[str] | None = None,
     matches: Sequence[Match] = (),
+    facts: Sequence[Fact] = (),
 ) -> str:
     """The block for a turn starting ``today`` on a conversation with
     ``history`` (stored turns, oldest first, as :func:`app.ai.recall.Recall.of`
@@ -135,7 +152,8 @@ def render(
     them from ``history``'s records instead. ``jobs`` are the ledger's running
     jobs as the watcher last read them (#76); ``None`` reads each job's last
     report from the records. ``matches`` are the entity registry's leads from
-    earlier conversations (#80)."""
+    earlier conversations (#80). ``facts`` are the ones the person saved (#81),
+    most relevant first."""
     lines = [_HEADER, *calendar_lines(today)]
     if now.surface is not None:
         lines.append(_SURFACE_LINES[now.surface])
@@ -163,6 +181,9 @@ def render(
     if matches:
         lines.append("Matches for words in the message, from earlier conversations (as of then):")
         lines += [f"- {_match(match)}" for match in matches[:MAX_MATCHES]]
+    if facts:
+        lines.append("Facts the person asked you to remember (their words, as of when saved):")
+        lines += [f"- {_fact(fact)}" for fact in facts[:MAX_FACTS]]
     lines.append(_FOOTER)
     return "\n".join(lines)
 
@@ -260,6 +281,13 @@ def _match(match: Match) -> str:
             said = said[: MAX_SAID_CHARS - 1] + "…"
         line += f', you said "{said}"'
     return line
+
+
+def _fact(fact: Fact) -> str:
+    text = " ".join(fact.text.split())
+    if len(text) > MAX_FACT_CHARS:
+        text = text[: MAX_FACT_CHARS - 1] + "…"
+    return f'"{text}" (saved {fact.day})'
 
 
 def _clip(text: str) -> str:

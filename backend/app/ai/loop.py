@@ -368,6 +368,7 @@ class AgentLoop:
         self_facts: Callable[[], str] | None = None,
         control_view: Callable[[], Ledgered] | None = None,
         recall: Callable[[str], Recalled] | None = None,
+        memory_app: Callable[[str, str], tuple[str, list[dict[str, Any]]]] | None = None,
     ) -> AgentRunResult:
         """Run the loop for one user message. Always returns; never spins.
 
@@ -399,7 +400,8 @@ class AgentLoop:
         the person, ``self_facts`` what code knows about its own recent work
         (for "what did you just do?"), ``control_view`` what the ledger says a
         control step acts on (#74), ``recall`` how a recall step reads memory
-        over the ledger (#80). A plan the interpreter can't run yet
+        over the ledger (#80), ``memory_app`` what an ask to the built-in
+        ``memory`` app reaches (#81). A plan the interpreter can't run yet
         falls back to the loop, and the result carries the plan either way.
         """
         bound = structlog.contextvars.get_contextvars()
@@ -438,6 +440,7 @@ class AgentLoop:
                         self_facts=self_facts,
                         control_view=control_view,
                         recall=recall,
+                        memory_app=memory_app,
                     )
                     trace.plan = turn_plan.model_dump()
                 if result is None:

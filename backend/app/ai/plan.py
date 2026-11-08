@@ -36,6 +36,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
 
+from app.ai.facts import APP as MEMORY_APP
 from app.fleet.manifests import Fleet
 
 # A ceiling against a runaway, not a design limit (decided 2026-11-06).
@@ -175,7 +176,8 @@ def schema(fleet: Fleet, *, resumable: bool = False) -> dict[str, Any]:
     which is what llama-server's strict grammar needs. ``resumable`` offers the
     ``resume`` shape, only while a plan is paused on ``ask_user``.
     """
-    ask_apps = sorted(app.name for app in fleet.agent_apps())
+    # ``memory`` (#81) is conductor's own app: always there, run by code.
+    ask_apps = sorted({app.name for app in fleet.agent_apps()} | {MEMORY_APP})
     open_apps = sorted(app.name for app in fleet.open_apps())
     look_apps = sorted(app.name for app in fleet.glance_apps())
     ids = {"type": "string", "enum": list(STEP_IDS)}
@@ -297,7 +299,7 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
                     found.append(f"{step.id} thinks over {ref} before it runs")
         if isinstance(step, Ask):
             app = checks.fleet.get(step.app)
-            if app is None or not app.has_agent:
+            if step.app != MEMORY_APP and (app is None or not app.has_agent):
                 found.append(f"{step.id} asks {step.app}, which has no agent")
             asks[step.app] = asks.get(step.app, 0) + 1
             if not step.request.strip():
@@ -653,7 +655,8 @@ def ack(plan: Plan) -> str | None:
     for step in plan.steps:
         if isinstance(step, AskUser):
             return None  # the question is the reply, and it comes first
-        if isinstance(step, Ask) and step.app not in apps:
+        # Memory (#81) answers at once, from code: nothing to wait for.
+        if isinstance(step, Ask) and step.app not in apps and step.app != MEMORY_APP:
             apps.append(step.app)
     if not apps:
         return None
