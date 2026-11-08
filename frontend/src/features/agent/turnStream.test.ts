@@ -67,6 +67,18 @@ describe('applyTurnEvent', () => {
     expect(state.steps.map((s) => s.seq)).toEqual([1, 2])
   })
 
+  it('notes a resumed plan, and a snapshot on reconnect carries it', () => {
+    const resumed = { reason: 'ask_user', step: 's1', answer: 'Book dentist' }
+    const state = fold([
+      ['turn_started', beat],
+      ['resumed', resumed],
+    ])
+    expect(state.resumed).toEqual(resumed)
+    const again = applyTurnEvent(EMPTY_STREAM, 'snapshot', { active: true, activity: beat, plan: null, steps: [], paused: null, resumed }, 4)
+    expect(again.resumed).toEqual(resumed)
+    expect(applyTurnEvent(again, 'turn_started', beat, 5).resumed).toBeNull()
+  })
+
   it('a new turn starts clean', () => {
     const state = fold([
       ['turn_started', beat],

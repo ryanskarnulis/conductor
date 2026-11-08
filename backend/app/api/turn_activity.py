@@ -96,6 +96,7 @@ class _Turn:
     plan: dict[str, Any] | None = None
     steps: dict[int, dict[str, Any]] = field(default_factory=dict)
     paused: dict[str, Any] | None = None
+    resumed: dict[str, Any] | None = None
 
 
 class _Follower:
@@ -189,6 +190,8 @@ def publish(conversation_id: int, stop: Stop, kind: str, data: dict[str, Any]) -
                 step.update(tool=data["tool"], arguments=data["arguments"], receipt=data)
         elif kind == "paused":
             turn.paused = data
+        elif kind == "resumed":
+            turn.resumed = data
         _publish(channel, kind, data)
 
 
@@ -339,6 +342,7 @@ def _snapshot(channel: _Channel) -> TurnEvent:
             "plan": turn.plan,
             "steps": [turn.steps[seq] for seq in sorted(turn.steps)],
             "paused": turn.paused,
+            "resumed": turn.resumed,
         }
     return TurnEvent(id=next(_IDS), kind="snapshot", data=data)
 

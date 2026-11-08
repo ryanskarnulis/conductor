@@ -96,6 +96,18 @@ describe('useTurnActivity over the stream', () => {
     expect(mockPoll).not.toHaveBeenCalled()
   })
 
+  it('hands the finished turn’s stream to the page, so a question can outlive it', () => {
+    const onEnded = vi.fn()
+    renderHook(() => useTurnActivity(5, true, onEnded))
+    act(() => {
+      stream().emit('turn_started', beat, 1)
+      stream().emit('paused', { reason: 'ask_user', question: 'Which?', app: null, step: 's1' }, 2)
+      stream().emit('turn_ended', { stop_reason: 'completed', message_id: 3 }, 3)
+    })
+    expect(onEnded).toHaveBeenCalledOnce()
+    expect(onEnded.mock.calls[0][0]).toMatchObject({ paused: { reason: 'ask_user' }, ended: { message_id: 3 } })
+  })
+
   it('falls back to the poll when the stream fails before it says anything', async () => {
     const { result } = renderHook(() => useTurnActivity(5, true))
     await act(async () => {

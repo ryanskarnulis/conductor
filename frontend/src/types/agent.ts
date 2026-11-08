@@ -33,6 +33,8 @@ export interface TouchedRef {
   kind: string
   id: string
   title?: string | null
+  /** Set when the title is outside text (a web title, a file's tags). */
+  untrusted?: boolean
 }
 
 /** One entry of an app's typed record (agent-standard delegate-api v1.1). */
@@ -43,6 +45,7 @@ export interface AppRecordEntry {
   count?: number | null
   reason?: string | null
   undo?: { handle: string; how: string } | { none: string } | null
+  untrusted?: boolean
 }
 
 /** What conductor keeps of an app's `confirm_required` (backend AppConfirm). */
@@ -120,6 +123,8 @@ export interface PlanBodyStep {
   intent?: string
   question?: string
   answer?: string
+  /** An `ask_user` step's offered choices: bare titles. */
+  options?: string[]
   [field: string]: unknown
 }
 
@@ -160,12 +165,22 @@ export interface TurnPause {
   step: string | null
 }
 
+/** This turn picks up a plan that was waiting on the person (#89). `step` is
+ * the step it waited on (null for an app's own question); `answer` is an
+ * `ask_user` answer exactly as `{s1}` will read it. */
+export interface TurnResumed {
+  reason: 'ask_user' | 'gate' | 'app_confirm'
+  step: string | null
+  answer: string | null
+}
+
 export interface TurnSnapshot {
   active: boolean
   activity?: TurnBeat
   plan?: LivePlan | null
   steps?: LiveStep[]
   paused?: TurnPause | null
+  resumed?: TurnResumed | null
 }
 
 export interface TurnEnded {

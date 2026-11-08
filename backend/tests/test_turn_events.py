@@ -181,6 +181,26 @@ def test_a_reconnect_starts_from_a_snapshot_of_the_turn_so_far() -> None:
     assert data["paused"] is None
 
 
+def test_a_resumed_turn_says_so_and_a_reconnect_still_knows() -> None:
+    stop = turn_activity.begin(1)
+    resumed = {"reason": "ask_user", "step": "s1", "answer": "“Book dentist”"}
+    _publish(1, stop, "resumed", **resumed)
+    _publish(1, stop, "plan", steps=[{"id": "s1"}, {"id": "s2"}], start=1)
+
+    async def go() -> TurnEvent:
+        stream = turn_activity.follow(1)
+        first = await anext(stream)
+        await stream.aclose()
+        assert isinstance(first, TurnEvent)
+        return first
+
+    data = _run(go()).data
+    assert data["resumed"] == resumed
+    # A turn that resumed nothing says so too, and a fresh turn forgets it.
+    turn_activity.begin(1)
+    assert _run(go()).data["resumed"] is None
+
+
 def test_a_follower_that_falls_behind_is_resynced_never_grown() -> None:
     async def go() -> list[Item]:
         stream = turn_activity.follow(1, heartbeat=5)
@@ -373,6 +393,10 @@ def _plan_turn(*steps: dict[str, Any]) -> Any:
     return text_turn(json.dumps(body))
 
 
+def _plan_turn_resume(answer: str) -> Any:
+    return text_turn(json.dumps({"resume": answer}))
+
+
 def _ask(app_name: str, request: str, destructive: bool = False) -> dict[str, Any]:
     return {"do": "ask", "app": app_name, "request": request, "destructive": destructive}
 
@@ -422,10 +446,43 @@ def test_a_gated_plan_streams_its_pause_and_a_yes_resumes_from_the_gated_step(
     )
     _, events = turn(yes, "yes")
     plan = next(event.data for event in events if event.kind == "plan")
+    resumed = [event for event in events if event.kind == "resumed"]
+    assert [event.data for event in resumed] == [{"reason": "gate", "step": "s1", "answer": None}]
+    kinds = [event.kind for event in events if event.kind != "activity"]
+    assert kinds.index("resumed") < kinds.index("plan")  # said before the plan runs again
     # The paused plan, from the gated step: what this turn runs.
     assert plan["start"] == 0 and plan["steps"][0]["app"] == "music"
     started = next(event.data for event in events if event.kind == "step_started")
     assert (started["seq"], started["tool"]) == (1, "ask_music")
+
+
+def test_an_answer_to_ask_user_resumes_the_same_plan_and_says_what_s1_becomes(
+    turn: Any,
+) -> None:
+    question = {"do": "ask_user", "question": "Which dentist thing?", "options": ["a", "b"]}
+    first = _plan_turn(question, _ask("tasks", "push {s1} to friday"))
+    _, events = turn(ScriptedProvider([first]), "push the dentist thing to friday")
+    kinds = [event.kind for event in events if event.kind != "activity"]
+    assert kinds == ["snapshot", "turn_started", "plan", "paused", "turn_ended"]
+    assert not any(event.kind == "resumed" for event in events)
+
+    answer = ScriptedProvider([_plan_turn_resume("the {appointment} one"), text_turn("Moved.")])
+    _, events = turn(answer, "the appointment one")
+    resumed = next(event.data for event in events if event.kind == "resumed")
+    # The step it waited on, and the answer as `{s1}` will read (no braces).
+    assert resumed == {"reason": "ask_user", "step": "s1", "answer": "the (appointment) one"}
+    plan = next(event.data for event in events if event.kind == "plan")
+    assert plan["start"] == 1  # the question was asked last turn
+
+
+def test_the_yes_to_an_apps_own_question_resumes_too(turn: Any) -> None:
+    trash = _plan_turn(_ask("tasks", "delete the groceries task", destructive=True))
+    _, events = turn(ScriptedProvider([trash]), "delete the groceries task")
+    assert [e.data["reason"] for e in events if e.kind == "paused"] == ["app_confirm"]
+    yes = ScriptedProvider([_plan_turn({"do": "confirm", "answer": "yes"}), text_turn("Done.")])
+    _, events = turn(yes, "yes")
+    resumed = [e.data for e in events if e.kind == "resumed"]
+    assert resumed == [{"reason": "app_confirm", "step": None, "answer": None}]
 
 
 def test_the_turn_ends_on_the_stream_only_after_the_ledger_committed_it(

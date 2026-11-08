@@ -7,6 +7,7 @@ import type {
   TurnBeat,
   TurnEnded,
   TurnPause,
+  TurnResumed,
   TurnSnapshot,
 } from '../../types/agent'
 
@@ -23,6 +24,8 @@ export interface TurnStream {
   plan: LivePlan | null
   steps: LiveStep[]
   paused: TurnPause | null
+  /** Set when this turn picks up a plan that was waiting on the person. */
+  resumed: TurnResumed | null
   ended: TurnEnded | null
 }
 
@@ -35,6 +38,7 @@ export const TURN_EVENTS = [
   'step_started',
   'receipt',
   'paused',
+  'resumed',
   'turn_ended',
 ] as const
 
@@ -47,6 +51,7 @@ export const EMPTY_STREAM: TurnStream = {
   plan: null,
   steps: [],
   paused: null,
+  resumed: null,
   ended: null,
 }
 
@@ -72,6 +77,7 @@ export function applyTurnEvent(state: TurnStream, name: TurnEventName, data: unk
         plan: snap.plan ?? null,
         steps: snap.steps ?? [],
         paused: snap.paused ?? null,
+        resumed: snap.resumed ?? null,
       }
     }
     case 'turn_started':
@@ -91,6 +97,8 @@ export function applyTurnEvent(state: TurnStream, name: TurnEventName, data: unk
     }
     case 'paused':
       return { ...next, paused: data as TurnPause }
+    case 'resumed':
+      return { ...next, resumed: data as TurnResumed }
     case 'turn_ended':
       return { ...next, active: false, ended: data as TurnEnded }
   }

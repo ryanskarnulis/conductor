@@ -26,12 +26,36 @@ export function StatusPill({ state, detail }: { state: StepState; detail?: strin
   )
 }
 
+/** A step's words, split where it names an earlier step's result (`{s1}`). */
+export type StepPart = { text: string } | { ref: string; filled: string | null }
+
 export interface PlanStepData {
   kind: string
   app: string
   text: string
   state: StepState
   detail?: string
+  /** `text` split into plain words and refs; absent when it names none. */
+  parts?: StepPart[]
+}
+
+/** A ref to an earlier step's result: dashed until that step's receipt fills
+ * it with the real title, then solid. Written out in words for a reader. */
+function StepRef({ id, filled }: { id: string; filled: string | null }) {
+  const n = id.slice(1)
+  if (filled !== null) {
+    return (
+      <span className="cd-ref" data-filled="true" title={`filled in from step ${n}`}>
+        {filled}
+      </span>
+    )
+  }
+  return (
+    <span className="cd-ref" data-filled="false" title={`fills in from step ${n}’s receipt`}>
+      <span aria-hidden="true">{`{${id}}`}</span>
+      <span className="cd-sr">{`what step ${n} finds`}</span>
+    </span>
+  )
 }
 
 /** The compiled plan: one row per step, its kind, app, text and status. */
@@ -43,7 +67,11 @@ export function PlanSteps({ steps }: { steps: PlanStepData[] }) {
           <span className="k">{step.kind}</span>
           <span className="app">{step.app}</span>
           <span className="t" title={step.text}>
-            {step.text}
+            {step.parts
+              ? step.parts.map((part, i) =>
+                  'ref' in part ? <StepRef key={i} id={part.ref} filled={part.filled} /> : <span key={i}>{part.text}</span>,
+                )
+              : step.text}
           </span>
           <StatusPill state={step.state} detail={step.detail} />
         </li>
@@ -133,11 +161,13 @@ export function QuestionCard({
   choices,
   onChoose,
   spoken = 'Or say it.',
+  disabled = false,
 }: {
   question: string
   choices: { label: string; detail?: string }[]
   onChoose: (label: string) => void
   spoken?: string
+  disabled?: boolean
 }) {
   return (
     <div className="cd-question" role="group" aria-label="Question">
@@ -145,7 +175,7 @@ export function QuestionCard({
       <p>{question}</p>
       <div className="cd-choices">
         {choices.map((choice) => (
-          <button key={choice.label} type="button" className="cd-choice" onClick={() => onChoose(choice.label)}>
+          <button key={choice.label} type="button" className="cd-choice" onClick={() => onChoose(choice.label)} disabled={disabled}>
             {choice.label}
             {choice.detail ? ` · ${choice.detail}` : ''}
           </button>
@@ -240,6 +270,11 @@ export function Utterance({ text, followUp, label = 'You', live = false }: { tex
       {followUp ? <p className="cd-said-again">{followUp}</p> : null}
     </div>
   )
+}
+
+/** This turn picks up a plan that was waiting on you; says how. */
+export function ResumedNote({ text }: { text: string }) {
+  return <p className="cd-resumed">{text}</p>
 }
 
 /** Conductor's one-line acknowledgement of a plan. */

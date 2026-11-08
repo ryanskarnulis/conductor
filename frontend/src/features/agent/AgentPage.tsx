@@ -14,11 +14,14 @@ import {
 } from 'lucide-react'
 import { cancelTurn } from '../../api/agent'
 import {
+  Ack,
   ConfirmationCard,
   Narration,
   PlanSteps,
   Presence,
+  QuestionCard,
   Receipts,
+  ResumedNote,
   Utterance,
 } from '../../design/components'
 import { earcons, setSound, soundOn } from '../../design/earcons'
@@ -33,6 +36,7 @@ import { nextSceneState, type SceneState } from './sceneState'
 import { ShellScene } from './ShellScene'
 import { SortPanel } from '../sort/SortPanel'
 import { latestSortTurnId } from '../sort/sortTurn'
+import type { TurnStream } from './turnStream'
 import { buildTurns, pendingConfirm, presenceFor, type ShellTurn } from './turnView'
 import { useConversation } from './useConversation'
 import { useConversations } from './useConversations'
@@ -99,8 +103,35 @@ function TurnView({
   return (
     <article className={`shell-turn${latest ? '' : ' shell-turn--old'}`} aria-label={latest ? 'Latest turn' : 'Earlier turn'}>
       {turn.said !== '' && <Utterance text={turn.said} label={turn.note ? 'You · from the panel' : 'You'} />}
+      {latest && turn.ack && <Ack text={turn.ack} />}
+      {latest && turn.resumedNote && <ResumedNote text={turn.resumedNote} />}
       {latest && turn.steps.length > 0 && <PlanSteps steps={turn.steps} />}
-      {latest && confirm && (
+      {latest && turn.announce && (
+        <div className="cd-sr" aria-live="polite">
+          {turn.announce}
+        </div>
+      )}
+      {latest && turn.pause?.kind === 'question' && (
+        <QuestionCard
+          question={turn.pause.question}
+          choices={turn.pause.options.map((label) => ({ label }))}
+          onChoose={onAnswer}
+          disabled={busy}
+          spoken={turn.pause.options.length > 0 ? 'Or say it.' : 'Say or type your answer.'}
+        />
+      )}
+      {latest && turn.pause?.kind === 'confirm' && (
+        <ConfirmationCard
+          app={turn.pause.app}
+          question={turn.pause.question}
+          why={turn.pause.why}
+          actionLabel="Yes, do it"
+          onConfirm={() => onAnswer('yes')}
+          onDecline={() => onAnswer('not now')}
+          disabled={busy}
+        />
+      )}
+      {latest && !turn.pause && confirm && (
         <ConfirmationCard
           app={confirm.app}
           question={confirm.question}
@@ -152,7 +183,11 @@ export function AgentPage() {
   const panelRef = useRef<HTMLElement>(null)
   const deviceRef = useRef<HTMLDivElement>(null)
   const sending = pendingText !== null
-  const live = useTurnActivity(activeId, sending)
+  // The turn that ended on a question keeps its stream, so its plan and card
+  // stay on screen until the next turn: the answer resumes that same plan.
+  const [held, setHeld] = useState<TurnStream | null>(null)
+  const onTurnEnded = useCallback((ended: TurnStream) => setHeld(ended.paused !== null ? ended : null), [])
+  const live = useTurnActivity(activeId, sending, onTurnEnded)
   const activity = live?.activity ?? null
   const stream = live?.stream ?? null
   const phone = usePhone()
@@ -165,14 +200,15 @@ export function AgentPage() {
     return () => mql.removeEventListener('change', on)
   }, [])
 
-  const turns = useMemo(() => buildTurns(messages, pendingText, activity, stream), [messages, pendingText, activity, stream])
+  const turns = useMemo(() => buildTurns(messages, pendingText, activity, stream, held), [messages, pendingText, activity, stream, held])
   const confirm = sending ? null : pendingConfirm(messages)
-  const presence = presenceFor(sending, activity, confirm !== null)
   const latest = turns.length > 0 ? turns[turns.length - 1] : null
+  const pause = !sending && latest ? latest.pause : null
+  const presence = presenceFor(sending, activity, confirm !== null || pause !== null)
 
   // The scene reads the same facts as the panel, each frame, from this ref.
   const sceneRef = useRef<SceneState>(nextSceneState(null, null, 'idle', null, 0))
-  const confirmApp = confirm?.raw.app ?? null
+  const confirmApp = confirm?.raw.app ?? (pause?.kind === 'confirm' ? pause.appKey : null)
   useEffect(() => {
     sceneRef.current = nextSceneState(sceneRef.current, latest, presence.state, confirmApp, performance.now())
   }, [latest, presence.state, confirmApp])

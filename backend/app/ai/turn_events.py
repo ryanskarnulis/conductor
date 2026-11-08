@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-EventKind = Literal["plan", "step_started", "receipt", "paused"]
+EventKind = Literal["plan", "step_started", "receipt", "paused", "resumed"]
 Sink = Callable[[EventKind, dict[str, Any]], None]
 
 _SINK: ContextVar[Sink | None] = ContextVar("turn_event_sink", default=None)
@@ -79,6 +79,19 @@ def paused(
 ) -> None:
     """The plan waits on the person: code's question, or an app's."""
     _emit("paused", {"reason": reason, "question": question, "app": app, "step": step})
+
+
+def resumed(
+    reason: Literal["ask_user", "gate", "app_confirm"],
+    *,
+    step: str | None = None,
+    answer: str | None = None,
+) -> None:
+    """This turn picks up a plan that was waiting on the person (#89): why it
+    waited, the id of the step it waited on (``None`` when an app's own
+    question is answered), and, for an ``ask_user``, their answer, as they said
+    it: what ``{s1}`` becomes in the steps that follow."""
+    _emit("resumed", {"reason": reason, "step": step, "answer": answer})
 
 
 def _emit(kind: EventKind, payload: dict[str, Any]) -> None:

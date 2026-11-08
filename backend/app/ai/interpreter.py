@@ -203,6 +203,10 @@ class Interpreter:
             turn.body = paused.body
             steps = resumed.steps[paused.resume_at :]
             values = {"s1": dataflow.answer(plan.resume)}
+            asked = resumed.steps[paused.resume_at - 1 : paused.resume_at]
+            turn_events.resumed(
+                "ask_user", step=asked[0].id if asked else None, answer=values["s1"].text
+            )
             return self._execute(state, turn, steps, paused.resume_at, values), turn
         assert isinstance(plan, plans.StepPlan)
         first = plan.steps[0]
@@ -280,6 +284,7 @@ class Interpreter:
             paused = plans.load(gate.body)
             assert isinstance(paused, plans.StepPlan)
             steps = paused.steps[gate.resume_at :]
+            turn_events.resumed("gate", step=steps[0].id if steps else None)
             if steps and isinstance(steps[0], plans.Undo):
                 undo, at = steps[0], gate.resume_at
                 return control.undo(
@@ -292,6 +297,7 @@ class Interpreter:
             # The app's question lapses on its own; nothing is sent.
             turn.note = "declined the app's question"
             return self._loop._finish("completed", _LEFT_IT, [], 1, state.messages)
+        turn_events.resumed("app_confirm")
         turn_events.plan(turn.body, 0)
         record = self._dispatch(state, _CONFIRM_TOOL, {"app": pending_app or ""})
         if undoing is not None and record is not None and self._went_well(record):
