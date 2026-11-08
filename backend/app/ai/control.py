@@ -29,10 +29,10 @@ its reason, so the narrator says it and code appends it when the narrator
 doesn't (#113's mechanism): also on the turn that answers the app's question,
 after which the rest of the undo carries on.
 
-Cancelling or amending a **running job** is the jobs runtime's (#76): until
-it lands, :func:`app.ai.plan.fallback_reason` sends those to the loop
-(``job:cancel``, ``job:amend``). That is the seam: #76 replaces the fallback
-with a call to the app's ``…/jobs/{ref}/cancel``.
+Cancelling or amending a **running job** is the jobs runtime's (#76,
+:mod:`app.ai.job_control`): a cancel or amend goes there when a job runs and
+nothing is waiting, or when it names the job; otherwise it acts on what's
+waiting, as above.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from app.ai import dataflow, narrator, run_record, turn_events
+from app.ai import dataflow, job_control, narrator, run_record, turn_events
 from app.ai import plan as plans
 from app.ai.confirmation import PendingConfirm
 from app.ai.plan import Ledgered, PausedPlan, TurnPlan, UndoReceipt
@@ -89,12 +89,10 @@ class View:
                 self._got = (None,)
         return self._got[0]
 
-    def jobs(self, plan: plans.Plan) -> tuple[str, ...]:
-        """Running jobs, read only for a plan with a control step."""
-        if not plans.has_control(plan):
-            return ()
+    def running(self) -> tuple[plans.RunningJob, ...]:
+        """This conversation's running jobs (#76); none when there's no view."""
         view = self()
-        return view.jobs if view is not None else ()
+        return view.running if view is not None else ()
 
 
 def run(
@@ -108,6 +106,13 @@ def run(
     pending: PendingConfirm | None,
 ) -> AgentRunResult:
     """Run a control plan's one step."""
+    if isinstance(step, plans.Cancel | plans.Amend):
+        running = view.running()
+        waiting = paused is not None or pending is not None
+        if job_control.aims_at_job(step, running, waiting=waiting, words=state.words):
+            if isinstance(step, plans.Cancel):
+                return job_control.cancel(interp, state, turn, step, running)
+            return job_control.amend(interp, state, turn, step, running)
     if isinstance(step, plans.Cancel):
         return cancel(interp, state, turn, paused=paused, pending=pending)
     if isinstance(step, plans.Amend):

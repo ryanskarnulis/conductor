@@ -115,7 +115,7 @@ def _s3(run_with: Any) -> None:
 # --- the plan: what runs and what falls back ------------------------------------------------
 
 
-def test_a_control_step_runs_alone_and_a_running_job_is_the_loops() -> None:
+def test_a_control_step_runs_alone() -> None:
     def reason(body: dict[str, Any], **now: Any) -> str | None:
         return plans.fallback_reason(plans.load(body), **now)
 
@@ -123,18 +123,8 @@ def test_a_control_step_runs_alone_and_a_running_job_is_the_loops() -> None:
         assert reason(body) is None
         assert reason(body, pending=True) is None
     assert reason(steps({"do": "undo", "target": "last"}, ask("tasks", "add milk"))) == "kind:undo"
-    # A running job (#76): cancelling or amending it is still the loop's.
-    jobs = ("music:31",)
-    assert reason(CANCEL, running_jobs=jobs) == "job:cancel"
-    assert reason(amend("ten"), running_jobs=jobs) == "job:amend"
-    job_cancel = steps({"do": "cancel", "target": "music:job:31"})
-    assert reason(job_cancel, pending=True, running_jobs=jobs) == "job:cancel"
-    assert reason(steps({"do": "cancel", "target": "31"}), pending=True, running_jobs=jobs) == (
-        "job:cancel"
-    )
-    # With a plan waiting, a cancel that doesn't name the job is about the plan.
-    assert reason(CANCEL, pending=True, running_jobs=jobs) is None
-    assert reason(UNDO, running_jobs=jobs) is None
+    # A running job no longer sends cancel/amend to the loop: the jobs runtime
+    # takes them (#76, tests/test_jobs.py).
 
 
 def _receipt(ident: int, plan_id: int, title: str, ref: str = "1", **undo: Any) -> UndoReceipt:
@@ -377,30 +367,6 @@ def test_cancel_with_nothing_waiting_says_so(run_with: Any, world: World) -> Non
     reply = run_with(ScriptedProvider([plan_turn(CANCEL)]), "cancel")
     assert reply["content"] == control.NOTHING_TO_CANCEL
     assert world.writes() == []
-
-
-def test_cancelling_a_running_job_falls_back_to_the_loop(
-    run_with: Any, world: World, db_session: Session
-) -> None:
-    started = ToolCallRecord(
-        tool="ask_music",
-        arguments={"message": "sort my whole library"},
-        result="Sorting.",
-        app_record=[
-            {
-                "tool": "sort_library",
-                "outcome": "done",
-                "touched": [],
-                "undo": {"none": "-"},
-                "job": {"ref": "31", "status": "working", "done": 112, "total": 400},
-            }
-        ],
-    )
-    _journal_by_hand(db_session, run_with.conversation, started)
-    loop = ScriptedProvider([plan_turn(CANCEL), text_turn("I've asked music to stop it.")])
-    assert run_with(loop, "stop that download")["content"] == "I've asked music to stop it."
-    compiled = [p for p in _plans(db_session) if p.source == "compiled"][-1]
-    assert (compiled.status, compiled.note) == ("fell_back", "job:cancel")
 
 
 # --- amend --------------------------------------------------------------------------------

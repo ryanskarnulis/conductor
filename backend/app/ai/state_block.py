@@ -109,18 +109,21 @@ def render(
     now: Now,
     history: Sequence[dict[str, Any]],
     entities: Sequence[Entity] | None = None,
+    jobs: Sequence[str] | None = None,
 ) -> str:
     """The block for a turn starting ``today`` on a conversation with
     ``history`` (stored turns, oldest first, as :func:`app.ai.recall.Recall.of`
     takes them). ``entities``, newest first, are the ledger's; ``None`` reads
-    them from ``history``'s records instead."""
+    them from ``history``'s records instead. ``jobs`` are the ledger's running
+    jobs as the watcher last read them (#76); ``None`` reads each job's last
+    report from the records."""
     lines = [_HEADER, *calendar_lines(today)]
     if now.surface is not None:
         lines.append(_SURFACE_LINES[now.surface])
     if now.panel:
         lines.append(f"Open panel: {_clip(now.panel)}.")
     records = _records(history)
-    jobs = _running_jobs(records)
+    jobs = list(jobs[-MAX_JOBS:]) if jobs is not None else _running_jobs(records)
     if jobs:
         lines.append("Running jobs (as of each one's last report):")
         lines += [f"- {job}" for job in jobs]

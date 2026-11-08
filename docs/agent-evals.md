@@ -447,3 +447,32 @@ day:
   `ask_chess`) and S13/S14 (`think`, #78) stay 0. S10 is 10/10, and S6 is
   7/10 (#70: 2/5).
 - Turn p50s were 1.4–5.1 s. The two-turn cross-app scenarios run 2.5–4.5 s.
+
+### Jobs (#76, 2026-11-08)
+
+S4 moves to the gate tier. A queued playlist detaches as a job; the harness's
+`Advance` finishes it in the fake world, and reading what arrived unprompted
+runs one watcher pass (`settle`: time has passed). S4 now checks exactly one
+note, "38 of 40", and both misses ("Lost Signal", "Paper Moons") by name.
+
+Gate tier, 5 samples each, compiler on, planner prompt and schema unchanged:
+
+| scenario | result |
+|---|---|
+| S1 | 5/5 |
+| S2 | 5/5 |
+| S2r | 5/5 |
+| **S4** | **5/5** (was frontier, 0/5: nothing unprompted arrived) |
+| S5 | 4/5 (the miss: answered without saying where it came from) |
+| S7 | 5/5 |
+| S8 | 5/5 |
+| S9 | 5/5 |
+| S16 | 5/5 |
+
+- All five live S4 notes were the narrator's own words, every fact present
+  (no code append needed).
+- Claims were 40/40 backed.
+- Plan-level evals on the same day: every group green (golden 94/105, cross
+  35/35, ref 19/20, control 22/25, memory 8/10, knowledge 15/15, hard 2/5,
+  self 9/15, holdout 47/50, long 40/40). The planner prompt and step kinds
+  didn't change.

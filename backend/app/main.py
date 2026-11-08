@@ -9,11 +9,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRouter
 
-from app.api import routes_agent, routes_fleet, routes_voice
+from app.ai import turn_events
+from app.ai.providers.llamacpp import provider_from_settings
+from app.api import routes_agent, routes_fleet, routes_voice, turn_activity
 from app.config import get_settings
+from app.db.session import SessionLocal
 from app.fleet.manifests import fleet_from_settings
 from app.fleet.tools import build_delegate_tools, default_client_factory, render_fleet_section
 from app.logging_config import RequestIDMiddleware, configure_logging
+from app.services.job_watcher import JobWatcher
 
 logger = structlog.get_logger(__name__)
 
@@ -28,7 +32,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Discover the fleet once per process: register the ``ask_<app>`` tools on
     the shared registry and stash the prompt's fleet layer for
     ``routes_agent.get_agent_loop``. The MCP server does the same in its own
-    ``main()`` — two drivers, one registry shape."""
+    ``main()`` — two drivers, one registry shape.
+
+    Jobs (#76): job events go to the live channel, and the job watcher runs
+    for the app's life (one thread; a restart resumes from the ledger)."""
     configure_logging()
     fleet = fleet_from_settings()
     build_delegate_tools(fleet, default_client_factory())
@@ -36,12 +43,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Kept as well as rendered: `routes_fleet` looks apps up by name to proxy a
     # page's action, which the prompt layer's rendered text cannot answer.
     app.state.fleet = fleet
+    turn_events.set_job_sink(turn_activity.publish_job)
+    watcher: JobWatcher | None = None
+    if get_settings().conductor_job_watcher:
+        narrate = get_settings().conductor_narrator
+        watcher = JobWatcher(
+            SessionLocal, fleet, provider=provider_from_settings if narrate else None
+        )
+        watcher.start()
+    app.state.job_watcher = watcher
     logger.info(
         "startup",
         env=get_settings().app_env,
         agents=[fleet_app.name for fleet_app in fleet.agent_apps()],
     )
-    yield
+    try:
+        yield
+    finally:
+        if watcher is not None:
+            watcher.stop()
 
 
 app = FastAPI(title="Conductor", lifespan=lifespan)

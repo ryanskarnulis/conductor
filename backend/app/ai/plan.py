@@ -20,7 +20,8 @@ interpreter can run a valid plan yet: it runs ``ask``/``open``/``ask_user``/
 ``confirm`` plans across apps, with ``{sN}`` data flow between them (#72),
 ``look`` (#73: a plain read of an app's glance, offered only for apps whose
 manifest declares one), the control steps ``cancel``/``amend``/``undo`` on
-their own (#74, except on a running job, #76), and the direct answers; every
+their own (#74; on a running job through the jobs runtime, #76), and the
+direct answers; every
 other kind (``recall``, ``think``) falls back to the loop until its issue
 lands (#78, #80). :func:`reads_only` says which asks may run in parallel.
 Pure: no I/O.
@@ -433,7 +434,6 @@ def fallback_reason(
     *,
     confirm_app: str | None = None,
     pending: bool = False,
-    running_jobs: Collection[str] = (),
 ) -> str | None:
     """Why the interpreter can't run this valid plan yet, or ``None`` if it can.
 
@@ -446,21 +446,17 @@ def fallback_reason(
     callers, it no longer changes the answer.
 
     A control step (#74) runs when it is the whole plan. ``cancel`` and
-    ``amend`` act on what's ``pending`` (a paused plan or an app's question);
-    one aimed at a running job (``running_jobs``, ``app:ref``), or said with
-    nothing pending while a job runs, is the jobs runtime's (#76): until it
-    lands, the loop takes it (``job:cancel``, ``job:amend``).
+    ``amend`` act on what's ``pending`` (a paused plan or an app's question),
+    or on a running job (#76, :mod:`app.ai.job_control`); ``pending`` is kept
+    for the callers and no longer changes the answer.
     """
-    del confirm_app
+    del confirm_app, pending
     if not isinstance(plan, StepPlan):
         return None
     control = next((step for step in plan.steps if step.do in CONTROL_KINDS), None)
     if control is not None:
         if len(plan.steps) > 1:
             return f"kind:{control.do}"
-        if isinstance(control, Cancel | Amend) and running_jobs:
-            if not pending or names_job(control.target, running_jobs):
-                return f"job:{control.do}"
         return None
     namers: set[str] = set()
     for step in plan.steps:
@@ -620,6 +616,21 @@ class Ledgered:
     last_plan: int | None = None
     receipts: tuple[UndoReceipt, ...] = ()
     jobs: tuple[str, ...] = ()
+    # The same running jobs with their latest report (#76), newest first.
+    running: tuple[RunningJob, ...] = ()
+
+
+@dataclass(frozen=True)
+class RunningJob:
+    """A job this conversation started that hasn't ended, as last reported."""
+
+    app: str
+    ref: str
+    status: str
+    done: int = 0
+    total: int | None = None
+    title: str | None = None
+    untrusted: bool = False
 
 
 # --- the honest ack --------------------------------------------------------------------------

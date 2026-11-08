@@ -20,7 +20,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai import confirmation
+from app.ai import confirmation, narrator
 from app.ai.loop import AgentRunResult, ToolCallRecord
 from app.ai.recall import EarlierCall
 from app.db.models import Conversation, ConversationMessage, ConversationRole, utcnow
@@ -84,7 +84,8 @@ def stored_turns(db: Session, conversation_id: int) -> list[dict[str, Any]]:
     them: role, content and the stored tool calls, oldest first.
 
     Never replayed as chat turns (#64): the model gets recall built from them,
-    as data, so a false reply of its own is never read back as fact.
+    as data, so a false reply of its own is never read back as fact. Jobs'
+    notes are left out (#76).
     """
     return [
         {
@@ -93,6 +94,9 @@ def stored_turns(db: Session, conversation_id: int) -> list[dict[str, Any]]:
             "tool_calls": message.tool_calls,
         }
         for message in list_messages(db, conversation_id)
+        # A job's note (#76) is not an exchange: it never voids the question
+        # the last turn left, and the ledger keeps what the job did.
+        if message.stop_reason != narrator.JOB_NOTE
     ]
 
 

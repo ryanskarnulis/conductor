@@ -164,8 +164,21 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   undone once (`undone_by_step_id`); "undo that" twice finds the same plan,
   and an undo's inverse is never offered back. An undo streams like any
   plan: its notes and asks are the plan's steps on the live channel.
-  Cancelling or amending a running job falls back to the loop
-  (`job:cancel`) until #76.
+  `cancel`/`amend` aimed at a running job (one runs and nothing waits, or
+  the target names it) are the jobs runtime's (`app/ai/job_control.py`).
+- **Jobs** (#76): a step whose receipt carries a `job` detaches: the reply
+  says it's queued, and the ledger's `ledger_jobs` row tracks it. The watcher
+  (`app/services/job_watcher.py`, one thread, started with the app, resumes
+  from the rows) polls `…/jobs/{ref}` (`app/fleet/jobs.py`: no model, no
+  forwarded headers, short timeouts) every 5 s, 30 s after 2 minutes. When a
+  job ends it posts **one** note to the conversation that started it,
+  narrated from the app's final report with code checks on done/total and the
+  failed items' names (`narrator.job_note`); `noted_at`, the message and the
+  job's receipts land in one commit, so restarts and races never post twice.
+  No end after 6 hours, or a 404, is code's "lost track of it": unknown,
+  never failed. A note isn't an exchange: it never lapses a waiting question.
+  `cancel` calls the app's `…/cancel` and says the `done` count it answered;
+  `amend` can't change a running job and says so (the contract has none).
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
   depth stacks.
 - **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every
@@ -183,14 +196,17 @@ regenerate. Components live in `src/design/` (`cd-` classes in
 - **Note turns** (`POST …/notes`) record what the person did in the UI as the
   person's own turn — never an invented assistant reply.
 - **Single-worker by design:** conductor runs SQLite on one uvicorn worker,
-  and the in-memory turn-activity registry (the live channel) and rate limiter
-  rely on it; multi-worker safety is not a goal.
+  and the in-memory turn-activity registry (the live channel), the rate
+  limiter and the job watcher's one thread rely on it; multi-worker safety is
+  not a goal.
 - **The live channel** (#38, `app/api/turn_activity.py`): `GET …/events` is
   SSE for the turn in flight: a snapshot on connect (so a reconnect loses
   nothing), then beats, `plan`, `step_started`, `receipt`, `paused`,
   `resumed` (a turn picking up a paused plan: why, the step, an `ask_user`
-  answer as `{s1}` reads it) and `turn_ended`. Step events go through one
-  seam (`app/ai/turn_events.py`); a receipt is the step as the ledger journals it (`ledger.live_step`) and
+  answer as `{s1}` reads it) and `turn_ended`, plus `job` events (progress,
+  then the end with its note's id) that keep the stream open past
+  `turn_ended` while a job runs. Step events go through one seam
+  (`app/ai/turn_events.py`); a receipt is the step as the ledger journals it (`ledger.live_step`) and
   lands only once its record exists, and `turn_ended` goes out after the
   ledger commit. Queues and turn state are bounded; a lagging follower is
   resynced from a snapshot. `GET …/activity` stays as the poll fallback.

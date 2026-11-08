@@ -46,6 +46,7 @@ from app.fleet.delegate import (
     ConfirmRequired,
     DelegateConfirmRefused,
     EntityRef,
+    JobRef,
     MessageExchange,
     MessageRead,
     RecordEntry,
@@ -256,6 +257,14 @@ class Job:
     done: int = 0
     failed: int = 0
     state: str = "queued"  # queued | finished | cancelled
+    # The tracks that never matched, by title (outside text), once it finished.
+    misses: tuple[str, ...] = ()
+
+
+# The two playlist tracks that never match (S4): titles from outside.
+PLAYLIST_MISSES = ("Lost Signal", "Paper Moons")
+# The jobs contract's words for the world's job states (delegate-api "Jobs").
+_JOB_STATUS = {"queued": "working", "finished": "completed", "cancelled": "canceled"}
 
 
 @dataclass
@@ -448,9 +457,74 @@ class World:
         (two tracks never match), which S4's report has to say."""
         for job in self.jobs.values():
             if job.state == "queued":
-                job.done = job.total - (2 if job.kind == "playlist" else 0)
+                job.misses = PLAYLIST_MISSES if job.kind == "playlist" else ()
+                job.done = job.total - len(job.misses)
                 job.failed = job.total - job.done
                 job.state = "finished"
+
+    # -- the jobs contract (delegate-api "Jobs", #76) --
+
+    def job_read(self, ref: str) -> dict[str, Any] | None:
+        """``GET …/jobs/{ref}`` as music answers it, or ``None`` (a 404). Not
+        a read of the app the checks count: it's conductor's watcher, not the
+        model, asking."""
+        job = self.jobs.get(int(ref)) if ref.isdigit() else None
+        if job is None:
+            return None
+        status = _JOB_STATUS[job.state]
+        record = None
+        if job.state != "queued":
+            record = [
+                {
+                    "tool": f"download_{job.kind}",
+                    "outcome": "done",
+                    "touched": [_ref_json(_job_ref(job))],
+                    "count": job.done,
+                    "undo": {"none": "a download can't be undone"},
+                }
+            ]
+            if job.misses:
+                record.append(
+                    {
+                        "tool": "download_track",
+                        "outcome": "refused",
+                        "reason": "no match found",
+                        "touched": [
+                            {
+                                "app": "music",
+                                "kind": "song",
+                                "id": f"{job.id}-miss-{n}",
+                                "title": title,
+                                "untrusted": True,
+                            }
+                            for n, title in enumerate(job.misses, start=1)
+                        ],
+                    }
+                )
+        return {
+            "ref": str(job.id),
+            "status": status,
+            "done": job.done,
+            "total": job.total,
+            "title": job.title,
+            "untrusted": True,
+            "reason": f"{job.failed} tracks couldn't be downloaded" if job.failed else None,
+            "record": record,
+        }
+
+    def job_cancel(self, ref: str) -> dict[str, Any] | None:
+        """``POST …/jobs/{ref}/cancel``: a queued job stops at once, with what
+        it had (nothing yet), and the cancel is a write with a receipt."""
+        job = self.jobs.get(int(ref)) if ref.isdigit() else None
+        if job is None:
+            return None
+        live = job.state == "queued"
+        if live:
+            job.state = "cancelled"
+            self.record("music", "cancel", f"job:{job.id}", job.title)
+        read = self.job_read(ref)
+        assert read is not None
+        return {**read, "cancel_requested": live}
 
 
 # --- the apps ----------------------------------------------------------------------
@@ -489,6 +563,10 @@ def _song_ref(song: Song) -> EntityRef:
 
 def _ref_json(ref: EntityRef) -> dict[str, Any]:
     return ref.model_dump(exclude_none=True)
+
+
+def _job_ref(job: Job) -> EntityRef:
+    return EntityRef(app="music", kind=job.kind, id=str(job.id), title=job.title, untrusted=True)
 
 
 def _looked_up(tool: str, refs: list[EntityRef]) -> RecordEntry:
@@ -530,7 +608,9 @@ def _write_entry(receipt: Receipt) -> RecordEntry:
         EntityRef(app="music", kind=job_kind, id=ident, title=receipt.title, untrusted=True),
         EntityRef(app="music", kind="download_job", id=ident, title=f"{job_kind} download"),
     ]
-    return RecordEntry(tool="queue_download", outcome="done", touched=refs, undo=no_undo)
+    # A queued download is a job (delegate-api "Jobs"): accepted now, done later.
+    job = JobRef(ref=ident, status="submitted", done=0, total=receipt.detail.get("total"))
+    return RecordEntry(tool="queue_download", outcome="done", touched=refs, undo=no_undo, job=job)
 
 
 def _record(reply: AppReply, written: list[Receipt]) -> list[RecordEntry]:

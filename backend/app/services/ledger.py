@@ -15,24 +15,35 @@ Journaling never costs the person their turn: each write runs in a savepoint,
 and a failure is logged (``ledger_*_failed``) and rolled back alone. The store
 is unbounded; each turn's context stays bounded (:func:`recent_entities` reads
 a fixed window).
+
+**Jobs** (#76): the job watcher (``app/services/job_watcher.py``) reads the
+jobs still to note (:func:`watched_jobs`), files each poll's report
+(:func:`job_polled`) and, when a job ends, :func:`note_job` posts its one
+note: the ``noted_at`` claim, the assistant message and a ``job`` turn whose
+step carries the job's final receipts, in one transaction, so a note is
+posted once across restarts and races, and the job's writes have receipts.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any, TypeVar
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any, Literal, TypeVar, cast
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
-from app.ai import confirmation, run_record
+from app.ai import confirmation, narrator, run_record
 from app.ai.loop import AgentRunResult, ToolCallRecord
-from app.ai.plan import Ledgered, PausedPlan, Touched, TurnPlan, UndoReceipt
+from app.ai.plan import Ledgered, PausedPlan, RunningJob, Touched, TurnPlan, UndoReceipt
 from app.ai.state_block import Entity
 from app.db.models import (
     Conversation,
     ConversationMessage,
+    ConversationRole,
     LedgerEntity,
     LedgerJob,
     LedgerPlan,
@@ -42,6 +53,7 @@ from app.db.models import (
     LedgerTurn,
     utcnow,
 )
+from app.fleet.jobs import FINISHED, JobRead
 from app.fleet.tools import OUTCOME_UNKNOWN
 
 logger = structlog.get_logger(__name__)
@@ -149,11 +161,17 @@ def paused_plan(db: Session, conversation_id: int) -> PausedPlan | None:
     """Last turn's compiled plan, if it is waiting on the person (#70).
 
     Only the newest turn's plan can resume: anything said or done since (a
-    note included) lets the question lapse, as an app's question does.
+    note included) lets the question lapse, as an app's question does. A
+    job's note (#76) is neither, so it doesn't.
     """
     last = db.execute(
         select(LedgerTurn)
-        .where(LedgerTurn.conversation_id == conversation_id, LedgerTurn.status == "ended")
+        .where(
+            LedgerTurn.conversation_id == conversation_id,
+            LedgerTurn.status == "ended",
+            # A job's note (#76) is neither said nor done by the person.
+            LedgerTurn.kind != JOB_TURN,
+        )
         .order_by(LedgerTurn.id.desc())
         .limit(1)
     ).scalar_one_or_none()
@@ -214,7 +232,7 @@ def self_report(db: Session, conversation_id: int) -> str:
             .where(
                 LedgerTurn.conversation_id == conversation_id,
                 LedgerTurn.status == "ended",
-                LedgerTurn.kind == "message",
+                LedgerTurn.kind.in_(("message", JOB_TURN)),
             )
             .order_by(LedgerTurn.id.desc())
             .limit(SELF_REPORT_TURNS)
@@ -224,10 +242,13 @@ def self_report(db: Session, conversation_id: int) -> str:
     )
     lines: list[str] = []
     for turn in turns:
-        lines.append(f'You were asked: "{_clip(turn.words)}"')
+        if turn.kind == JOB_TURN:
+            lines.append(f"A job reported back: {_clip(turn.words)}")
+        else:
+            lines.append(f'You were asked: "{_clip(turn.words)}"')
         acted = [plan for plan in turn.plans if plan.acted]
         steps = [step for plan in acted for step in plan.steps]
-        if not steps:
+        if not steps and turn.kind != JOB_TURN:
             lines.append("- nothing ran; you answered directly")
         for step in steps:
             verb = _STEP_WORDS.get(step.kind, step.kind)
@@ -240,19 +261,9 @@ def self_report(db: Session, conversation_id: int) -> str:
                 did = _RECEIPT_WORDS.get(receipt.outcome, receipt.outcome)
                 since = " (since undone)" if receipt.undone_by_step_id is not None else ""
                 lines.append(f"  - {did}: {action}{what}{since}")
-        if turn.stop_reason and turn.stop_reason != "completed":
+        if turn.stop_reason and turn.stop_reason != "completed" and turn.kind != JOB_TURN:
             lines.append(f"- the turn ended {turn.stop_reason}")
-    jobs = (
-        db.execute(
-            select(LedgerJob)
-            .where(LedgerJob.status.not_in(("completed", "failed", "canceled")))
-            .order_by(LedgerJob.updated_at.desc())
-            .limit(5)
-        )
-        .scalars()
-        .all()
-    )
-    for job in jobs:
+    for job in running_jobs(db, conversation_id, limit=5):
         total = f" of {job.total}" if job.total is not None else ""
         lines.append(f"Running: {job.app} job {job.ref}, {job.status}, {job.done}{total} done")
     if not lines:
@@ -305,10 +316,12 @@ def control_view(db: Session, conversation_id: int) -> Ledgered:
         for receipt in step.receipts
         if receipt.outcome in _WRITE_OUTCOMES
     ]
+    running = running_jobs(db, conversation_id)
     return Ledgered(
         last_plan=plans[0].id if plans else None,
         receipts=tuple(receipts),
-        jobs=tuple(_running_jobs(db, conversation_id)),
+        jobs=tuple(f"{job.app}:{job.ref}" for job in running),
+        running=tuple(running),
     )
 
 
@@ -347,21 +360,49 @@ def _undo_receipt(plan: LedgerPlan, receipt: LedgerReceipt) -> UndoReceipt:
     )
 
 
-def _running_jobs(db: Session, conversation_id: int) -> list[str]:
-    """This conversation's jobs that haven't finished, as ``app:ref``."""
-    rows = db.execute(
-        select(LedgerJob.app, LedgerJob.ref)
-        .join(LedgerStep, LedgerStep.id == LedgerJob.started_by_step_id)
-        .join(LedgerPlan, LedgerPlan.id == LedgerStep.plan_id)
-        .join(LedgerTurn, LedgerTurn.id == LedgerPlan.turn_id)
-        .where(
-            LedgerTurn.conversation_id == conversation_id,
-            LedgerJob.status.not_in(("completed", "failed", "canceled")),
+def running_jobs(db: Session, conversation_id: int, *, limit: int = 10) -> list[RunningJob]:
+    """This conversation's jobs that haven't ended (and weren't given up on),
+    newest report first, as last reported."""
+    rows = (
+        db.execute(
+            select(LedgerJob)
+            .join(LedgerStep, LedgerStep.id == LedgerJob.started_by_step_id)
+            .join(LedgerPlan, LedgerPlan.id == LedgerStep.plan_id)
+            .join(LedgerTurn, LedgerTurn.id == LedgerPlan.turn_id)
+            .where(
+                LedgerTurn.conversation_id == conversation_id,
+                LedgerJob.status.not_in(tuple(FINISHED)),
+                LedgerJob.noted_at.is_(None),
+            )
+            .order_by(LedgerJob.updated_at.desc(), LedgerJob.id.desc())
+            .limit(limit)
         )
-        .order_by(LedgerJob.updated_at.desc())
-        .limit(10)
-    ).all()
-    return [f"{app}:{ref}" for app, ref in rows]
+        .scalars()
+        .all()
+    )
+    return [
+        RunningJob(
+            app=job.app,
+            ref=job.ref,
+            status=job.status,
+            done=job.done,
+            total=job.total,
+            title=job.title,
+            untrusted=job.untrusted,
+        )
+        for job in rows
+    ]
+
+
+def running_job_lines(db: Session, conversation_id: int) -> list[str]:
+    """The state block's running jobs (#76), from the watcher's latest reads."""
+    lines = []
+    for job in running_jobs(db, conversation_id, limit=5):
+        what = narrator.job_subject(job.app, job.title, job.untrusted)
+        outside = " (outside text)" if job.title and job.untrusted else ""
+        progress = narrator.job_progress(job.done, job.total)
+        lines.append(f"{job.app} job {job.ref}, {what}{outside}: {job.status}, {progress}")
+    return lines
 
 
 def _clip(text: str, limit: int = 80) -> str:
@@ -447,6 +488,9 @@ def step_kind(tool: str, arguments: dict[str, Any]) -> tuple[str, str | None]:
         return "look", tool.removeprefix(run_record.LOOK_PREFIX)
     if tool == confirmation.CONFIRM_TOOL:
         return "confirm", confirmation.record_app(tool, arguments)
+    if run_record.is_job_cancel(tool):
+        # A cancel sent to a running job (#76): a write with its own receipt.
+        return "cancel", tool.removeprefix(run_record.JOB_CANCEL_PREFIX)
     if tool in run_record.READ_TOOLS:
         return "local", None
     return "unknown", None
@@ -463,7 +507,7 @@ def live_step(seq: int, record: ToolCallRecord) -> dict[str, Any]:
     kind, app = step_kind(record.tool, record.arguments)
     outcome = run_record.classify(record)
     receipts: list[dict[str, Any]] = []
-    if app is not None and kind in ("ask", "confirm"):
+    if app is not None and kind in ("ask", "confirm", "cancel"):
         if record.app_record is not None:
             receipts = [{**entry, "source": "app"} for entry in record.app_record]
         elif _may_have_written(record, outcome):
@@ -522,7 +566,7 @@ def _journal_step(db: Session, plan: LedgerPlan, seq: int, record: ToolCallRecor
     db.add(step)
     db.flush()
     _mark_undone(db, step, record, outcome)
-    if app is None or kind not in ("ask", "confirm", "look"):
+    if app is None or kind not in ("ask", "confirm", "look", "cancel"):
         return
     if record.app_record is not None:
         for entry_seq, entry in enumerate(record.app_record, start=1):
@@ -600,7 +644,7 @@ def _journal_receipt(
     )
     job = entry.get("job")
     if isinstance(job, dict) and job.get("ref") is not None:
-        receipt.job_id = _report_job(db, step, app, job).id
+        receipt.job_id = _report_job(db, step, app, job, entry).id
     db.add(receipt)
     db.flush()
     for ref in entry.get("touched") or []:
@@ -642,8 +686,12 @@ def _see_entity(
     return entity
 
 
-def _report_job(db: Session, step: LedgerStep, app: str, job: dict[str, Any]) -> LedgerJob:
-    """The job's latest report wins; the step that first reported it started it."""
+def _report_job(
+    db: Session, step: LedgerStep, app: str, job: dict[str, Any], entry: dict[str, Any]
+) -> LedgerJob:
+    """The job's latest report wins; the step that first reported it started it.
+    Its name is the first thing the entry touched that isn't the job itself
+    (the playlist, not "playlist download"), else the job's own title."""
     ref = str(job["ref"])
     row = db.execute(
         select(LedgerJob).where(LedgerJob.app == app, LedgerJob.ref == ref)
@@ -651,6 +699,9 @@ def _report_job(db: Session, step: LedgerStep, app: str, job: dict[str, Any]) ->
     if row is None:
         row = LedgerJob(app=app, ref=ref, status="submitted", started_by_step_id=step.id)
         db.add(row)
+    named = _job_name(entry)
+    if named is not None and (row.title is None or step.id == row.started_by_step_id):
+        row.title, row.untrusted = named
     row.status = str(job.get("status") or row.status)
     done = job.get("done")
     row.done = done if isinstance(done, int) else row.done
@@ -660,8 +711,230 @@ def _report_job(db: Session, step: LedgerStep, app: str, job: dict[str, Any]) ->
     return row
 
 
+def _job_name(entry: dict[str, Any]) -> tuple[str, bool] | None:
+    refs = [ref for ref in entry.get("touched") or [] if isinstance(ref, dict) and ref.get("title")]
+    refs.sort(key=lambda ref: str(ref.get("kind") or "").endswith("job"))
+    if not refs:
+        return None
+    ref = refs[0]
+    return str(ref["title"]), bool(ref.get("untrusted") or entry.get("untrusted"))
+
+
 def _text(value: Any) -> str | None:
     return None if value is None else str(value)
+
+
+# --- jobs (#76) ---------------------------------------------------------------------------
+
+# A job's note on the record: a turn of its own, between the person's.
+JOB_TURN = "job"
+JOB_STEP = "job"
+
+
+@dataclass(frozen=True)
+class WatchedJob:
+    """A job the watcher still owes a note, with where the note goes."""
+
+    id: int
+    app: str
+    ref: str
+    status: str
+    done: int
+    total: int | None
+    title: str | None
+    untrusted: bool
+    created_at: datetime
+    polled_at: datetime | None
+    conversation_id: int | None
+    surface: str | None
+    asked: str
+
+
+def watched_jobs(db: Session) -> list[WatchedJob]:
+    """Every job not yet noted, oldest first, with the conversation and words
+    of the turn that started it (``None`` for one no step started)."""
+    rows = db.execute(
+        select(LedgerJob, LedgerTurn)
+        .outerjoin(LedgerStep, LedgerStep.id == LedgerJob.started_by_step_id)
+        .outerjoin(LedgerPlan, LedgerPlan.id == LedgerStep.plan_id)
+        .outerjoin(LedgerTurn, LedgerTurn.id == LedgerPlan.turn_id)
+        .where(LedgerJob.noted_at.is_(None))
+        .order_by(LedgerJob.id)
+    ).all()
+    return [
+        WatchedJob(
+            id=job.id,
+            app=job.app,
+            ref=job.ref,
+            status=job.status,
+            done=job.done,
+            total=job.total,
+            title=job.title,
+            untrusted=job.untrusted,
+            created_at=_aware(job.created_at),
+            polled_at=_aware(job.polled_at) if job.polled_at else None,
+            conversation_id=turn.conversation_id if turn is not None else None,
+            surface=turn.surface if turn is not None else None,
+            asked=turn.words if turn is not None else "",
+        )
+        for job, turn in rows
+    ]
+
+
+def job_polled(db: Session, job_id: int, read: JobRead, now: datetime) -> bool:
+    """File one poll's report on the job's row; whether status or counts moved."""
+    row = db.get(LedgerJob, job_id)
+    if row is None or row.noted_at is not None:
+        return False
+    moved = (row.status, row.done, row.total) != (read.status, read.done, read.total)
+    row.status, row.done, row.total = read.status, read.done, read.total
+    if read.title:
+        row.title, row.untrusted = read.title, read.untrusted
+    row.polled_at = now
+    db.flush()
+    return moved
+
+
+def job_poll_failed(db: Session, job_id: int, now: datetime) -> None:
+    """A poll that got no report: the row keeps its last one, and the next
+    poll waits the usual interval."""
+    row = db.get(LedgerJob, job_id)
+    if row is not None and row.noted_at is None:
+        row.polled_at = now
+        db.flush()
+
+
+def note_job(
+    db: Session,
+    job_id: int,
+    text: str,
+    *,
+    read: JobRead | None,
+    how: Literal["ended", "lost", "gone"],
+    now: datetime,
+) -> int | None:
+    """Post the job's one note: claim ``noted_at`` (only if unclaimed), store
+    the assistant message in the conversation that started it, and journal a
+    ``job`` turn whose step carries the job's final receipts. The caller
+    commits; ``None`` (with nothing written) when the note was already posted
+    or the job has no conversation to note into.
+
+    ``read`` is the app's final report (``None`` when the job was lost). Its
+    ``record`` entries are the job's receipts; a job that ended or was lost
+    with no readable record gets conductor's ``unknown`` receipt, never
+    "nothing changed".
+    """
+    claimed = db.execute(
+        update(LedgerJob)
+        .where(LedgerJob.id == job_id, LedgerJob.noted_at.is_(None))
+        .values(noted_at=now)
+    )
+    if not _rowcount(claimed):
+        return None
+    row = db.get(LedgerJob, job_id)
+    assert row is not None
+    db.refresh(row)
+    if read is not None:
+        row.status, row.done, row.total = read.status, read.done, read.total
+        row.polled_at = now
+    started = db.get(LedgerStep, row.started_by_step_id) if row.started_by_step_id else None
+    turn = started.plan.turn if started is not None else None
+    conversation = db.get(Conversation, turn.conversation_id) if turn is not None else None
+    if conversation is None or conversation.deleted_at is not None:
+        db.flush()
+        logger.info("job_note_skipped", job_id=job_id, why="no live conversation")
+        return None
+    message = ConversationMessage(
+        conversation_id=conversation.id,
+        role=ConversationRole.assistant,
+        content=text,
+        stop_reason=narrator.JOB_NOTE,
+    )
+    conversation.updated_at = now
+    db.add(message)
+    db.flush()
+    row.note_message_id = message.id
+    status = read.status if read is not None else how
+    note_turn = LedgerTurn(
+        conversation_id=conversation.id,
+        assistant_message_id=message.id,
+        kind=JOB_TURN,
+        words=f"{row.app} job {row.ref} {_ENDED_WORDS.get(status, status)}",
+        surface=turn.surface if turn is not None else None,
+        status="ended",
+        stop_reason=status,
+        ended_at=now,
+    )
+    db.add(note_turn)
+    db.flush()
+    plan = LedgerPlan(turn_id=note_turn.id, source=JOB_TURN, status="ran")
+    db.add(plan)
+    db.flush()
+    step = LedgerStep(
+        plan_id=plan.id,
+        seq=1,
+        kind=JOB_STEP,
+        app=row.app,
+        tool=f"job_{row.app}",
+        arguments={"ref": row.ref},
+        outcome=_JOB_OUTCOMES.get(status, "failed"),
+        result=text,
+        error=None if read is not None else f"no end reported ({how})",
+    )
+    db.add(step)
+    db.flush()
+    entries = read.record if read is not None else None
+    if entries is not None:
+        for seq, entry in enumerate(entries, start=1):
+            _journal_receipt(db, step, row.app, seq, entry)
+    elif read is None or read.done or read.status == "completed":
+        # No record conductor could read: what the job did is unknown.
+        db.add(
+            LedgerReceipt(
+                step_id=step.id,
+                seq=1,
+                source="conductor",
+                app=row.app,
+                outcome="unknown",
+                reason=UNKNOWN_REASON,
+                job_id=row.id,
+            )
+        )
+    db.flush()
+    db.execute(
+        update(LedgerReceipt)
+        .where(LedgerReceipt.step_id == step.id, LedgerReceipt.job_id.is_(None))
+        .values(job_id=row.id)
+    )
+    logger.info(
+        "job_noted",
+        job_id=job_id,
+        app=row.app,
+        ref=row.ref,
+        how=how,
+        status=status,
+        message_id=message.id,
+    )
+    return message.id
+
+
+_ENDED_WORDS = {
+    "completed": "finished",
+    "failed": "failed",
+    "canceled": "was cancelled",
+    "lost": "lost track of",
+    "gone": "no longer known to the app",
+}
+_JOB_OUTCOMES = {"completed": "done", "canceled": "done", "failed": "failed"}
+
+
+def _rowcount(result: Any) -> int:
+    return int(cast("CursorResult[Any]", result).rowcount)
+
+
+def _aware(value: datetime) -> datetime:
+    """SQLite hands back naive datetimes; the ledger writes UTC."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def receipts_for(db: Session, turn_id: int) -> Sequence[LedgerReceipt]:

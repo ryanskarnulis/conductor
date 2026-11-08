@@ -51,6 +51,15 @@ LOOK_PREFIX = "look_"
 LOOK_FELL_BACK = "glance unavailable, asked the app instead: "
 
 
+# A cancel sent to a running job (#76): ``cancel_job_<app>``, by code, never
+# a tool the model is offered.
+JOB_CANCEL_PREFIX = "cancel_job_"
+
+
+def is_job_cancel(tool: str) -> bool:
+    return tool.startswith(JOB_CANCEL_PREFIX)
+
+
 def is_look(tool: str) -> bool:
     return tool.startswith(LOOK_PREFIX)
 

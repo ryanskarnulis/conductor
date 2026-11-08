@@ -24,7 +24,7 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from tests.fake_world import World, friday_targets, weekend_targets
+from tests.fake_world import PLAYLIST_MISSES, World, friday_targets, weekend_targets
 from tests.receipt_claims import refers_to
 from tests.scripted_provider import text_turn, tool_calls_turn
 from tests.session_harness import (
@@ -227,16 +227,25 @@ def _s4(session: Session) -> None:
         f"no unprompted report of the finished playlist ({len(session.unprompted)} unprompted "
         "messages)"
     )
+    assert len(session.unprompted) == 1, f"{len(session.unprompted)} unprompted messages, not one"
+    missed = [title for title in PLAYLIST_MISSES if not refers_to(reports[0], title)]
+    assert not missed, f"the report doesn't name what didn't match: {missed}"
 
 
 S4 = Scenario(
     "S4",
-    "a long job reports back on its own: 38 of 40, two didn't match",
+    "a long job reports back on its own: one note, 38 of 40, the two misses named",
     (Say("grab this whole playlist https://example.com/playlist?list=PL40"), Advance()),
     (_s4,),
+    tier="gate",
     script=lambda w: [
         _ask("music", "download this playlist https://example.com/playlist?list=PL40"),
         _say("Queued the playlist: 40 tracks. I'll tell you when it lands."),
+        # The job's note (#76), narrated from the app's final report.
+        _say(
+            "Your playlist is in: 38 of 40 downloaded; “Lost Signal” and “Paper Moons” "
+            "couldn't be found."
+        ),
     ],
 )
 

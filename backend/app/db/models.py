@@ -293,9 +293,12 @@ class LedgerJob(Base, TimestampMixin):
     """Long work an app started, by ``(app, ref)``, with its latest report.
 
     ``status`` uses the A2A words (``submitted``, ``working``,
-    ``input_required``, ``completed``, ``failed``, ``canceled``). Today a job
-    is only seen through later receipts that report it; the watcher that polls
-    it is #76.
+    ``input_required``, ``completed``, ``failed``, ``canceled``). Receipts
+    report it, and the watcher (#76, ``app/services/job_watcher.py``) polls
+    it until it ends. ``title`` is its name as last reported (``untrusted``:
+    outside text). ``noted_at`` is set once, in the same commit as the one
+    note the job's conversation gets when it ends (or when the watcher gives
+    up on it): the idempotency marker across restarts and races.
     """
 
     __tablename__ = "ledger_jobs"
@@ -309,4 +312,11 @@ class LedgerJob(Base, TimestampMixin):
     total: Mapped[int | None] = mapped_column(default=None)
     started_by_step_id: Mapped[int | None] = mapped_column(
         ForeignKey("ledger_steps.id"), default=None
+    )
+    title: Mapped[str | None] = mapped_column(default=None)
+    untrusted: Mapped[bool] = mapped_column(default=False)
+    polled_at: Mapped[datetime | None] = mapped_column(default=None)
+    noted_at: Mapped[datetime | None] = mapped_column(default=None, index=True)
+    note_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("conversation_messages.id"), default=None
     )

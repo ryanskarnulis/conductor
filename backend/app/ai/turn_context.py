@@ -38,13 +38,14 @@ def build(
     history: Callable[[], Sequence[dict[str, Any]]],
     earlier: Callable[[], Sequence[recall.EarlierCall]],
     entities: Callable[[], Sequence[state_block.Entity] | None] | None = None,
+    jobs: Callable[[], Sequence[str]] | None = None,
 ) -> str:
     """The context that opens the turn (without the person's words, which the
     loop adds last). ``history`` is this conversation's stored turns;
     ``earlier`` other conversations' delegate calls, newest first;
     ``entities`` the ledger's recent entities (#69), newest first — when it is
     absent, answers ``None`` or fails, the state block reads them from
-    ``history``."""
+    ``history``. ``jobs`` are the ledger's running jobs (#76), likewise."""
     try:
         turns = list(history())
     except Exception as exc:
@@ -64,8 +65,16 @@ def build(
             logger.warning(
                 "turn_context_entities_failed", error=str(exc), error_type=type(exc).__name__
             )
+    running: Sequence[str] | None = None
+    if jobs is not None:
+        try:
+            running = list(jobs())
+        except Exception as exc:
+            logger.warning(
+                "turn_context_jobs_failed", error=str(exc), error_type=type(exc).__name__
+            )
     try:
-        block = state_block.render(today, now, turns, recent)
+        block = state_block.render(today, now, turns, recent, running)
         before = recall.section(recall.Recall.of(turns), hits)
     except Exception as exc:
         # A stored turn conductor can't read: the calendar alone, never no turn.

@@ -198,8 +198,11 @@ def stream_turn_events(
     journals it), ``paused``, ``resumed`` (a turn picking up a plan that was
     waiting on the person) and ``turn_ended`` (after the ledger committed
     the turn), each with a rising ``id``. A quiet stream gets a heartbeat
-    comment. The stream ends after ``turn_ended``, or when no turn begins in
-    time; a reconnect starts over from a snapshot. 404s for an unknown
+    comment. A job the conversation started (#76) streams ``job`` events
+    (progress, then its end with the note's message id), and the stream stays
+    open past ``turn_ended`` until the last running job ends. The stream ends
+    after ``turn_ended``, or when no turn begins in time; a reconnect starts
+    over from a snapshot. 404s for an unknown
     conversation. Runs on the event loop and never holds a worker thread.
     """
     _get_or_404(db, conversation_id)
@@ -319,6 +322,7 @@ def post_message(
         history=lambda: turns,
         earlier=lambda: conversations_service.earlier_calls(db, conversation.id),
         entities=lambda: ledger.recent_entities(db, conversation.id),
+        jobs=lambda: ledger.running_job_lines(db, conversation.id),
     )
     user_message = conversations_service.append_user_message(db, conversation, data.content)
     turn = ledger.open_turn(db, conversation, user_message, surface=data.surface, panel=data.panel)

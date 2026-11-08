@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     # to the loop. On since #70's gates passed (docs/agent-evals.md); off is the
     # old loop alone, the switch until #75 retires it.
     conductor_compiler: bool = True
+    # The job watcher (#76, app/services/job_watcher.py): polls running jobs
+    # and posts one note when each ends. Off in tests (they drive it directly).
+    conductor_job_watcher: bool = True
     # Diagnostics (#62), both off by default. One JSONL record per turn
     # (app/ai/trace.py), and the exact bytes of every model call
     # (app/ai/context_capture.py; heavy, a debugging switch).
