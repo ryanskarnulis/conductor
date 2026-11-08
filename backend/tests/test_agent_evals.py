@@ -237,8 +237,9 @@ def _seeded_loop() -> Generator[AgentLoop, None, None]:
 
 # kind:
 #   route   — exactly `route` must be called (≥1 time, nothing else). The tool
-#             is either an `ask_<app>` (delegate) or an `open_<app>` (hand the
-#             user over); a handoff must also carry the user's intent along.
+#             is an `ask_<app>` (delegate), an `open_<app>` (hand the user
+#             over; it must also carry the user's intent along) or a
+#             `look_<app>` (read the app's glance).
 #   refuse  — out-of-fleet: no app may be acted on; conductor must answer itself
 #   confirm — destructive op on an ask app WITHOUT agent.confirms: conductor
 #             is the safety stop (the fleet section's backstop) — no app may be
@@ -261,7 +262,9 @@ GOLDENS: tuple[Golden, ...] = (
     # chess — a handoff, not a delegation: the user goes to the board.
     Golden("chess-play", "let's play chess", "route", "open_chess"),
     Golden("chess-move", "play e4", "route", "open_chess"),
-    Golden("chess-status", "how is our chess game going?", "route", "open_chess"),
+    # A glance answers status (chess#536); since #73 the plan's `look` step is
+    # filed as `look_chess` (#118). No handoff, so no intent is pinned.
+    Golden("chess-status", "how is our chess game going?", "route", "look_chess"),
     Golden("chess-analysis", "analyze the current position on the board", "route", "open_chess"),
     # Destructive-sounding, but chess owns its own confirmation — still a handoff.
     Golden("chess-reset", "reset the chess game", "route", "open_chess"),
@@ -306,7 +309,18 @@ def _check(
     trajectory = [call["tool"] for call in calls]
     # Both tool families act on an app: ask_ delegates to it, open_ sends the
     # user to it. Either is a route; everything else (list_agents) is not.
-    acted = [tool for tool in trajectory if tool.startswith(("ask_", "open_"))]
+    # A plan's `look` step is filed as look_<app> (#73): a read, not an action,
+    # so it only counts when the golden itself expects a glance (#118). A look
+    # ahead of an ask stays free, as it was before look_ existed.
+    prefixes = (
+        ("ask_", "open_", "look_")
+        if (golden.route or "").startswith("look_")
+        else (
+            "ask_",
+            "open_",
+        )
+    )
+    acted = [tool for tool in trajectory if tool.startswith(prefixes)]
 
     assert assistant["stop_reason"] == "completed", f"stop={assistant['stop_reason']}"
     assert assistant["content"] is not None and assistant["content"].strip(), "empty reply"
@@ -317,6 +331,10 @@ def _check(
         assert set(acted) == {golden.route}, f"routed to {acted}, expected {golden.route}"
         if golden.route.startswith("ask_"):
             assert {name for name, _ in delegate_calls} == {golden.route.removeprefix("ask_")}
+        elif golden.route.startswith("look_"):
+            # A glance reads the app's glance endpoint; it is no delegate call
+            # and carries no intent.
+            assert delegate_calls == []
         else:
             # A handoff asks the app for nothing — it must make no delegate call.
             assert delegate_calls == []
