@@ -123,3 +123,12 @@
 .cd-btn:disabled{opacity:.55;cursor:default;box-shadow:none}
 .cd-receipt button,.cd-note button,.cd-fact button{flex:none}
 .cd-btn:focus-visible,.cd-choice:focus-visible,.cd-thread summary:focus-visible,.cd-ledger summary:focus-visible{outline:2px solid var(--glow);outline-offset:2px}
+
+/* Plan step refs: {s1} is dashed until step 1's receipt fills it with the real title */
+.cd-ref{font-family:var(--font-mono);font-size:.9em;padding:0 5px;border-radius:5px;border:1px dashed var(--violet);color:var(--violet)}
+.cd-ref[data-filled="true"]{font-family:inherit;font-size:1em;border-style:solid;border-color:rgba(143,220,170,.5);color:var(--ink);background:var(--ok-soft);animation:cd-fillin 1.2s var(--ease-out)}
+@keyframes cd-fillin{from{background:rgba(143,220,170,.55);box-shadow:0 0 14px rgba(143,220,170,.5)}}
+.cd-resumed{margin:0;font-size:13px;color:var(--silk)}
+.cd-choice:disabled{opacity:.55;cursor:default}
+.cd-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+@media (prefers-reduced-motion:reduce){.cd-ref[data-filled="true"]{animation:none}}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getTurnActivity, turnEventsUrl } from '../../api/agent'
 import type { TurnActivity } from '../../types/agent'
 import { applyTurnEvent, EMPTY_STREAM, streamActivity, TURN_EVENTS, type TurnStream } from './turnStream'
@@ -36,8 +36,17 @@ export interface TurnLive {
  * derived (`active` + id match), so going idle or switching threads clears
  * the line without effect-time setState.
  */
-export function useTurnActivity(conversationId: number | null, active: boolean): TurnLive | null {
+export function useTurnActivity(
+  conversationId: number | null,
+  active: boolean,
+  onEnded?: (stream: TurnStream) => void,
+): TurnLive | null {
   const [live, setLive] = useState<{ id: number; value: TurnLive } | null>(null)
+  // The latest callback, read when the turn ends (never a reason to reconnect).
+  const endedRef = useRef(onEnded)
+  useEffect(() => {
+    endedRef.current = onEnded
+  })
 
   useEffect(() => {
     if (!active || conversationId === null) return
@@ -98,7 +107,10 @@ export function useTurnActivity(conversationId: number | null, active: boolean):
         const before = stream.activity
         stream = applyTurnEvent(stream, name, data, id)
         if (stream.activity !== before) startedAt = stream.activity ? Date.now() - stream.activity.elapsed_seconds * 1000 : null
-        if (name === 'turn_ended') es.close()
+        if (name === 'turn_ended') {
+          es.close()
+          endedRef.current?.(stream)
+        }
         publish()
       }
       for (const name of TURN_EVENTS) es.addEventListener(name, onEvent(name) as EventListener)

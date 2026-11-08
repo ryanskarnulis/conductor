@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-EventKind = Literal["plan", "step_started", "receipt", "paused"]
+EventKind = Literal["plan", "step_started", "receipt", "paused", "resumed"]
 Sink = Callable[[EventKind, dict[str, Any]], None]
 # A job event for a conversation (#76): ``(conversation_id, payload)``.
 JobSink = Callable[[int, dict[str, Any]], None]
@@ -106,6 +106,19 @@ def job(conversation_id: int, payload: dict[str, Any]) -> None:
         sink(conversation_id, payload)
     except Exception as exc:
         logger.warning("turn_event_failed", kind="job", error=str(exc))
+
+
+def resumed(
+    reason: Literal["ask_user", "gate", "app_confirm"],
+    *,
+    step: str | None = None,
+    answer: str | None = None,
+) -> None:
+    """This turn picks up a plan that was waiting on the person (#89): why it
+    waited, the id of the step it waited on (``None`` when an app's own
+    question is answered), and, for an ``ask_user``, their answer, as they said
+    it: what ``{s1}`` becomes in the steps that follow."""
+    _emit("resumed", {"reason": reason, "step": step, "answer": answer})
 
 
 def _emit(kind: EventKind, payload: dict[str, Any]) -> None:

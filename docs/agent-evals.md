@@ -87,6 +87,38 @@ both are `xfail` in `KNOWN_REDS` until fixed:
 The rest of the suite: 19/21 ABOVE_FLOOR at 5/5, infra 2/12 (two llama-swap
 timeouts on `chess-reset`, re-taken, never scored), 684 s.
 
+## Routing run, 2026-11-08 — `chess-status` reads `look(chess)` (#118)
+
+Since #73 a glance answers "how is our chess game going?" (chess#536's
+point), so `chess-status` now expects `look_chess`, the record the
+interpreter files for a `look` step. It pins no `intent` and no delegate call.
+A `look_` call counts as an action only for a golden that expects one; ahead
+of an ask it stays free, so `tasks-due` and `music-sort-ask` (which now look
+first) keep passing as they did. Chess's manifest is unchanged.
+
+Run on gemma-4-12b, 5 samples per golden, infra 0/12, 105 s:
+
+| golden | result |
+|---|---|
+| tasks-due, tasks-create | 5/5, 5/5 |
+| **tasks-week** | **1/5 red** (earlier run the same day 2/5): every miss answers locally with no app call |
+| chess-play, chess-move, chess-reset | 5/5 each |
+| **chess-status** | **5/5** (`look_chess`; was 0/5 on main as `open_chess`) |
+| **chess-analysis** | **0/5 red**, known miss: `look_chess` every time, expects `open_chess` |
+| **chess-resign** | **1/5 red** (1/5 in both runs): the misses route to `ask_music` |
+| music-download-link, -download-named | 5/5, 5/5 |
+| music-save | 4/5 (xpass; 5/5 in the earlier run) |
+| music-sort, -sort-ask, -organize | 5/5 each |
+| refuse-lights, -weather, -playback | 5/5 each (`refuse-playback` xpass; 12/15 in the earlier run) |
+| confirm-delete-task, -wipe-project | 5/5, 5/5 |
+| local-capabilities | 5/5 |
+
+The reds besides `chess-analysis` are not from this change and are not fixed
+here: `tasks-week` and `chess-resign` read below the floor on this run, and
+their gate verdict is BELOW_FLOOR. `chess-resign` is the plan-level known miss
+in chess's manifest examples; `tasks-week` is new in this record and wants its
+own issue.
+
 ## Open regression — `refuse-playback` red since music #9
 
 "play some jazz music" routes to `ask_music` instead of refusing,
