@@ -152,7 +152,9 @@ export function AgentPage() {
   const panelRef = useRef<HTMLElement>(null)
   const deviceRef = useRef<HTMLDivElement>(null)
   const sending = pendingText !== null
-  const activity = useTurnActivity(activeId, sending)
+  const live = useTurnActivity(activeId, sending)
+  const activity = live?.activity ?? null
+  const stream = live?.stream ?? null
   const phone = usePhone()
   const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion)
   useEffect(() => {
@@ -163,7 +165,7 @@ export function AgentPage() {
     return () => mql.removeEventListener('change', on)
   }, [])
 
-  const turns = useMemo(() => buildTurns(messages, pendingText, activity), [messages, pendingText, activity])
+  const turns = useMemo(() => buildTurns(messages, pendingText, activity, stream), [messages, pendingText, activity, stream])
   const confirm = sending ? null : pendingConfirm(messages)
   const presence = presenceFor(sending, activity, confirm !== null)
   const latest = turns.length > 0 ? turns[turns.length - 1] : null

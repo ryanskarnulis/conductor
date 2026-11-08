@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import sessionmaker
 
 import app.main as main_module
+from app.ai import interpreter as interpreter_module
 from app.ai.loop import AgentLoop, loop_from_settings
 from app.ai.provider import ProviderRequestError
 from app.api import rate_limit, routes_agent, turn_activity
@@ -110,6 +111,9 @@ def _started(
     holder = WorldHolder()
     monkeypatch.setattr(get_settings(), "fleet_manifest_dir", fleet_dir)
     monkeypatch.setattr(main_module, "default_client_factory", lambda: holder.factory)
+    # A plan's `look` reads the world's glance, never the real app behind the
+    # manifest (the interpreter resolves its default reader at construction).
+    monkeypatch.setattr(interpreter_module, "read_glance", holder.glance)
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[routes_agent.get_thread_store] = lambda: DbThreadStore(session_factory)
     try:

@@ -61,6 +61,7 @@ from typing import Any, Protocol
 
 import structlog
 
+from app.ai import run_record
 from app.ai import trace as run_trace
 from app.ai.confirmation import CONFIRM_TOOL, AppConfirm, PendingConfirm
 from app.ai.stop import STOPPED_ERROR, current_stop
@@ -145,6 +146,15 @@ def ask_tool_name(app_name: str) -> str:
 def open_tool_name(app_name: str) -> str:
     """The handoff tool name for an app: ``open_<name>`` (same slug rule)."""
     return f"open_{app_name.replace('-', '_')}"
+
+
+def look_tool_name(app_name: str) -> str:
+    """The name a glance read goes by on a plan's record: ``look_<name>``.
+
+    Not a registry tool: the model is never offered it. The interpreter runs a
+    ``look`` step itself (#73) and files it under this name.
+    """
+    return f"{run_record.LOOK_PREFIX}{app_name.replace('-', '_')}"
 
 
 def build_delegate_tools(fleet: Fleet, client_factory: ClientFactory) -> list[str]:

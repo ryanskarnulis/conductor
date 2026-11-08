@@ -1,4 +1,4 @@
-import { apiClient } from './client'
+import { apiClient, apiUrl } from './client'
 import type {
   AgentMessage,
   Conversation,
@@ -63,6 +63,12 @@ export async function postMessage(
 export async function getTurnActivity(conversationId: number): Promise<TurnActivity> {
   const res = await apiClient(`/api/agent/conversations/${conversationId}/activity`)
   return (await res.json()) as TurnActivity
+}
+
+/** The conversation's live channel (#38): Server-Sent Events for the turn in
+ * flight. `useTurnActivity` opens it with `EventSource`. */
+export function turnEventsUrl(conversationId: number): string {
+  return apiUrl(`/api/agent/conversations/${conversationId}/events`)
 }
 
 /** Stop the conversation's in-flight turn (#66). Idempotent; the blocked

@@ -39,11 +39,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from app.ai import dataflow, narrator, run_record
+from app.ai import dataflow, narrator, run_record, turn_events
 from app.ai import plan as plans
 from app.ai.confirmation import PendingConfirm
 from app.ai.plan import Ledgered, PausedPlan, TurnPlan, UndoReceipt
@@ -290,66 +290,75 @@ def undo(
         )
     groups: dict[str, list[UndoReceipt]] = {}
     already: list[UndoReceipt] = []
+    notes: list[ToolCallRecord] = []
     for receipt in chosen:
+        app = interp._fleet.get(receipt.app)
         if receipt.id in handled:
             continue
         if receipt.undone:
             already.append(receipt)
         elif receipt.outcome == "unknown":
-            state.records.append(
+            notes.append(
                 _note(receipt, f"there's no record of what {receipt.app} did; check it there")
             )
-        elif receipt.handle or receipt.how:
-            groups.setdefault(receipt.app, []).append(receipt)
-        elif receipt.none:
-            state.records.append(_note(receipt, receipt.none))
+        elif not (receipt.handle or receipt.how):
+            notes.append(_note(receipt, receipt.none or f"{receipt.app} gave no way to undo it"))
+        elif app is None or app.agent is None:
+            notes.append(_note(receipt, f"conductor can't reach {receipt.app}"))
         else:
-            state.records.append(_note(receipt, f"{receipt.app} gave no way to undo it"))
+            groups.setdefault(receipt.app, []).append(receipt)
     turn.note = f"undo of plan {chosen[0].plan_id}" if chosen else turn.note
-    if not groups:
+    asks = [
+        plans.Ask(
+            id=step.id, do="ask", app=app_name, request=_undo_request(receipts), destructive=True
+        )
+        for app_name, receipts in groups.items()
+    ]
+    # What this undo will do, one record per step, as the live channel reads
+    # a plan (#38): what can't be undone first, then one ask per app.
+    turn_events.plan(
+        {
+            "steps": [
+                *(_note_step(step.id, note) for note in notes),
+                *(a.model_dump() for a in asks),
+            ]
+        },
+        0,
+    )
+    for note in notes:
+        _add(state, note)
+    if not asks:
         if handled:
             return interp._finish(state, turn, [], 1)
-        if already:
-            lead = f"Already undone: {_what(already)}."
-        else:
-            lead = CANT_UNDO
+        lead = f"Already undone: {_what(already)}." if already else CANT_UNDO
         line = narrator.record_line(state.records, state.trace.surface)
         return _say(interp, state, f"{lead} {line}".strip())
-    apps = list(groups)
-    for index, app_name in enumerate(apps):
-        receipts = groups[app_name]
-        request = _undo_request(receipts)
-        app = interp._fleet.get(app_name)
-        if app is None or app.agent is None:
-            for receipt in receipts:
-                state.records.append(_note(receipt, f"conductor can't reach {app_name}"))
-            continue
-        ask = plans.Ask(id=step.id, do="ask", app=app_name, request=request, destructive=True)
-        if not app.agent.confirms and app_name != gate_app:
+    for index, ask in enumerate(asks):
+        app = interp._fleet.get(ask.app)
+        assert app is not None and app.agent is not None
+        if not app.agent.confirms and ask.app != gate_app:
             # Code's own ask-first pause, as for any destructive ask; a yes
             # resumes this undo here (what's done by then is marked).
             turn.status, turn.pause = "paused", "gate"
-            turn.resume_at, turn.pause_app = position, app_name
-            return interp._gate(state, ask, request)
-        record = interp._dispatch(state, ask_tool_name(app_name), {"message": request})
+            turn.resume_at, turn.pause_app = position, ask.app
+            return interp._gate(state, ask, ask.request)
+        record = interp._dispatch(state, ask_tool_name(ask.app), {"message": ask.request})
         if record is None:
             break
-        record.undoes = [receipt.id for receipt in receipts]
-        if record.app_confirm and record.app_confirm.get("question"):
+        record.undoes = [receipt.id for receipt in groups[ask.app]]
+        question = (record.app_confirm or {}).get("question")
+        if question:
             # The app's own question; the yes carries what it undoes, and
             # the rest of the undo goes on after it.
+            turn_events.paused("app_confirm", question=question, app=ask.app, step=step.id)
             turn.status, turn.pause = "paused", "app_confirm"
-            turn.resume_at, turn.pause_app = position + 1, app_name
+            turn.resume_at, turn.pause_app = position + 1, ask.app
             return interp._finish(state, turn, [], 1)
         if not interp._went_well(record):
-            turn.note = f"undo stopped at {app_name}"
-            for later in apps[index + 1 :]:
-                state.records.append(_unrun(later, _undo_request(groups[later]), _UNDO_STOPPED))
+            turn.note = f"undo stopped at {ask.app}"
+            for later in asks[index + 1 :]:
+                _add(state, _unrun(later.app, later.request, _UNDO_STOPPED))
             break
-    if not run_record.any_ran(state.records):
-        # No app could be asked: code says what couldn't be undone.
-        line = narrator.record_line(state.records, state.trace.surface)
-        return _say(interp, state, f"{CANT_UNDO} {line}".strip())
     return interp._finish(state, turn, [], 1)
 
 
@@ -446,6 +455,23 @@ def _note(receipt: UndoReceipt, reason: str) -> ToolCallRecord:
     """What couldn't be undone, as a step not run: the narrator says it, and
     code appends it when the narrator doesn't."""
     return _unrun(receipt.app, f"undo {_what([receipt])}", run_record.NOT_RUN_PREFIX + reason)
+
+
+def _note_step(step_id: str, note: ToolCallRecord) -> dict[str, Any]:
+    """A note as a plan step, for the live channel: an ask that won't run."""
+    return {
+        "id": step_id,
+        "do": "ask",
+        "app": note.tool.removeprefix("ask_"),
+        "request": note.arguments.get("message", ""),
+        "destructive": False,
+    }
+
+
+def _add(state: _Run, record: ToolCallRecord) -> None:
+    """A record code made itself, on the turn's record and the live channel."""
+    state.records.append(record)
+    turn_events.receipt(len(state.records), record)
 
 
 def _unrun(app: str, message: str, error: str) -> ToolCallRecord:

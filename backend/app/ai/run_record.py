@@ -9,7 +9,8 @@ reply is this record — never the model's words. Every
   that work happened, so it is never filed as a failure;
 - **failed**: a call the app or the tool refused or that broke partway (its
   reason attached, so a "stopped partway" from #60 is kept word for word);
-- **looked up**: a local read (``list_agents``) that came back;
+- **looked up**: a local read (``list_agents``) or an app's glance (``look_<app>``,
+  #73) that came back;
 - **not run**: a call that never left conductor: schema-invalid arguments, an
   unknown tool, the tool-call cap, or the rest of a turn after a crash.
 
@@ -40,6 +41,24 @@ Outcome = Literal["done", "failed", "looked_up", "not_run"]
 # Conductor's only local, read-only tool. Everything else either hands a request
 # to an app (which may write) or hands the user over, so it counts as done.
 READ_TOOLS = frozenset({"list_agents"})
+
+# A plan's ``look`` step is filed as ``look_<app>``: a read of the app's glance,
+# never a write, and never a tool the model is offered.
+LOOK_PREFIX = "look_"
+
+# The error on a look whose glance failed and whose app was asked instead (#73):
+# the failed read stays on the record, but the reply is about the ask.
+LOOK_FELL_BACK = "glance unavailable, asked the app instead: "
+
+
+def is_look(tool: str) -> bool:
+    return tool.startswith(LOOK_PREFIX)
+
+
+def is_read(tool: str) -> bool:
+    """Whether a tool only reads: conductor's local read or an app's glance."""
+    return tool in READ_TOOLS or is_look(tool)
+
 
 # The prefix of every error text the loop writes for a call it never
 # dispatched. The loop builds those texts from it, so a reworded one cannot
@@ -78,7 +97,7 @@ STOP_REASONS: dict[str, str] = {
 def classify(record: ToolCallRecord) -> Outcome:
     """Sort one call by what its record shows happened."""
     if record.result is not None:
-        return "looked_up" if record.tool in READ_TOOLS else "done"
+        return "looked_up" if is_read(record.tool) else "done"
     if _app_done(record):
         return "done"
     error = record.error or ""

@@ -10,6 +10,12 @@ same as the loop's. What it runs, across apps (#72):
   ask to an app that doesn't confirm its own writes pauses first on code's
   question (the backstop gate); ``confirm`` yes runs it. An app's
   ``confirm_required`` pauses the plan the same way, on the app's question.
+- ``look`` (#73): a plain GET to the app's glance endpoint (declared in its
+  manifest), through :mod:`app.fleet.glance`: no agent loop, no model call, no
+  budget charge. The record is a ``looked_up`` receipt built by code
+  (:mod:`app.ai.glance`). If the glance can't be read (down, 5xx, timeout) the
+  same app is asked the person's words instead, when that can't repeat a
+  write the plan already made; else the step fails and the plan ends.
 - ``open``: the handoff. Always last.
 - ``ask_user``: the plan pauses on the question; the person's answer resumes
   the same plan, ``{s1}`` replaced by their words.
@@ -22,7 +28,7 @@ same as the loop's. What it runs, across apps (#72):
 - The direct answers (:mod:`app.ai.speaker`), ``self`` from the ledger.
 
 Independent reads (:func:`plans.reads_only`: asks to different apps, phrased
-as questions, no refs) that sit next to each other run at once, each in its
+as questions, no refs; and looks) that sit next to each other run at once, each in its
 own thread with the turn's context; everything else runs in order, one call
 at a time, so there is never more than one writer in flight. The per-app
 budget is charged under a lock and a Stop reaches every call in flight.
@@ -49,15 +55,17 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
-from app.ai import compiler, control, dataflow, narrator, run_record, speaker
+from app.ai import compiler, control, dataflow, narrator, run_record, speaker, turn_events
+from app.ai import glance as glances
 from app.ai import plan as plans
 from app.ai import trace as run_trace
 from app.ai.provider import ChatResult, ProviderError, ToolCall
 from app.ai.plan import Ledgered, PausedPlan, TurnPlan
-from app.ai.stop import STOPPED_ERROR, Stop
+from app.ai.stop import STOPPED_ERROR, Stop, current_stop
 from app.fleet.context import current_delegation_context
+from app.fleet.glance import GlanceError, GlanceReader, read_glance
 from app.fleet.manifests import Fleet
-from app.fleet.tools import ask_tool_name, open_tool_name
+from app.fleet.tools import ask_tool_name, look_tool_name, open_tool_name
 
 if TYPE_CHECKING:
     from app.ai.loop import AgentLoop, AgentRunResult, LoopActivity, OnActivity, ToolCallRecord
@@ -80,6 +88,9 @@ class _Run:
     stop: Stop | None
     records: list[ToolCallRecord] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
+    # Whether ``words`` is what the person asked for. A resumed or confirmed
+    # plan was told "the first one" or "yes": that restates nothing.
+    restate: bool = True
     # What the ledger says control steps act on (#74), read only if needed.
     view: control.View = field(default_factory=lambda: control.View(None))
 
@@ -87,9 +98,12 @@ class _Run:
 class Interpreter:
     """Compiles and runs one turn on behalf of an :class:`AgentLoop`."""
 
-    def __init__(self, loop: AgentLoop, fleet: Fleet) -> None:
+    def __init__(self, loop: AgentLoop, fleet: Fleet, glance: GlanceReader | None = None) -> None:
         self._loop = loop
         self._fleet = fleet
+        # How a look reads a glance; tests pass a fake, none dials the network.
+        self._glance: GlanceReader = glance or read_glance
+        self._looks = {look_tool_name(app.name): app for app in fleet.apps}
         self._prompt = compiler.planner_prompt(fleet)
 
     @property
@@ -175,6 +189,10 @@ class Interpreter:
         if ack is not None:
             loop._emit(on_activity, _activity("model", ack=ack))
         turn = TurnPlan(body=body, status="ran", ack=ack, repaired=compiled.repaired)
+        if isinstance(plan, plans.Resume) or (
+            isinstance(plan, plans.StepPlan) and isinstance(plan.steps[0], plans.Confirm)
+        ):
+            state.restate = False
         if isinstance(plan, plans.Direct):
             turn.status = "answered"
             return self._answer(state, plan, self_facts), turn
@@ -212,7 +230,7 @@ class Interpreter:
         self, state: _Run, plan: plans.Direct, self_facts: Callable[[], str] | None
     ) -> AgentRunResult:
         facts = None
-        if plan.answer in ("self", "knowledge"):
+        if plan.answer in ("self", "knowledge", "chat"):
             facts = self._facts(self_facts)
         reply, path = speaker.answer(
             plan.answer,
@@ -274,6 +292,7 @@ class Interpreter:
             # The app's question lapses on its own; nothing is sent.
             turn.note = "declined the app's question"
             return self._loop._finish("completed", _LEFT_IT, [], 1, state.messages)
+        turn_events.plan(turn.body, 0)
         record = self._dispatch(state, _CONFIRM_TOOL, {"app": pending_app or ""})
         if undoing is not None and record is not None and self._went_well(record):
             # The yes was to an undo's question: the rest of that undo goes on.
@@ -300,6 +319,7 @@ class Interpreter:
     ) -> AgentRunResult:
         """Run ``steps``; ``offset`` is the first one's index in the plan."""
         loop = self._loop
+        turn_events.plan(turn.body, offset)
         index = 0
         while index < len(steps):
             step = steps[index]
@@ -313,9 +333,10 @@ class Interpreter:
                 return self._ask_user(state, step)
             group = _read_group(steps, index)
             if len(group) > 1:
-                results = self._dispatch_all(
-                    state, [(ask_tool_name(s.app), {"message": s.request}) for s in group]
-                )
+                results = self._dispatch_all(state, [_call_for(s) for s in group])
+                for n, read in enumerate(group):
+                    if isinstance(read, plans.Look) and not self._went_well(results[n]):
+                        results[n] = self._look_fell_back(state, read, results[n], steps)
                 for read, got in zip(group, results, strict=True):
                     self._keep(values, read, got)
                 after = index + len(group)
@@ -354,6 +375,12 @@ class Interpreter:
                 record = self._dispatch(state, ask_tool_name(step.app), {"message": filled.text})
                 if record is not None and record.app_confirm and record.app_confirm.get("question"):
                     return self._app_asked(state, turn, steps, position + 1, step, values)
+            elif isinstance(step, plans.Look):
+                record = self._dispatch(state, look_tool_name(step.app), {})
+                if record is not None and not self._went_well(record):
+                    record = self._look_fell_back(state, step, record, steps)
+                    if record.app_confirm and record.app_confirm.get("question"):
+                        return self._app_asked(state, turn, steps, position + 1, step, values)
             elif isinstance(step, plans.Open):
                 filled = dataflow.fill(step.intent, values)
                 refusal = _refusal(step, filled, confirms=False)
@@ -382,12 +409,15 @@ class Interpreter:
         turn: TurnPlan,
         steps: Sequence[plans.Step],
         resume_at: int,
-        step: plans.Ask,
+        step: plans.Ask | plans.Look,
         values: dict[str, dataflow.Value],
     ) -> AgentRunResult:
         """An app asked the person to confirm: the plan waits on their answer
         if anything is left to run after it."""
         plan_length = len((turn.body or {}).get("steps") or [])
+        asked = next((r.app_confirm for r in reversed(state.records) if r.app_confirm), None)
+        question = asked.get("question") if asked else None
+        turn_events.paused("app_confirm", question=question, app=step.app, step=step.id)
         if resume_at < plan_length:
             turn.status, turn.pause = "paused", "app_confirm"
             turn.resume_at, turn.pause_app = resume_at, step.app
@@ -421,6 +451,7 @@ class Interpreter:
                 tool=tool, arguments=arguments, error=run_record.NOT_RUN_PREFIX + refusal
             )
         )
+        turn_events.receipt(len(state.records), state.records[-1])
         turn.note = f"{step.id} not run: {refusal}"[:500]
         logger.info("plan_step_refused", step=step.id, reason=refusal)
         return self._finish(state, turn, steps[index + 1 :], 1)
@@ -441,9 +472,10 @@ class Interpreter:
         """One step through the loop's dispatch; a crash fails the turn like the loop's."""
         loop = self._loop
         loop._emit(state.on_activity, _activity("tool", tool=tool))
+        turn_events.step_started(len(state.records) + 1, tool, arguments)
         call = ToolCall(id=f"plan-{len(state.records) + 1}", name=tool, arguments=arguments)
         try:
-            record, _feedback, _schema = loop._dispatch(call, state.actor)
+            record, _feedback, _schema = self._call(call, state.actor)
         except Exception as exc:
             logger.exception("plan_step_crashed", tool=tool)
             from app.ai.loop import ToolCallRecord  # noqa: PLC0415
@@ -455,6 +487,7 @@ class Interpreter:
                 "internal_error", f"agent run crashed in {tool}: {exc}", state.records, 1, []
             ) from exc
         state.records.append(record)
+        turn_events.receipt(len(state.records), record)
         return record
 
     def _dispatch_all(
@@ -472,17 +505,18 @@ class Interpreter:
             ToolCall(id=f"plan-{first + n + 1}", name=tool, arguments=arguments)
             for n, (tool, arguments) in enumerate(calls)
         ]
-        for call in tool_calls:
+        for n, call in enumerate(tool_calls):
             loop._emit(state.on_activity, _activity("tool", tool=call.name))
+            turn_events.step_started(first + n + 1, call.name, call.arguments)
         logger.info("plan_reads_parallel", tools=[call.name for call in tool_calls])
         with ThreadPoolExecutor(max_workers=len(tool_calls), thread_name_prefix="plan") as pool:
             futures = [
-                pool.submit(contextvars.copy_context().run, loop._dispatch, call, state.actor)
+                pool.submit(contextvars.copy_context().run, self._call, call, state.actor)
                 for call in tool_calls
             ]
         records: list[ToolCallRecord] = []
         crash: tuple[str, Exception] | None = None
-        for call, future in zip(tool_calls, futures, strict=True):
+        for n, (call, future) in enumerate(zip(tool_calls, futures, strict=True)):
             try:
                 record, _feedback, _schema = future.result()
             except Exception as error:
@@ -495,6 +529,7 @@ class Interpreter:
                 # Taken for a read, it wrote: harmless once, worth knowing.
                 logger.warning("plan_read_wrote", tool=call.name)
             records.append(record)
+            turn_events.receipt(first + n + 1, record)
         state.records.extend(records)
         if crash is not None:
             tool, cause = crash
@@ -502,6 +537,70 @@ class Interpreter:
                 "internal_error", f"agent run crashed in {tool}: {cause}", state.records, 1, []
             ) from cause
         return records
+
+    def _call(self, call: ToolCall, actor: str) -> tuple[ToolCallRecord, str, bool]:
+        """One call: a look is read here, never through the registry the model
+        is offered; everything else is the loop's own dispatch."""
+        if run_record.is_look(call.name):
+            return self._look(call)
+        return self._loop._dispatch(call, actor)
+
+    def _look(self, call: ToolCall) -> tuple[ToolCallRecord, str, bool]:
+        """Read one app's glance: a ``looked_up`` record built by code, or the
+        reason it couldn't be read. No model call, no delegate budget."""
+        from app.ai.loop import ToolCallRecord  # noqa: PLC0415
+
+        record = ToolCallRecord(tool=call.name, arguments={})
+        app = self._looks.get(call.name)
+        stop = current_stop()
+        try:
+            if stop is not None and stop.is_set():
+                record.error = STOPPED_ERROR
+            elif app is None or app.glance is None:
+                record.error = "couldn't look: that app has no glance"
+            else:
+                payload = self._glance(app)
+                record.result, entry = glances.receipt(payload)
+                record.app_record = [entry]
+        except GlanceError as exc:
+            record.error = f"couldn't look at {app.name if app else 'the app'}: {exc}"
+        logger.info("plan_look", tool=call.name, ok=record.error is None)
+        return record, record.result or f"Error: {record.error}", False
+
+    def _look_fell_back(
+        self,
+        state: _Run,
+        step: plans.Look,
+        failed: ToolCallRecord,
+        steps: Sequence[plans.Step],
+    ) -> ToolCallRecord:
+        """A glance that couldn't be read: ask the same app the person's words
+        instead (#73). Returns the ask's record, or ``failed`` when asking
+        wouldn't be right: Stop, an app with no agent, words that aren't the
+        request (a resumed plan was told "yes"), words that aren't a plain
+        question (a look replaces a read; its stand-in never writes), or an
+        ask already in the plan for this app, which the words would repeat."""
+        app = self._fleet.get(step.app)
+        if (
+            run_record.classify(failed) == "not_run"
+            or app is None
+            or app.agent is None
+            or not state.restate
+            or not plans.reads_only(
+                plans.Ask(id="s0", do="ask", app=app.name, request=state.words, destructive=False)
+            )
+        ):
+            return failed
+        tool = ask_tool_name(app.name)
+        if any(isinstance(other, plans.Ask) and other.app == app.name for other in steps) or any(
+            record.tool == tool for record in state.records
+        ):
+            return failed
+        failed.error = run_record.LOOK_FELL_BACK + (failed.error or "")
+        logger.info("plan_look_fell_back", app=app.name, reason=failed.error)
+        record = self._dispatch(state, tool, {"message": state.words})
+        assert record is not None
+        return record
 
     @staticmethod
     def _went_well(record: ToolCallRecord) -> bool:
@@ -513,6 +612,7 @@ class Interpreter:
         for step in steps:
             tool, arguments = _call_for(step)
             state.records.append(ToolCallRecord(tool=tool, arguments=arguments, error=error))
+            turn_events.receipt(len(state.records), state.records[-1])
 
     # --- questions -------------------------------------------------------------------------
 
@@ -521,11 +621,13 @@ class Interpreter:
         options = [option.strip() for option in step.options if option.strip()]
         if options:
             question = f"{question} ({' / '.join(options)})"
+        turn_events.paused("ask_user", question=question, step=step.id)
         reply = self._with_record_line(state, question)
         return self._loop._finish("completed", reply, state.records, 1, state.messages)
 
     def _gate(self, state: _Run, step: plans.Ask, request: str) -> AgentRunResult:
         question = f'Just to check: should I ask {step.app} to "{request}"?'
+        turn_events.paused("gate", question=question, app=step.app, step=step.id)
         reply = self._with_record_line(state, question)
         return self._loop._finish("completed", reply, state.records, 1, state.messages)
 
@@ -586,18 +688,23 @@ def _call_for(step: plans.Step) -> tuple[str, dict[str, Any]]:
         return ask_tool_name(step.app), {"message": step.request}
     if isinstance(step, plans.Open):
         return open_tool_name(step.app), {"intent": step.intent}
+    if isinstance(step, plans.Look):
+        return look_tool_name(step.app), {}
     return f"plan:{step.do}", {}
 
 
 _INTERNAL_ERROR = "internal error: the tool call failed unexpectedly"
 
 
-def _read_group(steps: Sequence[plans.Step], start: int) -> list[plans.Ask]:
+def _read_group(steps: Sequence[plans.Step], start: int) -> list[plans.Ask | plans.Look]:
     """The reads from ``start`` that can run at once: next to each other, each
-    to a different app (one call per app thread at a time)."""
-    group: list[plans.Ask] = []
+    to a different app (one call per app thread at a time). A look is always a
+    read (#73)."""
+    group: list[plans.Ask | plans.Look] = []
     for step in steps[start:]:
-        if not isinstance(step, plans.Ask) or not plans.reads_only(step):
+        if not isinstance(step, plans.Look) and not (
+            isinstance(step, plans.Ask) and plans.reads_only(step)
+        ):
             break
         if any(read.app == step.app for read in group):
             break

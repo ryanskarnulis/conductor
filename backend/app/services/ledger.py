@@ -183,7 +183,13 @@ SELF_REPORT_TURNS = 3
 
 # Plain words for the self-report, so the speaker never reads a tool name or a
 # bare "done" as a claim that something was completed (S16).
-_STEP_WORDS = {"ask": "asked", "open": "opened", "confirm": "said yes to", "local": "looked up"}
+_STEP_WORDS = {
+    "ask": "asked",
+    "look": "looked at",
+    "open": "opened",
+    "confirm": "said yes to",
+    "local": "looked up",
+}
 _OUTCOME_WORDS = {
     "done": "it answered",
     "looked_up": "it answered",
@@ -436,11 +442,48 @@ def step_kind(tool: str, arguments: dict[str, Any]) -> tuple[str, str | None]:
         return "ask", tool.removeprefix("ask_")
     if tool.startswith("open_"):
         return "open", tool.removeprefix("open_")
+    if run_record.is_look(tool):
+        # A glance (#73): the app's name as the plan wrote it (hyphens flatten).
+        return "look", tool.removeprefix(run_record.LOOK_PREFIX)
     if tool == confirmation.CONFIRM_TOOL:
         return "confirm", confirmation.record_app(tool, arguments)
     if tool in run_record.READ_TOOLS:
         return "local", None
     return "unknown", None
+
+
+def live_step(seq: int, record: ToolCallRecord) -> dict[str, Any]:
+    """One step as the ledger will journal it, for the live channel (#38).
+
+    The same kind, app and outcome as its ``LedgerStep`` row, and the same
+    receipts: the app's typed record entries as the app wrote them, or
+    conductor's ``unknown`` receipt for an app call with no readable record.
+    An app's confirm question goes out without its token.
+    """
+    kind, app = step_kind(record.tool, record.arguments)
+    outcome = run_record.classify(record)
+    receipts: list[dict[str, Any]] = []
+    if app is not None and kind in ("ask", "confirm"):
+        if record.app_record is not None:
+            receipts = [{**entry, "source": "app"} for entry in record.app_record]
+        elif _may_have_written(record, outcome):
+            receipts = [{"source": "conductor", "outcome": "unknown", "reason": UNKNOWN_REASON}]
+    asked = record.app_confirm or {}
+    return {
+        "seq": seq,
+        "kind": kind,
+        "app": app,
+        "tool": record.tool,
+        "arguments": record.arguments,
+        "outcome": outcome,
+        "error": record.error,
+        "receipts": receipts,
+        "confirm": (
+            {"app": asked.get("app"), "tool": asked.get("tool"), "question": asked["question"]}
+            if asked.get("question")
+            else None
+        ),
+    }
 
 
 # --- internals ----------------------------------------------------------------------------
@@ -479,7 +522,7 @@ def _journal_step(db: Session, plan: LedgerPlan, seq: int, record: ToolCallRecor
     db.add(step)
     db.flush()
     _mark_undone(db, step, record, outcome)
-    if app is None or kind not in ("ask", "confirm"):
+    if app is None or kind not in ("ask", "confirm", "look"):
         return
     if record.app_record is not None:
         for entry_seq, entry in enumerate(record.app_record, start=1):

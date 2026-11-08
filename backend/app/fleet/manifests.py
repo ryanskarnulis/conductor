@@ -4,7 +4,9 @@ The fleet is declarative. Each app in the workspace drops an ``app.yaml`` at its
 repo root (schema in ``../gateway/README.md``); an app that ships a standard
 agent adds an ``agent:`` block (``../agent-standard/app-yaml-agent-block.md``),
 and an app the user is better off *inside* adds an ``open:`` block
-(``../agent-standard/app-yaml-open-block.md``). Conductor scans
+(``../agent-standard/app-yaml-open-block.md``); either may declare a ``glance:``
+(``../agent-standard/app-yaml-glance-block.md``), the one read-only summary
+endpoint conductor's ``look(app)`` step reads. Conductor scans
 ``{fleet_manifest_dir}/*/app.yaml``, records every well-formed app as a fleet
 member, and learns from those blocks what it can do with each one: delegate to
 it, hand the user over to it, both, or neither. Adding an app to the fleet is
@@ -81,12 +83,32 @@ class OpenSpec:
     examples: tuple[str, ...]
 
 
+# The default path of an app's glance endpoint (agent-standard#21).
+DEFAULT_GLANCE_PATH = "/api/agent/glance"
+
+
+@dataclass(frozen=True)
+class GlanceSpec:
+    """An app's ``glance:`` block: one read-only summary endpoint (#73).
+
+    ``look(app)`` reads it with a plain GET (no agent loop, no model call).
+    The app's absence of the block is the discovery signal that it has none.
+    """
+
+    # One line: what the summary holds. It goes in the planner's prompt so the
+    # 12B knows which questions a look can answer.
+    holds: str
+    # The endpoint on the app's upstream.
+    path: str = DEFAULT_GLANCE_PATH
+
+
 @dataclass(frozen=True)
 class FleetApp:
-    """One fleet member. ``agent``/``open`` are ``None`` when not declared.
+    """One fleet member. ``agent``/``open``/``glance`` are ``None`` when not declared.
 
-    The two are independent: an app may be delegable (``agent:``), openable
-    (``open:``), both, or neither (a fleet member conductor can only name).
+    The three are independent: an app may be delegable (``agent:``), openable
+    (``open:``), readable at a glance (``glance:``), any mix, or none (a fleet
+    member conductor can only name).
     """
 
     name: str
@@ -96,6 +118,22 @@ class FleetApp:
     upstream: str
     agent: AgentSpec | None
     open: OpenSpec | None = None
+    glance: GlanceSpec | None = None
+
+    @property
+    def has_glance(self) -> bool:
+        return self.glance is not None
+
+    @property
+    def glance_url(self) -> str:
+        """URL of this app's glance endpoint, e.g. ``http://127.0.0.1:8100/api/agent/glance``.
+
+        Raises :class:`ValueError` for an app without a glance — callers gate on
+        :attr:`has_glance` first.
+        """
+        if self.glance is None:
+            raise ValueError(f"{self.name} has no glance block")
+        return f"http://{self.upstream}{self.glance.path}"
 
     @property
     def has_agent(self) -> bool:
@@ -141,6 +179,10 @@ class Fleet:
     def open_apps(self) -> tuple[FleetApp, ...]:
         """Members conductor can hand the user off to (the ones it opens)."""
         return tuple(app for app in self.apps if app.has_open)
+
+    def glance_apps(self) -> tuple[FleetApp, ...]:
+        """Members with a glance, the ones ``look`` can read (#73)."""
+        return tuple(app for app in self.apps if app.has_glance)
 
     def inert_apps(self) -> tuple[FleetApp, ...]:
         """Members conductor can neither delegate to nor open — it can only
@@ -235,6 +277,25 @@ def _parse_open(block: Any) -> OpenSpec | None:
     )
 
 
+def _parse_glance(block: Any) -> GlanceSpec | None:
+    """A :class:`GlanceSpec` from a manifest ``glance:`` block, or ``None``.
+
+    Same contract as the other blocks: absent or malformed both mean "no
+    glance", so a bad block costs the app its ``look`` and nothing else.
+    ``holds`` is required (one line, whitespace collapsed); ``path`` defaults
+    to :data:`DEFAULT_GLANCE_PATH` and must be a rooted path.
+    """
+    if not isinstance(block, dict):
+        return None
+    holds = block.get("holds")
+    if not isinstance(holds, str) or not holds.strip():
+        return None
+    path = block.get("path", DEFAULT_GLANCE_PATH)
+    if not isinstance(path, str) or not path.startswith("/"):
+        return None
+    return GlanceSpec(holds=" ".join(holds.split()), path=path)
+
+
 def _load_manifest(path: Path, *, upstream_host: str, self_name: str) -> FleetApp | None:
     """Parse one ``app.yaml`` into a :class:`FleetApp`, or ``None`` to skip it."""
     try:
@@ -276,12 +337,17 @@ def _load_manifest(path: Path, *, upstream_host: str, self_name: str) -> FleetAp
     if raw.get("open") is not None and open_spec is None:
         logger.warning("fleet_open_block_malformed", path=str(path), name=name)
 
+    glance = _parse_glance(raw.get("glance"))
+    if raw.get("glance") is not None and glance is None:
+        logger.warning("fleet_glance_block_malformed", path=str(path), name=name)
+
     return FleetApp(
         name=name,
         title=title,
         upstream=resolved_upstream,
         agent=agent,
         open=open_spec,
+        glance=glance,
     )
 
 
@@ -328,6 +394,7 @@ def discover_fleet(
         apps=len(apps),
         agents=sum(1 for app in apps if app.has_agent),
         openable=sum(1 for app in apps if app.has_open),
+        glances=sum(1 for app in apps if app.has_glance),
     )
     return Fleet(apps=tuple(apps))
 

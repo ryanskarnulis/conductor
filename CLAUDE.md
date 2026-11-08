@@ -36,7 +36,7 @@ backend dev `8301`, vite dev `5174`.
   before pushing. Deploys via `~/deploy/conductor` clean clones; an `app.yaml`
   change regenerates the gateway too.
 - **Eval gate:** any change to the base prompt, vendored personality, the
-  loop, the model, **or any fleet app's `agent:`/`open:` manifest block**
+  loop, the model, **or any fleet app's `agent:`/`open:`/`glance:` manifest block**
   runs the routing evals (`CONDUCTOR_AGENT_EVALS=1 pytest
   tests/test_agent_evals.py -v -s`, llama-swap up) and must not regress
   `docs/agent-evals.md`. The manifest half is the easy one to forget — the PR
@@ -108,7 +108,7 @@ regenerate. Components live in `src/design/` (`cd-` classes in
 - **Compiled plans** (#70, `CONDUCTOR_COMPILER`): the 12B compiles each turn
   to a typed plan under `json_schema` (`app/ai/plan.py`, `compiler.py`), code
   validates it (one repair, else the loop takes the turn), and the
-  interpreter (`app/ai/interpreter.py`) runs `ask`/`open`/`ask_user`/
+  interpreter (`app/ai/interpreter.py`) runs `ask`/`look`/`open`/`ask_user`/
   `confirm` plans across apps, the control steps, and the direct answers
   (`app/ai/speaker.py`).
   Plans have no designed length; 12 steps is a runaway ceiling. Every other
@@ -119,6 +119,24 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   plan. The planner prompt and the ten step kinds stay byte-stable: plan-level
   evals (`tests/test_plan_evals.py`, `CONDUCTOR_PLAN_EVALS=1`) gate any change
   to them, to the compiler, or to a manifest.
+- **`look(app)` reads a glance, never asks an agent** (#73). An app's
+  `glance:` block (`../agent-standard/app-yaml-glance-block.md`) puts its
+  `holds` line in the planner prompt and `look` in the schema for that app
+  only; no block, no look (the validator sends a stray one back for an `ask`).
+  The interpreter makes one plain GET (`app/fleet/glance.py`: declared path,
+  no forwarded headers, 2s/5s timeouts, no redirects, no model, no delegate
+  budget) and files `look_<app>` with a `looked_up` receipt built by code
+  (`app/ai/glance.py`; outside titles cleaned and marked) and no writes. It is
+  not a registry tool, so the loop's schemas don't change. A glance that can't
+  be read asks the same app the person's words, but only for a plain question,
+  a plan whose words are the request, an app with an agent and no ask to it
+  already in the plan; otherwise the step fails and the plan ends. The failed
+  read stays on the ledger and out of the narrator's story. A look gives
+  nothing to `{sN}`. Adjacent looks run in parallel with other reads.
+  Session evals read a world-backed glance (`FakeGlances`/`World.glance`, set in
+  the harness): no eval ever reaches a real app, and a look counts as a read.
+  The speaker's `chat` answer sees the ledger's facts and the about-you check,
+  since the planner files "what did you just do?" there when glance lines shift.
 - **Data flows as quoted data, never as control** (#72, `app/ai/dataflow.py`).
   Code fills `{sN}` from step N's receipt: its main touched title (job refs
   skipped, up to 3 joined), cleaned and quoted. No title, or more than 3,
@@ -144,8 +162,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   `unknown` and unreachable receipts are never tried: they ride the record as
   steps not run, so the narrator says them or code appends them. A receipt is
   undone once (`undone_by_step_id`); "undo that" twice finds the same plan,
-  and an undo's inverse is never offered back. Cancelling or amending a
-  running job falls back to the loop (`job:cancel`) until #76.
+  and an undo's inverse is never offered back. An undo streams like any
+  plan: its notes and asks are the plan's steps on the live channel.
+  Cancelling or amending a running job falls back to the loop
+  (`job:cancel`) until #76.
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
   depth stacks.
 - **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every
@@ -162,8 +182,17 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   one model-free path conductor offers a page.
 - **Note turns** (`POST …/notes`) record what the person did in the UI as the
   person's own turn — never an invented assistant reply.
-- **Single-worker constraint:** the in-memory turn-activity registry and rate
-  limiter pin the deployment to one uvicorn worker until #38 (SSE) ships.
+- **Single-worker by design:** conductor runs SQLite on one uvicorn worker,
+  and the in-memory turn-activity registry (the live channel) and rate limiter
+  rely on it; multi-worker safety is not a goal.
+- **The live channel** (#38, `app/api/turn_activity.py`): `GET …/events` is
+  SSE for the turn in flight: a snapshot on connect (so a reconnect loses
+  nothing), then beats, `plan`, `step_started`, `receipt`, `paused` and
+  `turn_ended`. Step events go through one seam (`app/ai/turn_events.py`);
+  a receipt is the step as the ledger journals it (`ledger.live_step`) and
+  lands only once its record exists, and `turn_ended` goes out after the
+  ledger commit. Queues and turn state are bounded; a lagging follower is
+  resynced from a snapshot. `GET …/activity` stays as the poll fallback.
 - **The delegate contract never assumes a text-only client** — voice
   convergence is a master-plan placeholder.
 - **The panel is the accessible truth; the 3D web is decoration** (#88). The

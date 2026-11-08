@@ -365,6 +365,60 @@ class World:
     def read(self, app: str, what: str) -> None:
         self.reads.append((app, what, self.turn))
 
+    def glance(self, app: str) -> dict[str, Any]:
+        """What the app's glance endpoint would answer from the world as it is
+        now (agent-standard#21), recorded as a read of that app: a look is a
+        read, so a check that wants "the app was read" sees it. Shapes follow
+        the apps' own: PCC's due_today refs, overdue count, focus and next_due;
+        music's jobs and unsorted count; chess's game and last game."""
+        as_of = datetime.now(UTC).isoformat()
+        if app == "tasks":
+            self.read("tasks", "glance")
+            due = self.due_today()
+            upcoming_due = sorted(
+                {t.due for t in self.live_tasks() if not t.done and t.due and t.due > self.today}
+            )
+            pinned = due + self.overdue()
+            focus = pinned[0] if pinned else None
+            return {
+                "as_of": as_of,
+                "due_today": [_ref_json(_task_ref(task)) for task in due[:5]],
+                "overdue": len(self.overdue()),
+                "focus": _ref_json(_task_ref(focus)) if focus else None,
+                "next_due": upcoming_due[0].isoformat() if upcoming_due else None,
+            }
+        if app == "music":
+            self.read("music", "glance")
+            return {
+                "as_of": as_of,
+                "jobs": [
+                    {
+                        **_ref_json(
+                            EntityRef(app="music", kind="download_job", id=str(j.id), title=j.title)
+                        ),
+                        "status": j.state,
+                        "done": j.done,
+                        "total": j.total,
+                        "failed": j.failed,
+                    }
+                    for j in list(self.jobs.values())[-5:]
+                ],
+                "queued": sum(1 for j in self.jobs.values() if j.state == "queued"),
+                "unsorted": len(self.unsorted()),
+            }
+        if app == "chess":
+            self.read("chess", "glance")
+            return {
+                "as_of": as_of,
+                "game": None,
+                "last_game": {"result": self.chess.result, "summary": self.chess.summary},
+            }
+        raise KeyError(f"no glance for {app}")
+
+    def glance_reader(self) -> Callable[[Any], dict[str, Any]]:
+        """This world as a ``GlanceReader`` for the interpreter: no HTTP, ever."""
+        return lambda fleet_app: self.glance(fleet_app.name)
+
     # -- queries the checks use --
 
     def live_tasks(self) -> list[Task]:
@@ -431,6 +485,10 @@ def _task_ref(task: Task) -> EntityRef:
 
 def _song_ref(song: Song) -> EntityRef:
     return EntityRef(app="music", kind="song", id=str(song.id), title=song.title, untrusted=True)
+
+
+def _ref_json(ref: EntityRef) -> dict[str, Any]:
+    return ref.model_dump(exclude_none=True)
 
 
 def _looked_up(tool: str, refs: list[EntityRef]) -> RecordEntry:
@@ -1000,6 +1058,40 @@ def titles(receipts: Iterable[Receipt]) -> list[str]:
     return [receipt.title for receipt in receipts]
 
 
+# --- glances -----------------------------------------------------------------------
+
+
+class FakeGlances:
+    """A ``GlanceReader`` (``app.fleet.glance``) over canned glances: what each
+    app's endpoint would answer, or the failure it would give. Records every
+    app it was asked for, so a test can see a look read and an ask not made."""
+
+    def __init__(self) -> None:
+        self.payloads: dict[str, dict[str, Any]] = {
+            "tasks": {
+                "as_of": "2026-11-07T09:00:00Z",
+                "due_today": [
+                    {"app": "tasks", "kind": "task", "id": "41", "title": "Pay rent"},
+                    {"app": "tasks", "kind": "task", "id": "42", "title": "Water the plants"},
+                ],
+                "overdue": 2,
+                "focus": {"app": "tasks", "kind": "task", "id": "44", "title": "Call Sam"},
+                "next_due": "2026-11-08",
+            },
+            "chess": {"as_of": "2026-11-07T09:00:00Z", "last_game": {"result": "you won"}},
+        }
+        self.failures: dict[str, Exception] = {}
+        self.asked: list[str] = []
+        self._lock = threading.Lock()
+
+    def __call__(self, fleet_app: Any) -> dict[str, Any]:
+        with self._lock:
+            self.asked.append(fleet_app.name)
+        if fleet_app.name in self.failures:
+            raise self.failures[fleet_app.name]
+        return self.payloads[fleet_app.name]
+
+
 # --- a fleet to discover ---------------------------------------------------------
 
 # The fleet the scripted run discovers: the three apps the scenarios use, in
@@ -1014,6 +1106,8 @@ FIXTURE_MANIFESTS = {
           api: /api/agent
           confirms: true
           examples: ["what's due today"]
+        glance:
+          holds: "Today's and overdue tasks, the Focus plan, and the next due date."
         """,
     "music": """\
         name: music
@@ -1023,6 +1117,8 @@ FIXTURE_MANIFESTS = {
           description: "Downloads songs and sorts the library."
           api: /api/agent
           examples: ["download this song"]
+        glance:
+          holds: "Running and recent download jobs with progress, and how many songs wait to be sorted."
         """,
     "chess": """\
         name: chess
@@ -1033,6 +1129,8 @@ FIXTURE_MANIFESTS = {
           path: /
           intent_param: intent
           examples: ["let's play chess"]
+        glance:
+          holds: "Where the current game stands (whose move, move count) and the last finished game's result; it doesn't analyze positions."
         """,
 }
 

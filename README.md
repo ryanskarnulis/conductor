@@ -14,11 +14,12 @@ personality) and fleet delegation (`ask_<app>` tools discovered from `app.yaml`
 conductor persists master conversations in SQLite (SQLAlchemy + Alembic) and
 fronts its loop with a REST chat API — conversation CRUD,
 `POST /api/agent/conversations/{id}/messages` for the synchronous
-message → loop round trip, and `GET …/activity`, the poll target for live
-progress (no SSE in v1). The web UI is a PCC-style chat panel: conversation
+message → loop round trip, `GET …/events`, a Server-Sent Events stream of
+the turn's beats, plan steps and receipts as they land, and `GET …/activity`,
+the poll fallback. The web UI is a PCC-style chat panel: conversation
 sidebar, markdown replies with the delegate-call trajectory above each one,
-and a live "Asking chess… · 12s" progress line polled from the activity
-endpoint while a turn runs. The subagent-thread map is DB-backed, so
+and a live "Asking chess… · 12s" progress line fed by the stream (or the
+poll) while a turn runs. The subagent-thread map is DB-backed, so
 follow-ups keep their app-side context across restarts. The routing eval
 harness (`docs/agent-evals.md`) closed Phase 3's go/no-go gate: gemma-4-12b
 routes all goldens, refuses out-of-fleet asks, and holds destructive-op

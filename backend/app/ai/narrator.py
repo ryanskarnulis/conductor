@@ -19,6 +19,11 @@ placeholder-looking ones ~40% of the time. Descriptive rules don't bind the
   (never for a call that was itself an undo, #74);
 - untrusted titles (outside text: web titles, file tags) are quoted, sanitised
   and marked as names in the receipt, never instructions;
+- a ``look`` (#73) is an app's glance read by code: its receipt is
+  ``looked_up`` with the summary under ``app_note`` and the refs it names as
+  items, outside titles marked and quoted like any other. A glance that
+  couldn't be read and was replaced by an ask is left out: the ask is the
+  story;
 - a compiled plan's steps that never ran (an earlier step failed, or the data
   flow refused one, #72) are in the receipt with why, in plain words, and the
   reply says something was left undone; if not, code appends it (#113). Calls
@@ -298,6 +303,8 @@ def receipt_steps(records: Sequence[ToolCallRecord]) -> list[dict[str, Any]]:
     other calls that never left conductor are left out."""
     steps: list[dict[str, Any]] = []
     for record in records:
+        if _superseded(record):
+            continue
         outcome = run_record.classify(record)
         if outcome == "not_run":
             reason = _unrun_reason(record)
@@ -317,6 +324,9 @@ def receipt_steps(records: Sequence[ToolCallRecord]) -> list[dict[str, Any]]:
             step |= {"result": "looked_up", "did": "listed the fleet's apps"}
             step["app_note"] = _note(record.result)
             steps.append(step)
+            continue
+        if run_record.is_look(record.tool):
+            steps.append(_look_step(step, record))
             continue
         app = confirmation.record_app(record.tool, record.arguments)
         if app:
@@ -342,6 +352,30 @@ def receipt_steps(records: Sequence[ToolCallRecord]) -> list[dict[str, Any]]:
     return steps
 
 
+def _superseded(record: ToolCallRecord) -> bool:
+    """A look whose glance couldn't be read and whose app was asked instead."""
+    return run_record.is_look(record.tool) and (record.error or "").startswith(
+        run_record.LOOK_FELL_BACK
+    )
+
+
+def _look_step(step: dict[str, Any], record: ToolCallRecord) -> dict[str, Any]:
+    """A glance as the narrator reads it: what was found, from the app's summary
+    (already cleaned by code, outside text marked), never a write."""
+    step["app"] = record.tool.removeprefix(run_record.LOOK_PREFIX).replace("_", " ")
+    if record.error is not None:
+        step["result"] = "failed"
+        step["reason"] = _first_sentence(record.error)
+        return step
+    step["result"] = "looked_up"
+    step["did"] = [_entry(entry) for entry in record.app_record or []]
+    try:
+        step["app_note"] = json.loads(record.result or "null")
+    except ValueError:
+        step["app_note"] = _note(record.result)
+    return step
+
+
 def _unrun_step(number: int, record: ToolCallRecord, reason: str) -> dict[str, Any]:
     step: dict[str, Any] = {"step": number, "result": "not_run"}
     app = _unrun_app(record)
@@ -350,6 +384,8 @@ def _unrun_step(number: int, record: ToolCallRecord, reason: str) -> dict[str, A
     asked = _unrun_ask(record)
     if record.tool.startswith("open_"):
         step["would_have"] = "opened the app for the person"
+    elif run_record.is_look(record.tool):
+        step["would_have"] = "read the app's summary"
     elif asked:
         step["would_have_asked"] = asked
     step["reason"] = reason
@@ -374,6 +410,8 @@ def _unrun_reason(record: ToolCallRecord) -> str | None:
 def _unrun_app(record: ToolCallRecord) -> str | None:
     if record.tool.startswith("open_"):
         return record.tool.removeprefix("open_")
+    if run_record.is_look(record.tool):
+        return record.tool.removeprefix(run_record.LOOK_PREFIX).replace("_", " ")
     return confirmation.record_app(record.tool, record.arguments)
 
 
@@ -494,6 +532,8 @@ def _unrun_fact(record: ToolCallRecord, reason: str) -> _Fact:
     asked = _unrun_ask(record)
     if record.tool.startswith("open_"):
         say = f"didn't open {app}, since {reason}"
+    elif run_record.is_look(record.tool):
+        say = f"didn't look at {app}, since {reason}"
     elif asked:
         say = f"didn't ask {app} to {asked[0].lower()}{asked[1:]}, since {reason}"
     else:
@@ -558,8 +598,14 @@ def fallback_reply(records: Sequence[ToolCallRecord], surface: str | None) -> st
     if line:
         parts.append(line)
     for record in records:
+        if _superseded(record):
+            continue
         outcome = run_record.classify(record)
-        app = confirmation.record_app(record.tool, record.arguments) or record.tool
+        app = (
+            confirmation.record_app(record.tool, record.arguments)
+            or (_unrun_app(record) if run_record.is_look(record.tool) else None)
+            or record.tool
+        )
         if outcome == "failed":
             parts.append(f"{app} didn't do it: {_first_sentence(record.error or '')}")
         elif outcome == "done" and record.app_record is None and record.result:

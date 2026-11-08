@@ -65,7 +65,7 @@ from typing import Any, Literal
 import structlog
 from pydantic import BaseModel, ValidationError
 
-from app.ai import confirmation, narrator, run_record
+from app.ai import confirmation, narrator, run_record, turn_events
 from app.ai.plan import Ledgered, PausedPlan, TurnPlan
 from app.ai.stop import STOPPED_ERROR, Stop, use_stop
 from app.ai import trace as run_trace
@@ -80,6 +80,7 @@ from app.ai.provider import (
 )
 from app.config import get_settings
 from app.fleet.context import NoDelegationContextError, current_delegation_context
+from app.fleet.glance import GlanceReader
 from app.fleet.manifests import Fleet
 from app.tools import registry, runtime
 from app.tools.registry import ToolError, UnknownToolError
@@ -325,6 +326,7 @@ class AgentLoop:
         tracer: run_trace.Tracer | None = None,
         narrate: bool = False,
         fleet: Fleet | None = None,
+        glance: GlanceReader | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be >= 1")
@@ -348,7 +350,7 @@ class AgentLoop:
         # the interpreter runs what it can; the rest falls back to the loop.
         from app.ai.interpreter import Interpreter  # noqa: PLC0415
 
-        self._interpreter = Interpreter(self, fleet) if fleet is not None else None
+        self._interpreter = Interpreter(self, fleet, glance) if fleet is not None else None
 
     def run(
         self,
@@ -625,6 +627,7 @@ class AgentLoop:
                 self._emit(
                     on_activity, LoopActivity(kind="tool", iteration=iteration, tool=call.name)
                 )
+                turn_events.step_started(len(records) + 1, call.name, call.arguments)
                 try:
                     record, feedback, schema_error = self._dispatch(call, actor)
                 except Exception as exc:
@@ -649,6 +652,7 @@ class AgentLoop:
                         messages,
                     ) from exc
                 records.append(record)
+                turn_events.receipt(len(records), record)
                 messages.append(tool_result_message(call.id, feedback))
                 schema_error_this_turn = schema_error_this_turn or schema_error
                 # Judged on what came back, not the call alone: a repeat that
@@ -784,6 +788,7 @@ class AgentLoop:
         in the transcript has exactly one answer."""
         for call in calls:
             records.append(ToolCallRecord(tool=call.name, arguments=call.arguments, error=error))
+            turn_events.receipt(len(records), records[-1])
             messages.append(tool_result_message(call.id, f"Error: {error}"))
         if calls:
             logger.warning("agent_tool_calls_skipped", count=len(calls), error=error)
