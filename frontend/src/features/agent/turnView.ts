@@ -195,7 +195,7 @@ function refValues(stream: TurnStream): Record<string, RefValue> {
       if (value) values[id] = value
     }
   }
-  if (stream.resumed?.reason === 'ask_user' && stream.resumed.answer !== null) values[stream.resumed.step ?? 's1'] = answerValue(stream.resumed.answer)
+  if (stream.resumed?.reason === 'ask_user' && stream.resumed.answer !== null) values[stream.resumed.step ?? 's1'] = answerValue(stream.resumed.answer, stream.resumed.untrusted ?? false)
   return values
 }
 

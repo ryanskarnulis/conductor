@@ -113,12 +113,25 @@ def resumed(
     *,
     step: str | None = None,
     answer: str | None = None,
+    untrusted: bool = False,
+    entity: dict[str, Any] | None = None,
 ) -> None:
     """This turn picks up a plan that was waiting on the person (#89): why it
     waited, the id of the step it waited on (``None`` when an app's own
-    question is answered), and, for an ``ask_user``, their answer, as they said
-    it: what ``{s1}`` becomes in the steps that follow."""
-    _emit("resumed", {"reason": reason, "step": step, "answer": answer})
+    question is answered), and, for an ``ask_user``, their answer as ``{s1}``
+    reads it in the steps that follow: the picked option's entity title
+    (``entity``: its app, kind, ref and trust, #120), or their words when it
+    picked no entity. ``untrusted`` marks an outside title."""
+    _emit(
+        "resumed",
+        {
+            "reason": reason,
+            "step": step,
+            "answer": answer,
+            "untrusted": untrusted,
+            "entity": entity,
+        },
+    )
 
 
 def _emit(kind: EventKind, payload: dict[str, Any]) -> None:

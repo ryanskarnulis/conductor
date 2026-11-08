@@ -22,7 +22,9 @@ same as the loop's. What it runs, across apps (#72):
   cited by day and conversation. No app, no model. ``{sN}`` on it is the one
   entity it resolved, if one clearly answers.
 - ``ask_user``: the plan pauses on the question; the person's answer resumes
-  the same plan, ``{s1}`` replaced by their words.
+  the same plan. Each option is resolved in code to the entity State named
+  for it (#120, :mod:`app.ai.options`), so ``{s1}`` is the picked entity's
+  title with its trust; an answer that picks no option goes in as they said it.
 - ``{sN}`` in a step's text: the main title step N's receipt touched, quoted,
   filled in by code when the step runs (:mod:`app.ai.dataflow`, which holds
   the rules for no title, several titles and outside text).
@@ -76,6 +78,7 @@ from app.ai import (
     dataflow,
     memory,
     narrator,
+    options,
     run_record,
     speaker,
     think,
@@ -128,6 +131,9 @@ class _Run:
     found: dict[str, ToolCallRecord] = field(default_factory=dict)
     # Memory over the ledger (#80): a recall step's query in, what it found out.
     memory: MemoryReader | None = None
+    # What the planner was shown (State and recall): an ask_user's options
+    # resolve against it (#120).
+    context: str = ""
 
 
 class Interpreter:
@@ -170,7 +176,14 @@ class Interpreter:
         """The turn's result, or ``None`` when the loop should take it; and the plan."""
         loop = self._loop
         state = _Run(
-            words, actor, trace, on_activity, stop, view=control.View(control_view), memory=recall
+            words,
+            actor,
+            trace,
+            on_activity,
+            stop,
+            view=control.View(control_view),
+            memory=recall,
+            context=context or "",
         )
         if _stopped(stop):
             return loop._stop("cancelled", [], 0, []), TurnPlan(status="ran", note="stopped")
@@ -251,10 +264,17 @@ class Interpreter:
             assert isinstance(resumed, plans.StepPlan)
             turn.body = paused.body
             steps = resumed.steps[paused.resume_at :]
-            values = {"s1": dataflow.answer(plan.resume)}
             asked = resumed.steps[paused.resume_at - 1 : paused.resume_at]
+            offered = asked[0].options if asked and isinstance(asked[0], plans.AskUser) else []
+            # The person's pick, as the entity State named for it (#120).
+            value, picked = options.chosen(plan.resume, options.stored(paused.body, offered))
+            values = {"s1": value}
             turn_events.resumed(
-                "ask_user", step=asked[0].id if asked else None, answer=values["s1"].text
+                "ask_user",
+                step=asked[0].id if asked else None,
+                answer=value.text,
+                untrusted=value.untrusted,
+                entity=picked.entity if picked is not None else None,
             )
             return self._execute(state, turn, steps, paused.resume_at, values), turn
         assert isinstance(plan, plans.StepPlan)
@@ -411,6 +431,8 @@ class Interpreter:
                 return loop._stop("cancelled", state.records, 1, state.messages)
             if isinstance(step, plans.AskUser):
                 turn.status, turn.pause, turn.resume_at = "paused", "ask_user", position + 1
+                if turn.body is not None:
+                    turn.body = options.annotate(turn.body, step.options, state.context)
                 return self._ask_user(state, step)
             group = _read_group(steps, index)
             if len(group) > 1:

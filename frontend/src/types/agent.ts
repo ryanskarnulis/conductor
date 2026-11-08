@@ -176,7 +176,12 @@ export interface TurnPause {
 export interface TurnResumed {
   reason: 'ask_user' | 'gate' | 'app_confirm' | 'proposal'
   step: string | null
+  /** An `ask_user` answer as `{s1}` reads it: the picked option's title, or their words. */
   answer: string | null
+  /** The answer is an outside title (#120): shown only once the step runs. */
+  untrusted?: boolean
+  /** The entity State named for the picked option (#120), when one did. */
+  entity?: { app: string; kind: string; ref: string; title: string | null; untrusted: boolean } | null
 }
 
 export interface TurnSnapshot {
