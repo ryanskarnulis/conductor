@@ -44,6 +44,10 @@ class PendingConfirm:
     token: str
     tool: str
     question: str
+    # What conductor asked the app, word for word (an ``amend`` resends it
+    # changed, #74), and the ledger receipts the asked-for call undoes.
+    request: str | None = None
+    undoes: tuple[int, ...] = ()
 
 
 def record_app(tool: str, arguments: dict[str, Any]) -> str | None:
@@ -78,5 +82,11 @@ def pending(history: Sequence[dict[str, Any]]) -> PendingConfirm | None:
             token=kept.token,
             tool=kept.tool,
             question=kept.question,
+            request=_text((stored.get("arguments") or {}).get("message")),
+            undoes=tuple(i for i in stored.get("undoes") or [] if isinstance(i, int)),
         )
     return live
+
+
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None

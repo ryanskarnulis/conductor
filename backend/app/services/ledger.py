@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.ai import confirmation, run_record
 from app.ai.loop import AgentRunResult, ToolCallRecord
-from app.ai.plan import PausedPlan, TurnPlan
+from app.ai.plan import Ledgered, PausedPlan, Touched, TurnPlan, UndoReceipt
 from app.ai.state_block import Entity
 from app.db.models import (
     Conversation,
@@ -124,6 +124,7 @@ def close_turn(
         compiled = None if run.plan is None else _compiled_plan(turn, run.plan)
         if compiled is not None:
             db.add(compiled)
+            _end_waiting_plan(db, turn, run.plan)
         if compiled is not None and compiled.acted:
             plan = compiled  # the compiled plan acted: its steps are the turn's calls
         else:
@@ -172,6 +173,7 @@ def paused_plan(db: Session, conversation_id: int) -> PausedPlan | None:
                 reason=plan.pause,  # type: ignore[arg-type]
                 resume_at=plan.resume_at,
                 app=plan.pause_app,
+                plan_id=plan.id,
             )
     return None
 
@@ -236,7 +238,8 @@ def self_report(db: Session, conversation_id: int) -> str:
                 what = f" {', '.join(titles)}" if titles else ""
                 action = (receipt.tool or "something").replace("_", " ")
                 did = _RECEIPT_WORDS.get(receipt.outcome, receipt.outcome)
-                lines.append(f"  - {did}: {action}{what}")
+                since = " (since undone)" if receipt.undone_by_step_id is not None else ""
+                lines.append(f"  - {did}: {action}{what}{since}")
         if turn.stop_reason and turn.stop_reason != "completed":
             lines.append(f"- the turn ended {turn.stop_reason}")
     jobs = (
@@ -255,6 +258,110 @@ def self_report(db: Session, conversation_id: int) -> str:
     if not lines:
         return "Nothing on record yet in this conversation."
     return "\n".join(lines)
+
+
+# How far back an undo looks (#74): the last plan, plus a few before it for a
+# target that names something older. Bounded, like every turn's context.
+CONTROL_TURNS = 20
+CONTROL_PLANS = 5
+_CONTROL_STEPS = frozenset({"cancel", "amend", "undo"})
+_WRITE_OUTCOMES = ("done", "unknown")
+
+
+def control_view(db: Session, conversation_id: int) -> Ledgered:
+    """What a control step acts on (#74): the last plan that ran steps, the
+    write receipts of the last few, and the jobs still running.
+
+    A control plan (a compiled ``cancel``/``amend``/``undo``) and a plan with
+    a step that undid something are passed over, so "undo that" twice finds
+    the same plan, already undone, never the undo itself.
+    """
+    turns = (
+        db.execute(
+            select(LedgerTurn)
+            .where(
+                LedgerTurn.conversation_id == conversation_id,
+                LedgerTurn.status == "ended",
+                LedgerTurn.kind == "message",
+            )
+            .order_by(LedgerTurn.id.desc())
+            .limit(CONTROL_TURNS)
+        )
+        .scalars()
+        .all()
+    )
+    plans: list[LedgerPlan] = []
+    for turn in turns:
+        for plan in reversed(turn.plans):
+            if plan.acted and plan.steps and not _is_control(db, plan):
+                plans.append(plan)
+                break
+        if len(plans) == CONTROL_PLANS:
+            break
+    receipts = [
+        _undo_receipt(plan, receipt)
+        for plan in plans
+        for step in plan.steps
+        for receipt in step.receipts
+        if receipt.outcome in _WRITE_OUTCOMES
+    ]
+    return Ledgered(
+        last_plan=plans[0].id if plans else None,
+        receipts=tuple(receipts),
+        jobs=tuple(_running_jobs(db, conversation_id)),
+    )
+
+
+def _is_control(db: Session, plan: LedgerPlan) -> bool:
+    body_steps = (plan.body or {}).get("steps") or []
+    if any(isinstance(s, dict) and s.get("do") in _CONTROL_STEPS for s in body_steps):
+        return True
+    step_ids = [step.id for step in plan.steps]
+    undid = db.execute(
+        select(LedgerReceipt.id).where(LedgerReceipt.undone_by_step_id.in_(step_ids)).limit(1)
+    ).first()
+    return undid is not None
+
+
+def _undo_receipt(plan: LedgerPlan, receipt: LedgerReceipt) -> UndoReceipt:
+    return UndoReceipt(
+        id=receipt.id,
+        plan_id=plan.id,
+        app=receipt.app,
+        tool=receipt.tool,
+        outcome=receipt.outcome,
+        touched=tuple(
+            Touched(
+                kind=touch.entity.kind,
+                ref=touch.entity.ref,
+                title=touch.title,
+                untrusted=touch.untrusted or receipt.untrusted,
+            )
+            for touch in receipt.touched
+        ),
+        count=receipt.count,
+        handle=receipt.undo_handle,
+        how=receipt.undo_how,
+        none=receipt.undo_none,
+        undone=receipt.undone_by_step_id is not None,
+    )
+
+
+def _running_jobs(db: Session, conversation_id: int) -> list[str]:
+    """This conversation's jobs that haven't finished, as ``app:ref``."""
+    rows = db.execute(
+        select(LedgerJob.app, LedgerJob.ref)
+        .join(LedgerStep, LedgerStep.id == LedgerJob.started_by_step_id)
+        .join(LedgerPlan, LedgerPlan.id == LedgerStep.plan_id)
+        .join(LedgerTurn, LedgerTurn.id == LedgerPlan.turn_id)
+        .where(
+            LedgerTurn.conversation_id == conversation_id,
+            LedgerJob.status.not_in(("completed", "failed", "canceled")),
+        )
+        .order_by(LedgerJob.updated_at.desc())
+        .limit(10)
+    ).all()
+    return [f"{app}:{ref}" for app, ref in rows]
 
 
 def _clip(text: str, limit: int = 80) -> str:
@@ -414,6 +521,7 @@ def _journal_step(db: Session, plan: LedgerPlan, seq: int, record: ToolCallRecor
     )
     db.add(step)
     db.flush()
+    _mark_undone(db, step, record, outcome)
     if app is None or kind not in ("ask", "confirm", "look"):
         return
     if record.app_record is not None:
@@ -430,6 +538,38 @@ def _journal_step(db: Session, plan: LedgerPlan, seq: int, record: ToolCallRecor
                 reason=UNKNOWN_REASON,
             )
         )
+
+
+def _end_waiting_plan(db: Session, turn: LedgerTurn, compiled: TurnPlan | None) -> None:
+    """A control step ended the plan that was waiting (#74): say so on its row."""
+    if compiled is None or compiled.ends is None or compiled.ends_as is None:
+        return
+    waiting = db.get(LedgerPlan, compiled.ends)
+    if waiting is None or waiting.status != "paused":
+        return
+    waiting.status = compiled.ends_as
+    waiting.note = f"{compiled.ends_as} by the next turn ({turn.id})"
+
+
+def _mark_undone(db: Session, step: LedgerStep, record: ToolCallRecord, outcome: str) -> None:
+    """The receipts an undo call redeemed (#74), once the app says it did it
+    (or may have: an unknown is never redeemed again). A question back, a
+    refusal or a call that never ran leaves them undoable."""
+    if not record.undoes or record.app_confirm:
+        return
+    if record.app_record is not None:
+        landed = any(entry.get("outcome") == "done" for entry in record.app_record)
+    else:
+        landed = _may_have_written(record, outcome)
+    if not landed:
+        return
+    receipts = db.execute(
+        select(LedgerReceipt).where(
+            LedgerReceipt.id.in_(record.undoes), LedgerReceipt.undone_by_step_id.is_(None)
+        )
+    ).scalars()
+    for receipt in receipts:
+        receipt.undone_by_step_id = step.id
 
 
 def _may_have_written(record: ToolCallRecord, outcome: str) -> bool:

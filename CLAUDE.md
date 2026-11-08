@@ -109,7 +109,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   to a typed plan under `json_schema` (`app/ai/plan.py`, `compiler.py`), code
   validates it (one repair, else the loop takes the turn), and the
   interpreter (`app/ai/interpreter.py`) runs `ask`/`look`/`open`/`ask_user`/
-  `confirm` plans across apps and the direct answers (`app/ai/speaker.py`).
+  `confirm` plans across apps, the control steps, and the direct answers
+  (`app/ai/speaker.py`).
   Plans have no designed length; 12 steps is a runaway ceiling. Every other
   kind falls back to the loop until its issue lands; the fallen-back plan
   stays on the ledger. A destructive
@@ -150,6 +151,21 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   different apps (`plan.reads_only`) run at once in threads with the turn's
   context. Everything else runs in order, one call in flight. The budget and
   thread store are locked, and Stop cancels every call in flight.
+- **Control steps act over the ledger** (#74, `app/ai/control.py`), each as
+  a plan of its own. `cancel` ends the waiting plan (its row says
+  `cancelled`), lets an app's token lapse unsent, and says what won't
+  happen. `amend` puts the change after the waiting step's words and resumes
+  the same plan; a gate asks again, and an app asks its own question again.
+  `undo` takes the last plan's write receipts, or older ones only when the
+  target names them, and asks each owning app to redeem its handles through
+  the usual confirmation (the app's, else code's gate). `undo_none`,
+  `unknown` and unreachable receipts are never tried: they ride the record as
+  steps not run, so the narrator says them or code appends them. A receipt is
+  undone once (`undone_by_step_id`); "undo that" twice finds the same plan,
+  and an undo's inverse is never offered back. An undo streams like any
+  plan: its notes and asks are the plan's steps on the live channel.
+  Cancelling or amending a running job falls back to the loop
+  (`job:cancel`) until #76.
 - **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
   depth stacks.
 - **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every

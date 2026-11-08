@@ -426,8 +426,9 @@ def _s11(session: Session) -> None:
     assert all(job.state != "cancelled" for job in session.world.jobs.values())
     reply = _lower(session.last.reply)
     assert re.search(
-        r"(download|album|honey)[^.]*(can't|cannot|can not|stays|already|isn't|"
-        r"won't|no way|not able)|(can't|cannot|can not|no way|not able)[^.]*"
+        r"(download|album|honey)[^.]*(can't|cannot|can not|could not|couldn't|stays|already|"
+        r"isn't|won't|no way|not able)|(can't|cannot|can not|could not|couldn't|no way|"
+        r"not able)[^.]*"
         r"(download|album|honey)",
         reply,
     ), "didn't say the download can't be undone"

@@ -514,3 +514,61 @@ def test_the_events_route_speaks_server_sent_events(client: TestClient) -> None:
     ids = [int(block["id"]) for block in parsed]
     assert ids == sorted(ids)
     assert turn_activity.subscribers(conversation) == 0
+
+
+# --- control steps (#74) --------------------------------------------------------------------
+
+
+def test_an_undo_streams_its_steps_and_receipts_and_waits_on_the_apps_question(
+    turn: Any,
+) -> None:
+    s3 = _plan_turn(
+        _ask("music", "download the new Caribou album"),
+        _ask("tasks", "add a task to sort {s1} this weekend"),
+    )
+    turn(ScriptedProvider([s3, text_turn("Queued “Honey”.")]), "download and add a task")
+    _, events = turn(ScriptedProvider([_plan_turn({"do": "undo", "target": "last"})]), "undo")
+    kinds = [event.kind for event in events if event.kind != "activity"]
+    assert kinds == [
+        "snapshot",
+        "turn_started",
+        "plan",
+        "receipt",  # the download can't be undone: a step that won't run
+        "step_started",
+        "receipt",
+        "paused",
+        "turn_ended",
+    ]
+    plan = next(event.data for event in events if event.kind == "plan")
+    assert [(step["app"], step["destructive"]) for step in plan["steps"]] == [
+        ("music", False),
+        ("tasks", True),
+    ]
+    note, asked = [event.data for event in events if event.kind == "receipt"]
+    assert (note["seq"], note["app"], note["outcome"]) == (1, "music", "not_run")
+    assert (asked["seq"], asked["app"], asked["outcome"]) == (2, "tasks", "done")
+    assert asked["confirm"]["question"].startswith("Trash ")
+    paused = next(event.data for event in events if event.kind == "paused")
+    assert (paused["reason"], paused["app"]) == ("app_confirm", "tasks")
+
+    yes = ScriptedProvider([_plan_turn({"do": "confirm", "answer": "yes"}), text_turn("Done.")])
+    _, events = turn(yes, "yes")
+    landed = [event.data for event in events if event.kind == "receipt"]
+    assert [(r["tool"], r["outcome"]) for r in landed] == [
+        ("confirm", "done"),
+        ("ask_music", "not_run"),
+    ]
+    assert "undone_by_step_id" not in json.dumps(landed)  # ledger internals stay home
+    assert events[-1].kind == "turn_ended"
+
+
+def test_a_cancelled_pause_ends_the_turn_with_nothing_left_waiting(turn: Any) -> None:
+    gated = _plan_turn(_ask("music", "delete the album download", destructive=True))
+    turn(ScriptedProvider([gated]), "delete the album download")
+    reply, events = turn(
+        ScriptedProvider([_plan_turn({"do": "cancel", "target": "pending"})]), "cancel"
+    )
+    kinds = [event.kind for event in events if event.kind != "activity"]
+    assert kinds == ["snapshot", "turn_started", "turn_ended"]
+    assert events[-1].data == {"stop_reason": "completed", "message_id": reply["id"]}
+    assert reply["content"].startswith("Okay, cancelled: I won't ask music")

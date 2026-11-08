@@ -154,7 +154,12 @@ def context() -> Generator[DelegationContext, None, None]:
 
 def _pending(token: str = "tok-1") -> confirmation.PendingConfirm:
     return confirmation.PendingConfirm(
-        app="tasks", thread_id=7, token=token, tool="trash_project", question=QUESTION
+        app="tasks",
+        thread_id=7,
+        token=token,
+        tool="trash_project",
+        question=QUESTION,
+        request="wipe the kitchen project",
     )
 
 

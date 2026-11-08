@@ -62,7 +62,7 @@ from tests.fake_world import World, write_fixture_fleet
 from tests.receipt_claims import Tally
 from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
 from tests.session_harness import LoopDriver, Sample, Scenario, WorldHolder, run_sample, sample_line
-from tests.session_scenarios import S2, S3, S9, S12, S16, SCENARIOS
+from tests.session_scenarios import S2, S3, S9, S10, S11, S12, S16, SCENARIOS
 
 _LIVE = os.environ.get("CONDUCTOR_AGENT_EVALS") == "1"
 _FRONTIER = os.environ.get("CONDUCTOR_FRONTIER_EVALS") == "1"
@@ -127,13 +127,24 @@ def _started(
 
 
 class _ScriptedRun:
-    """A started app whose loop plays a fresh script per sample."""
+    """A started app whose loop plays a fresh script per sample. ``compiled``
+    runs the compiler and interpreter (#70) with the narrator, as live does."""
 
-    def __init__(self, client: TestClient, holder: WorldHolder, db_session: DbSession) -> None:
+    def __init__(
+        self,
+        client: TestClient,
+        holder: WorldHolder,
+        db_session: DbSession,
+        *,
+        compiled: bool = False,
+    ) -> None:
         self.client = client
         self.provider = ScriptedProvider([])
         app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-            self.provider, fleet_section=getattr(app.state, "fleet_section", None)
+            self.provider,
+            fleet_section=getattr(app.state, "fleet_section", None),
+            fleet=getattr(app.state, "fleet", None) if compiled else None,
+            narrate=compiled,
         )
         self.driver = LoopDriver(
             client,
@@ -162,6 +173,65 @@ def scripted(
     fleet_dir = write_fixture_fleet(tmp_path / "fleet")
     for client, holder in _started(fleet_dir, db_session, session_factory, monkeypatch):
         yield _ScriptedRun(client, holder, db_session)
+
+
+@pytest.fixture
+def compiled(
+    tmp_path: Path,
+    db_session: DbSession,
+    session_factory: sessionmaker[DbSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[_ScriptedRun, None, None]:
+    fleet_dir = write_fixture_fleet(tmp_path / "fleet")
+    for client, holder in _started(fleet_dir, db_session, session_factory, monkeypatch):
+        yield _ScriptedRun(client, holder, db_session, compiled=True)
+
+
+def _plan(*steps: dict[str, Any]) -> Any:
+    body = {"steps": [{"id": f"s{n}", **step} for n, step in enumerate(steps, start=1)]}
+    return text_turn(json.dumps(body))
+
+
+def _ask_step(app_name: str, request: str) -> dict[str, Any]:
+    return {"do": "ask", "app": app_name, "request": request, "destructive": False}
+
+
+_S3_PLAN = _plan(
+    _ask_step("music", "download the new Caribou album"),
+    _ask_step("tasks", "add a task to sort {s1} this weekend"),
+)
+
+# The compiled runtime's golden model side (#74): plans, then the narrator.
+# S10's Stop lands mid-delegate, so nothing is narrated. S11's undo turn is
+# tasks' own question, passed through; the yes turn is narrated.
+COMPILED_SCRIPTS: dict[str, Callable[[World], list[Any]]] = {
+    S10.id: lambda w: [_plan(_ask_step("music", "sort my whole library"))],
+    S11.id: lambda w: [
+        _S3_PLAN,
+        text_turn("Queued “Honey” by Caribou and added “sort Honey” for the weekend."),
+        _plan({"do": "undo", "target": "last"}),
+        _plan({"do": "confirm", "answer": "yes"}),
+        text_turn("Trashed “sort Honey”. The Honey download can't be undone, though."),
+    ],
+}
+
+
+@pytest.mark.parametrize("scenario", [S10, S11], ids=lambda s: s.id)
+def test_compiled_golden_script_passes(scenario: Scenario, compiled: _ScriptedRun) -> None:
+    sample = compiled.run(scenario, COMPILED_SCRIPTS[scenario.id](World()))
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    assert compiled.provider._turns == [], "the golden script wasn't fully consumed"
+
+
+def test_compiled_s11_says_what_cant_be_undone_when_the_narrator_doesnt(
+    compiled: _ScriptedRun,
+) -> None:
+    # Spike C1b: the narrator never offered what it couldn't undo. Code appends it.
+    script = COMPILED_SCRIPTS[S11.id](World())
+    script[-1] = text_turn("Trashed “sort Honey”.")
+    sample = compiled.run(S11, script)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    assert "can't be undone" in (sample.session.last.reply or "")
 
 
 def _supported_today(scenario: Scenario) -> bool:

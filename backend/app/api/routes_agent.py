@@ -361,6 +361,7 @@ def post_message(
                     stop=stop,
                     paused=_paused_plan(db, conversation.id),
                     self_facts=lambda: ledger.self_report(db, conversation.id),
+                    control_view=lambda: ledger.control_view(db, conversation.id),
                 )
         except AgentRunFailed as exc:
             logger.error(
