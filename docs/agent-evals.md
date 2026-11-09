@@ -701,3 +701,50 @@ Then `ref` and `memory` at n=20, against main's n=20 (#122's investigation):
   differences are sampling. `memory-caribou`'s misses are `look:music`
   (7/20), and `ref-ambiguous` asks tasks instead of asking the person
   (15/20). Both are planner-side follow-ups.
+
+### The loop retired (#75, 2026-11-08)
+
+Every turn is a plan now: no loop fallback. What used to fall back gets one
+more repair round, then code's question or "I couldn't put that together";
+a control step in a longer plan is split off and runs first; a think ends
+the plan. The planner prompt, schema and validator are unchanged. Plan-level
+evals now compile as the interpreter does (the extra round included) and
+print `third-call` and `right-within-two` beside the old columns.
+gemma-4-12b, shared GPU, n=5.
+
+| group | floor | #80 | this change |
+|---|---|---|---|
+| golden | 0.8 | 94/105 | 90/105 |
+| cross | 0.8 | 35/35 | 35/35 |
+| ref | 0.85 | 15/20 | 17/20 |
+| control | 0.8 | 22/25 | 20/25 |
+| memory | 0.8 | 7/10 | 8/10 |
+| knowledge | 0.65 | 15/15 | 14/15 |
+| hard | 0.5 | 5/5 | 4/5 |
+| self | 0.55 | 10/15 | 8/15 |
+| holdout | 0.85 | 47/50 | 49/50 |
+| long | 0.7 | 38/40 | 38/40 |
+
+- Every group passed its gate; every plan was valid, and no sample needed the
+  third call (`right-within-two` equals the score). The moves are sampling:
+  the planner's input is byte-identical.
+- `chess-resign` 1/5 (4 asks to music; chess#540 pending), `chess-analysis`
+  0/5 (the glance), `refuse-playback` 2/5, `music-save` 5/5.
+
+Session evals, gate tier at 5 samples, frontier at 5:
+
+| scenario | #80 | this change |
+|---|---|---|
+| S1, S2, S2r, S5, S7, S8, S9, S16 | 5/5 | 5/5 each |
+| S4 | 5/5 | 4/5 (the narrator called the playlist a created "job") |
+| S6 (gate) | 19/20 | 4/5 (asked music without the title once) |
+| S3, S10 | 5/5 | 5/5 |
+| S11 | 4/5 | 5/5 |
+| **S12** | 0 (`unsupported`) | **5/5**: the scripted run no longer marks it unsupported |
+| S13 | 0 | 0/5 (the brief leaves out the songs to sort) |
+| S14 | 6/10 (#78) | 2/5: the 12B planned a think 2 of 5 times; both passed |
+| S15 | 14/20 | 2/5, then 5/10: every plan was `ask:music \| ask:tasks`, and the misses dropped `{s1}` (#127) |
+
+- None of the new paths fired live (no extra round, no split, no think cut);
+  the misses are the planner's and the narrator's, as before.
+- Claims were 108/109 backed (S4's "job").
