@@ -20,10 +20,16 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai import confirmation, narrator
+from app.ai import confirmation, facts, narrator
 from app.ai.runtime import AgentRunResult, ToolCallRecord
 from app.ai.recall import EarlierCall
-from app.db.models import Conversation, ConversationMessage, ConversationRole, utcnow
+from app.db.models import (
+    Conversation,
+    ConversationMessage,
+    ConversationRole,
+    LedgerTurn,
+    utcnow,
+)
 from app.services.common import active, soft_delete
 
 logger = structlog.get_logger(__name__)
@@ -85,19 +91,43 @@ def stored_turns(db: Session, conversation_id: int) -> list[dict[str, Any]]:
 
     Never replayed as chat turns (#64): the model gets recall built from them,
     as data, so a false reply of its own is never read back as fact. Jobs'
-    notes are left out (#76).
+    notes are left out (#76). A turn the person had forgotten (#81) stays a
+    turn, with nothing of it: no words, no reply, no record. The memory app's
+    records never ride along (the state block lists what is saved now).
     """
+    forgotten = forgotten_messages(db, conversation_id)
     return [
         {
             "role": message.role.value,
-            "content": message.content,
-            "tool_calls": message.tool_calls,
+            "content": FORGOTTEN if message.id in forgotten else message.content,
+            "tool_calls": None if message.id in forgotten else _without_memory(message.tool_calls),
         }
         for message in list_messages(db, conversation_id)
         # A job's note (#76) is not an exchange: it never voids the question
         # the last turn left, and the ledger keeps what the job did.
         if message.stop_reason != narrator.JOB_NOTE
     ]
+
+
+# What a forgotten turn's words and reply become in what the model is shown (#81).
+FORGOTTEN = "(forgotten at the person's request)"
+
+
+def forgotten_messages(db: Session, conversation_id: int | None = None) -> set[int]:
+    """The messages of turns the person had forgotten (#81)."""
+    query = select(LedgerTurn.user_message_id, LedgerTurn.assistant_message_id).where(
+        LedgerTurn.forgotten_at.is_not(None)
+    )
+    if conversation_id is not None:
+        query = query.where(LedgerTurn.conversation_id == conversation_id)
+    return {message for pair in db.execute(query).all() for message in pair if message is not None}
+
+
+def _without_memory(calls: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    if not calls:
+        return calls
+    kept = [call for call in calls if call.get("tool") != facts.TOOL]
+    return kept or None
 
 
 # How far back recall looks across conversations: the newest assistant turns
@@ -124,8 +154,11 @@ def earlier_calls(db: Session, conversation_id: int) -> list[EarlierCall]:
         .scalars()
         .all()
     )
+    forgotten = forgotten_messages(db) if assistant_turns else set()
     calls: list[EarlierCall] = []
     for turn in assistant_turns:
+        if turn.id in forgotten:
+            continue
         asked = db.execute(
             select(ConversationMessage.content)
             .where(
@@ -137,7 +170,7 @@ def earlier_calls(db: Session, conversation_id: int) -> list[EarlierCall]:
             .limit(1)
         ).scalar_one_or_none()
         for stored in turn.tool_calls or []:
-            if (
+            if stored.get("tool") == facts.TOOL or (
                 confirmation.record_app(str(stored.get("tool", "")), stored.get("arguments") or {})
                 is None
             ):

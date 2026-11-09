@@ -75,6 +75,8 @@ from tests.session_harness import (
     sample_line,
 )
 from tests.session_scenarios import (
+    FORGET_GONE,
+    REMEMBER_USED,
     S2,
     S3,
     S5,
@@ -247,6 +249,31 @@ def test_compiled_s6_finds_the_song_in_state_across_conversations(
     opening = planner[-1]["messages"][1]["content"]
     assert "Matches for words in the message, from earlier conversations" in opening
     assert '"Odessa" (outside text)' in opening
+
+
+def test_compiled_m1_puts_the_saved_fact_in_state_and_m2_takes_it_out(
+    scripted: _ScriptedRun,
+) -> None:
+    # #81: remember → the fact is in State another day; forget → it is gone
+    # from State and from recall.
+    sample = scripted.run(REMEMBER_USED)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    planner = [r for r in scripted.provider.requests if _is_planner(r)]
+    assert '- "I sort music on Sundays" (saved ' in planner[-1]["messages"][1]["content"]
+    sample = scripted.run(FORGET_GONE)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    planner = [r for r in scripted.provider.requests if _is_planner(r)]
+    assert "blue pot" not in planner[-1]["messages"][1]["content"]
+    recalled = sample.session.turn("after").tools[0]
+    assert recalled["tool"] == "recall" and recalled["app_record"] == []
+
+
+def test_a_memory_reply_claiming_an_app_write_fails(scripted: _ScriptedRun) -> None:
+    assert REMEMBER_USED.script is not None
+    script = REMEMBER_USED.script(World())
+    script[1] = text_turn("Got “I sort music on Sundays”, and queued your Sunday playlist.")
+    sample = scripted.run(REMEMBER_USED, script)
+    _fails(sample, "unbacked claim")
 
 
 def test_compiled_s15_sees_no_matches_from_its_own_conversation(scripted: _ScriptedRun) -> None:

@@ -24,6 +24,10 @@ one entity when one clearly answers it. **Matches** (:func:`matches`) are the
 state block's leads from earlier conversations for words the person just
 used, only when they point back at something.
 
+**Forgetting** (#81, :func:`unindex`): a turn whose saved fact the person
+forgot leaves the index for good: its words come off its topic and off the
+entities it touched, and recall, matches and the replays skip it.
+
 Bounded: every read scans a fixed window, so a turn's cost never grows with the
 ledger.
 """
@@ -52,6 +56,7 @@ from app.db.models import (
     LedgerTopic,
     LedgerTouch,
     LedgerTurn,
+    utcnow,
 )
 
 logger = structlog.get_logger(__name__)
@@ -222,6 +227,49 @@ def _grow(db: Session, topic_id: int | None, words: set[str], *, start: bool = F
     return topic.id
 
 
+def unindex(db: Session, turn_id: int) -> None:
+    """Take a turn out of memory (#81): marked forgotten, so it is never
+    indexed, recalled or replayed again; the words it added come off its
+    topic, and the person's words come off the entities it touched (their own
+    titles stay: those are the app's). Memory's receipts that quote it lose
+    the quote."""
+    turn = db.get(LedgerTurn, turn_id)
+    if turn is None or turn.forgotten_at is not None:
+        return
+    turn.forgotten_at = utcnow()
+    if turn.terms:
+        if turn.topic_id is not None:
+            topic = db.get(LedgerTopic, turn.topic_id)
+            if topic is not None:
+                topic.terms = _less(topic.terms, turn.terms)
+                topic.turns = max(0, topic.turns - 1)
+        said = memory.terms(turn.words) if turn.kind != "job" else set()
+        for item in _touched(db, [turn.id]).get(turn.id, []):
+            if item.crowd > NAMED_PER_RECEIPT:
+                continue
+            own = memory.terms(item.title or "") | {memory.stem(item.entity.kind.lower())}
+            item.entity.terms = _less(item.entity.terms, said - own) or None
+    turn.terms = []
+    turn.topic_id = None
+    quoting = db.execute(
+        select(LedgerReceipt).where(LedgerReceipt.cites_turn_id == turn.id)
+    ).scalars()
+    for receipt in quoting:
+        receipt.fact = None
+    db.flush()
+
+
+def _less(counts: dict[str, int] | None, words: Sequence[str] | set[str]) -> dict[str, int]:
+    """``counts`` with one less of each of ``words``; a word at zero goes."""
+    left = dict(counts or {})
+    for word in words:
+        if word in left:
+            left[word] -= 1
+            if left[word] <= 0:
+                del left[word]
+    return left
+
+
 # --- recall --------------------------------------------------------------------------------
 
 
@@ -378,6 +426,7 @@ def _last_turn(db: Session, entity_id: int) -> LedgerTurn | None:
         .join(Conversation, Conversation.id == LedgerTurn.conversation_id)
         .where(
             LedgerTouch.entity_id == entity_id,
+            LedgerTurn.forgotten_at.is_(None),
             LedgerPlan.acted.is_(True),
             LedgerReceipt.outcome.in_(_SEEN),
             Conversation.deleted_at.is_(None),

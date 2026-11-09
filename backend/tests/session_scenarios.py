@@ -1,4 +1,4 @@
-"""Scenarios S1–S16 (#56, ``docs/revamp-research-2026-11.md`` §1.1) as sessions.
+"""Session scenarios: S1–S16 (#56, ``docs/revamp-research-2026-11.md`` §1.1), M1–M2 (#81).
 
 Each is the person's side of a conversation plus checks on what came of it.
 Checks read the end state and the replies, never the path: which tools ran in
@@ -670,6 +670,82 @@ S16 = Scenario(
 )
 
 
+# --- memory you can see (#81) ------------------------------------------------------------------
+#
+# Conductor's own memory app: its writes are world receipts too (the harness
+# files them, ``memory_writes``), so the generic claim checks hold its replies.
+
+
+def _memory(session: Session, kind: str, label: str) -> Any:
+    turn = session.turn(label)
+    found = [r for r in session.writes(turn) if r.app == "memory" and r.kind == kind]
+    assert found, f"turn {label!r} {'saved' if kind == 'create' else 'forgot'} nothing"
+    return found[0]
+
+
+def _only_memory_writes(session: Session) -> None:
+    others = [r for r in session.world.receipts if r.app != "memory"]
+    assert not others, "also wrote " + ", ".join(f"{r.kind} {r.title!r}" for r in others)
+
+
+def _remember_used(session: Session) -> None:
+    _only_memory_writes(session)
+    saved = _memory(session, "create", "remember")
+    assert "sunday" in saved.title.lower(), f"saved {saved.title!r}, not the person's words"
+    assert "sunday" in _lower(session.turn("later").reply), "the later reply doesn't use it"
+
+
+REMEMBER_USED = Scenario(
+    "M1",
+    "'remember I sort music on Sundays'; another day, 'what day do I sort music?' uses it",
+    (
+        Say("remember I sort music on Sundays", label="remember"),
+        NewConversation(),
+        Say("what day do I sort music?", label="later"),
+    ),
+    (_remember_used,),
+    tier="gate",
+    # Memory you can see: the fact is in the new conversation's State.
+    script=lambda w: [
+        _ask("memory", "remember I sort music on Sundays"),
+        _say("Got it: “I sort music on Sundays”."),
+        answer("chat"),
+        _spoken("You sort music on Sundays.", about_you=True),
+    ],
+)
+
+
+def _forget_gone(session: Session) -> None:
+    _only_memory_writes(session)
+    saved = _memory(session, "create", "remember")
+    forgot = _memory(session, "trash", "forget")
+    assert forgot.ref == saved.ref, f"forgot {forgot.title!r}, not {saved.title!r}"
+    after = _lower(session.turn("after").reply)
+    assert "blue pot" not in after and "the pot" not in after, "still knew where the key is"
+
+
+FORGET_GONE = Scenario(
+    "M2",
+    "remember where the spare key is, 'forget that'; another day it's gone from recall and State",
+    (
+        Say("remember the spare key is under the blue pot", label="remember"),
+        Say("forget that", label="forget"),
+        NewConversation(),
+        Say("where is the spare key?", label="after"),
+    ),
+    (_forget_gone,),
+    tier="gate",
+    script=lambda w: [
+        _ask("memory", "remember the spare key is under the blue pot"),
+        _say("Got it: “the spare key is under the blue pot”."),
+        _ask("memory", "forget that"),
+        _say("Forgot “the spare key is under the blue pot”."),
+        plan({"do": "recall", "query": "spare key"}),
+        _say("I have no record of where the spare key is."),
+    ],
+)
+
+
 SCENARIOS: tuple[Scenario, ...] = (
     S1,
     S2,
@@ -688,4 +764,6 @@ SCENARIOS: tuple[Scenario, ...] = (
     S14,
     S15,
     S16,
+    REMEMBER_USED,
+    FORGET_GONE,
 )

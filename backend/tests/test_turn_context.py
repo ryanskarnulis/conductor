@@ -256,8 +256,8 @@ def test_the_opening_is_bounded_however_long_the_history() -> None:
         THURSDAY, Now(surface="voice", panel="music"), "lorem ipsum", lambda: history, lambda: calls
     )
     assert len(opening) <= turn_context.MAX_CHARS
-    # ~4 characters a token: the opening stays under ~2.6k tokens.
-    assert turn_context.MAX_CHARS <= 10_500
+    # ~4 characters a token: the opening stays under ~2.9k tokens (saved facts, #81).
+    assert turn_context.MAX_CHARS <= 11_500
     short = turn_context.build(THURSDAY, Now(), "hi", lambda: _long_history(3), lambda: [])
     assert len(short) < len(opening)
 

@@ -12,6 +12,12 @@ vi.mock('../../api/sort', () => ({
   fileSongs: vi.fn(),
 }))
 
+vi.mock('../memory/memoryApi', () => ({
+  listFacts: vi.fn().mockResolvedValue([]),
+  editFact: vi.fn(),
+  forgetFact: vi.fn(),
+}))
+
 vi.mock('../../api/agent', () => ({
   cancelTurn: vi.fn(),
   createConversation: vi.fn(),
@@ -116,6 +122,18 @@ beforeEach(() => {
 })
 
 describe('AgentPage', () => {
+  it('opens the memory list in the panel and closes it back to the thread', async () => {
+    renderAt('/c/1')
+    expect(await screen.findByText('Nothing is due today.')).toBeInTheDocument()
+    const toggle = screen.getByRole('button', { name: 'Memory' })
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(await screen.findByRole('heading', { name: 'Memory' })).toBeInTheDocument()
+    expect(await screen.findByText(/Nothing remembered/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close memory' }))
+    expect(await screen.findByText('Nothing is due today.')).toBeInTheDocument()
+  })
+
   it('opens the sort panel on a turn where music ran its sorting tool', async () => {
     mockGet.mockResolvedValue({
       ...detail,

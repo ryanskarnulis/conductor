@@ -21,6 +21,9 @@ it runs, across apps (#72):
   person's words and the apps' receipts from every conversation and day,
   cited by day and conversation. No app, no model. ``{sN}`` on it is the one
   entity it resolved, if one clearly answers.
+- ``ask(app="memory")`` (#81): conductor's own app, run by code
+  (:mod:`app.services.facts`): remember, forget or list what the person
+  saved, in their own words. No agent, no model, no budget, no gate.
 - ``ask_user``: the plan pauses on the question; the person's answer resumes
   the same plan. Each option is resolved in code to the entity State named
   for it (#120, :mod:`app.ai.options`), so ``{s1}`` is the picked entity's
@@ -85,6 +88,7 @@ from app.ai import (
     compiler,
     control,
     dataflow,
+    facts,
     memory,
     narrator,
     options,
@@ -128,6 +132,9 @@ logger = structlog.get_logger(__name__)
 
 # How a recall step reads the ledger (#80): its query in, what memory found out.
 MemoryReader = Callable[[str], memory.Recalled]
+# The memory app (#81): the step's request and the person's words in; its
+# result line and receipts out.
+MemoryApp = Callable[[str, str], tuple[str, list[dict[str, Any]]]]
 
 _AFTER_FAILURE = f"{run_record.NOT_RUN_PREFIX}an earlier step of the plan didn't finish"
 # A think's proposal comes back later (#78), so nothing runs after it (#75).
@@ -169,6 +176,8 @@ class _Run:
     found: dict[str, ToolCallRecord] = field(default_factory=dict)
     # Memory over the ledger (#80): a recall step's query in, what it found out.
     memory: MemoryReader | None = None
+    # The memory app (#81): what an ask to ``memory`` reaches.
+    memory_app: MemoryApp | None = None
     # The turn's plan, once compiled: what the ledger journals.
     plan: TurnPlan | None = None
     # Where this plan's records start: a control step split off and run first
@@ -219,6 +228,7 @@ class Interpreter:
         self_facts: Callable[[], str] | None = None,
         control_view: Callable[[], Ledgered] | None = None,
         recall: MemoryReader | None = None,
+        memory_app: MemoryApp | None = None,
     ) -> AgentRunResult:
         """Run one turn. Always returns, except on a failure stop.
 
@@ -234,7 +244,8 @@ class Interpreter:
         turn's plan waiting on the person, ``self_facts`` what code knows
         about its own recent work, ``control_view`` what the ledger says a
         control step acts on (#74), ``recall`` how a recall step reads
-        memory (#80).
+        memory (#80), ``memory_app`` what an ask to the built-in ``memory``
+        app reaches (#81).
 
         A failure stop (``provider_error``, ``internal_error``) raises
         :class:`AgentRunFailed` with the partial turn and its plan.
@@ -264,6 +275,7 @@ class Interpreter:
             context=context,
             view=control.View(control_view),
             memory=recall,
+            memory_app=memory_app,
         )
         started = time.monotonic()
         with (
@@ -661,12 +673,17 @@ class Interpreter:
                 refusal = _refusal(step, filled, confirms=confirms)
                 if refusal is not None:
                     return self._refuse(state, turn, steps, index, filled, refusal)
-                if step.destructive and not confirms and step.id != gate_passed:
+                if step.app == facts.APP:
+                    record: ToolCallRecord | None = self._memory_app(state, filled.text)
+                elif step.destructive and not confirms and step.id != gate_passed:
                     turn.status, turn.pause = "paused", "gate"
                     turn.resume_at, turn.pause_app = position, step.app
                     self._carry(turn, position, values)
                     return self._gate(state, step, filled.text)
-                record = self._dispatch(state, ask_tool_name(step.app), {"message": filled.text})
+                else:
+                    record = self._dispatch(
+                        state, ask_tool_name(step.app), {"message": filled.text}
+                    )
                 if record is not None and record.app_confirm and record.app_confirm.get("question"):
                     return self._app_asked(state, turn, steps, position + 1, step, values)
             elif isinstance(step, plans.Look):
@@ -931,6 +948,29 @@ class Interpreter:
         turn_events.receipt(len(state.records), record)
         return record
 
+    def _memory_app(self, state: _Run, request: str) -> ToolCallRecord:
+        """An ask to ``memory`` (#81): run by code over the saved facts, filed
+        as ``ask_memory`` with v1.1 receipts like any app's. The fact comes
+        from the person's own words, so a turn that only said "yes" gives
+        none."""
+        arguments = {"message": request}
+        self._rt.emit(state.on_activity, Activity(kind="tool", tool=facts.TOOL))
+        turn_events.step_started(len(state.records) + 1, facts.TOOL, arguments)
+        record = ToolCallRecord(tool=facts.TOOL, arguments=arguments)
+        if state.memory_app is None:
+            record.error = "couldn't reach memory: it isn't available here"
+        else:
+            try:
+                said = state.words if state.restate else ""
+                record.result, record.app_record = state.memory_app(request, said)
+            except Exception as exc:
+                logger.warning("plan_memory_failed", error=str(exc), error_type=type(exc).__name__)
+                record.error = "couldn't reach memory: it couldn't be read or written"
+        logger.info("plan_memory", ok=record.error is None)
+        state.records.append(record)
+        turn_events.receipt(len(state.records), record)
+        return record
+
     def _look_fell_back(
         self,
         state: _Run,
@@ -1081,7 +1121,7 @@ def _read_group(steps: Sequence[plans.Step], start: int) -> list[plans.Ask | pla
     group: list[plans.Ask | plans.Look] = []
     for step in steps[start:]:
         if not isinstance(step, plans.Look) and not (
-            isinstance(step, plans.Ask) and plans.reads_only(step)
+            isinstance(step, plans.Ask) and plans.reads_only(step) and step.app != facts.APP
         ):
             break
         if any(read.app == step.app for read in group):

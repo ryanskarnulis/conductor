@@ -10,7 +10,10 @@ their ``job`` reports.
 
 A closed turn is indexed for memory (#80, :mod:`app.services.memory`), and a
 ``recall`` step's receipts are conductor's own: the recalled words and the
-turn they cite.
+turn they cite. The built-in ``memory`` app's receipts (#81) touch no
+registry entity (a saved fact lives in ``memory_facts`` and the state
+block's own list): they quote the fact and cite the turn it was said in,
+and lose the quote when it is forgotten.
 
 **Every app write has a receipt row.** A step to an app that ran but left no
 record conductor could read (a v1 app, or a call that stopped partway) gets
@@ -49,7 +52,7 @@ from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
-from app.ai import confirmation, memory, narrator, run_record, think
+from app.ai import confirmation, facts, memory, narrator, run_record, think
 from app.ai.runtime import AgentRunResult, ToolCallRecord
 from app.ai.plan import Ledgered, PausedPlan, RunningJob, Touched, TurnPlan, UndoReceipt
 from app.ai.state_block import Entity
@@ -300,6 +303,10 @@ def self_report(db: Session, conversation_id: int) -> str:
     )
     lines: list[str] = []
     for turn in turns:
+        if turn.forgotten_at is not None:
+            # The person had it forgotten (#81): not even its words come back.
+            lines.append("A turn the person asked you to forget (nothing of it is kept here)")
+            continue
         if turn.kind == JOB_TURN:
             lines.append(f"A job reported back: {_clip(turn.words)}")
         else:
@@ -324,6 +331,8 @@ def self_report(db: Session, conversation_id: int) -> str:
                     lines.append(f'  - recalled: "{_clip(receipt.fact or "")}"')
                     continue
                 titles = [f'"{_clip(touch.title)}"' for touch in receipt.touched if touch.title][:3]
+                if receipt.app == facts.APP and receipt.fact:
+                    titles = [f'"{_clip(receipt.fact)}"']
                 what = f" {', '.join(titles)}" if titles else ""
                 action = (receipt.tool or "something").replace("_", " ")
                 did = _RECEIPT_WORDS.get(receipt.outcome, receipt.outcome)
@@ -804,6 +813,16 @@ def _journal_receipt(
     job = entry.get("job")
     if isinstance(job, dict) and job.get("ref") is not None:
         receipt.job_id = _report_job(db, step, app, job, entry).id
+    if app == facts.APP:
+        # A saved fact (#81): quoted with the turn it came from, never an
+        # entity in the registry, so forgetting it leaves nothing behind there.
+        titles = [ref.get("title") for ref in entry.get("touched") or [] if isinstance(ref, dict)]
+        if entry.get("tool") != facts.FORGET:
+            receipt.fact = _text(titles[0]) if titles else None
+        cited = entry.get("source_turn")
+        receipt.cites_turn_id = cited if isinstance(cited, int) else None
+        db.add(receipt)
+        return
     db.add(receipt)
     db.flush()
     for ref in entry.get("touched") or []:

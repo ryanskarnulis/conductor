@@ -11,7 +11,7 @@ from fastapi.routing import APIRouter
 
 from app.ai import turn_events
 from app.ai.providers.llamacpp import provider_from_settings
-from app.api import routes_agent, routes_fleet, routes_voice, turn_activity
+from app.api import routes_agent, routes_fleet, routes_memory, routes_voice, turn_activity
 from app.config import get_settings
 from app.db.session import SessionLocal
 from app.fleet.manifests import fleet_from_settings
@@ -25,6 +25,7 @@ logger = structlog.get_logger(__name__)
 api_router = APIRouter()
 api_router.include_router(routes_agent.router)
 api_router.include_router(routes_fleet.router)
+api_router.include_router(routes_memory.router)
 api_router.include_router(routes_voice.router)
 
 
