@@ -8,8 +8,8 @@ fleet, with the model scripted. Conversations stand in for days.
 from __future__ import annotations
 
 import json
-from collections.abc import Generator
-from datetime import UTC, date, datetime
+from collections.abc import Callable, Generator
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +39,10 @@ from app.fleet.manifests import Fleet, discover_fleet
 from app.fleet.tools import build_delegate_tools
 from app.main import app
 from app.services import ledger
+from app.services import conversations as conversations_service
+from app.services.conversations import QUIET_GAP
 from app.services import memory as memory_service
+from tests.eval_db import age
 from tests.fake_world import FakeGlances, World, client_factory, write_fixture_fleet
 from tests.scripted_provider import ScriptedProvider, text_turn
 
@@ -238,16 +241,19 @@ def world(fleet: Fleet) -> World:
 
 
 class Talk:
-    """Conversations through the real route; ``new()`` is another day."""
+    """The timeline through the real route; ``new()`` is another day: the
+    record moves back past the quiet gap (#82)."""
 
-    def __init__(self, client: TestClient, fleet: Fleet) -> None:
+    def __init__(
+        self, client: TestClient, fleet: Fleet, pass_time: Callable[[], None] = lambda: None
+    ) -> None:
         self.client = client
         self.fleet = fleet
-        self.conversation = 0
-        self.new()
+        self.pass_time = pass_time
+        self.conversation = int(self.client.get("/api/agent/timeline").json()["id"])
 
     def new(self) -> int:
-        self.conversation = int(self.client.post("/api/agent/conversations", json={}).json()["id"])
+        self.pass_time()
         return self.conversation
 
     def say(self, words: str, *turns: Any) -> tuple[dict[str, Any], ScriptedProvider]:
@@ -263,8 +269,11 @@ class Talk:
 
 
 @pytest.fixture
-def talk(client: TestClient, fleet: Fleet, world: World) -> Generator[Talk, None, None]:
-    yield Talk(client, fleet)
+def talk(
+    client: TestClient, fleet: Fleet, world: World, db_session: Session
+) -> Generator[Talk, None, None]:
+    # Another conversation the same day: just past the quiet gap.
+    yield Talk(client, fleet, lambda: age(db_session, QUIET_GAP + timedelta(minutes=1)))
 
 
 def _grab_odessa(talk: Talk) -> None:
@@ -364,7 +373,11 @@ def test_two_songs_that_fit_name_neither(talk: Talk, world: World, db_session: S
     assert note[-1].outcome == "not_run"
 
 
-def test_what_did_we_decide_is_cited_or_honestly_unknown(talk: Talk, db_session: Session) -> None:
+def test_what_did_we_decide_is_cited_or_honestly_unknown(
+    talk: Talk, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Midday, so the quiet gaps between these talks stay on one day.
+    monkeypatch.setattr(clock, "utc_now", lambda: datetime(2026, 11, 9, 19, 0, tzinfo=UTC))
     # Nothing on record yet: the honest answer, never a guess.
     reply, _ = talk.say(
         "what did we decide about the garage shelves last week?",
@@ -473,21 +486,46 @@ def test_a_backlog_is_indexed_oldest_first_and_once(db_session: Session) -> None
 
 
 def test_a_trashed_conversation_is_out_of_recall_and_matches(
-    talk: Talk, client: TestClient, db_session: Session
+    talk: Talk, db_session: Session
 ) -> None:
     _grab_odessa(talk)
-    first = talk.conversation
     assert memory_service.recall(db_session, "Caribou song").hits
-    client.delete(f"/api/agent/conversations/{first}")
-    db_session.expire_all()
+    # A legacy conversation trashed before the timeline (#82) stays out.
+    old = db_session.get(Conversation, talk.conversation)
+    assert old is not None
+    old.kind, old.deleted_at = "legacy", old.created_at
+    db_session.commit()
     assert memory_service.recall(db_session, "Caribou song").hits == ()
-    assert memory_service.matches(db_session, "that Caribou song", talk.new()) == []
+    timeline = conversations_service.timeline(db_session)
+    assert memory_service.matches(db_session, "that Caribou song", timeline.id) == []
+
+
+def test_a_legacy_conversation_is_still_recalled_and_matched(
+    talk: Talk, db_session: Session
+) -> None:
+    """#58 (c): old conversations are reachable only through recall, and they are."""
+    _grab_odessa(talk)
+    old = db_session.get(Conversation, talk.conversation)
+    assert old is not None
+    old.kind = "legacy"
+    db_session.commit()
+    (hit,) = memory_service.recall(db_session, "Caribou song").hits
+    assert hit.conversation_id == old.id
+    timeline = conversations_service.timeline(db_session)
+    assert timeline.id != old.id
+    found = memory_service.matches(db_session, "that Caribou song", timeline.id)
+    assert [m.entity.title for m in found] == ["Odessa"]
 
 
 def test_matches_leave_out_this_conversations_own_entities(talk: Talk, db_session: Session) -> None:
     _grab_odessa(talk)
-    assert memory_service.matches(db_session, "that Caribou song", talk.conversation) == []
-    elsewhere = memory_service.matches(db_session, "that Caribou song", talk.new())
+    timeline = talk.conversation
+    window = conversations_service.window_since(db_session, timeline)
+    assert memory_service.matches(db_session, "that Caribou song", timeline, since=window) == []
+    # Another day (#82): the same timeline, after a quiet gap, matches it.
+    talk.new()
+    window = conversations_service.window_since(db_session, timeline)
+    elsewhere = memory_service.matches(db_session, "that Caribou song", timeline, since=window)
     assert [m.entity.title for m in elsewhere] == ["Odessa"]
     entity = db_session.execute(select(LedgerEntity)).scalars().first()
     assert entity is not None and {"caribou", "odessa", "song"} <= set(entity.terms or {})

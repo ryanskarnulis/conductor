@@ -1,0 +1,135 @@
+/* Timeline search (#82): a lazy chunk with its own styles, laid out like the
+   memory list. Each hit is a button: its day, time and surface, what was
+   said, the reply and the receipt titles that matched. */
+
+.tl-search {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tl-search-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-8) 0;
+}
+
+.tl-search-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--glow);
+}
+
+.tl-search-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-8) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  scrollbar-width: thin;
+}
+
+.tl-search-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--silk-border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+/* The field shows focus; the input inside it doesn't ring twice. */
+.tl-search-field:focus-within {
+  border-color: var(--glow);
+  box-shadow: 0 0 0 1px var(--glow);
+}
+
+.shell .tl-search-field input:focus-visible {
+  outline: none;
+}
+
+.tl-search-field input {
+  flex: 1;
+  min-width: 0;
+  min-height: 38px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.tl-search-note,
+.tl-search-empty {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.tl-hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.tl-hit {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--silk-border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--silk);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tl-hit:hover {
+  border-color: var(--glow);
+}
+
+.tl-hit-meta {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.tl-hit-said {
+  color: var(--ink);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.tl-hit-reply,
+.tl-hit-titles {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.tl-hit-titles {
+  color: var(--glow);
+}
+
+.shell[data-view='phone'] .tl-search-head {
+  padding: var(--space-5) var(--space-6) 0;
+}
+
+.shell[data-view='phone'] .tl-search-body {
+  padding: var(--space-4) var(--space-6) var(--space-6);
+}

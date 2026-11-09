@@ -71,41 +71,6 @@
   outline-offset: 2px;
 }
 
-/* Conversations drawer: the list moves out of the way of the web */
-.shell-threads {
-  position: fixed;
-  z-index: 20;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: min(320px, 88vw);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-6);
-  padding-left: max(14px, env(safe-area-inset-left, 0px));
-  background: var(--surface-veil);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
-  border-right: 1px solid var(--silk-border);
-  box-shadow: var(--shadow);
-  overflow-y: auto;
-}
-
-.shell-threads[hidden] {
-  display: none;
-}
-
-.shell-threads-head {
-  display: flex;
-  gap: var(--space-3);
-  align-items: center;
-}
-
-.shell-threads-head .agent-new-chat {
-  flex: 1;
-}
-
 /* The stage: the 3D web, with the panel over it */
 .shell-stage {
   position: relative;
@@ -312,4 +277,80 @@
 
 .shell[data-view='phone'] .shell-wordmark {
   display: none;
+}
+
+/* The timeline (#82): one list, a separator for each day, each entry tagged
+   with the surface it came from. */
+.tl-day {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin: var(--space-3) 0 0;
+  font-size: 10.5px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The phone shows the latest turn only, so it has no days to separate. */
+.shell[data-view='phone'] .tl-day {
+  display: none;
+}
+
+.tl-day::before,
+.tl-day::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--silk-border);
+}
+
+.tl-tag {
+  display: inline-block;
+  margin-left: var(--space-3);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--silk-border);
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+  color: var(--silk);
+}
+
+.tl-tag--incognito {
+  border-color: var(--violet);
+  color: var(--violet);
+}
+
+/* An incognito turn's words were never kept: the placeholder reads as such. */
+.shell-turn--incognito .cd-said,
+.shell-turn--incognito .cd-narration-text {
+  font-style: italic;
+  color: var(--muted);
+}
+
+/* The incognito switch, and what it tells the person while it's on */
+.tl-incognito[aria-pressed='true'] {
+  border-color: var(--violet);
+  color: var(--violet);
+}
+
+/* Five controls share the phone's composer: tighter, so the words keep room. */
+.shell[data-view='phone'] .agent-composer {
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.shell[data-view='phone'] .agent-composer > button,
+.shell[data-view='phone'] .agent-composer .mic-button {
+  padding: 9px 8px;
+}
+
+.tl-incognito-note {
+  margin: 0;
+  padding: var(--space-3) var(--space-6);
+  border-top: 1px solid var(--violet);
+  font-size: 12.5px;
+  color: var(--violet);
+  background: var(--frost-soft);
 }

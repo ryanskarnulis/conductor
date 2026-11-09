@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cancelJob, getConversation, listConversations } from '../../api/agent'
+import { cancelJob, getConversation, getTimeline } from '../../api/agent'
 import type { AgentMessage, ConversationDetail, JobCancelResult, JobEvent } from '../../types/agent'
 import { AgentPage } from './AgentPage'
 
@@ -12,11 +12,9 @@ vi.mock('../../api/sort', () => ({ getWorklist: vi.fn(), openGroup: vi.fn(), fil
 vi.mock('../../api/agent', () => ({
   cancelJob: vi.fn(),
   cancelTurn: vi.fn(),
-  createConversation: vi.fn(),
-  deleteConversation: vi.fn(),
   getConversation: vi.fn(),
   getTurnActivity: vi.fn(),
-  listConversations: vi.fn(),
+  getTimeline: vi.fn(),
   postMessage: vi.fn(),
   turnEventsUrl: (id: number) => `/api/agent/conversations/${id}/events`,
 }))
@@ -75,7 +73,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   FakeEventSource.instances = []
   vi.stubGlobal('EventSource', FakeEventSource)
-  vi.mocked(listConversations).mockResolvedValue([])
+  vi.mocked(getTimeline).mockResolvedValue({ ...detail(), messages: [], quiet_gap_seconds: 10_800, incognito_notice: 'Incognito.' })
   mockGet.mockResolvedValue(detail())
 })
 afterEach(() => vi.unstubAllGlobals())

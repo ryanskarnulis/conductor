@@ -39,6 +39,9 @@ class MessageCreate(BaseModel):
     # and the app panel they have open. Optional; absent says nothing.
     surface: Literal["desktop", "phone", "voice", "room_speaker"] | None = None
     panel: Annotated[str, StringConstraints(strip_whitespace=True, max_length=60)] | None = None
+    # Incognito (#82): this turn's words and reply are never written. The page
+    # carries the switch per request and turns it off itself.
+    incognito: bool = False
 
 
 class ToolCallRead(BaseModel):
@@ -71,12 +74,41 @@ class MessageRead(BaseModel):
     tool_calls: list[ToolCallRead] | None = None
     stop_reason: str | None = None
     created_at: UTCDateTime
+    # The turn's surface (#82: each timeline entry is tagged with it), and
+    # whether it was incognito (its words and reply were never written).
+    surface: str | None = None
+    incognito: bool = False
 
 
 class ConversationDetail(ConversationRead):
-    """A conversation with its full message history, oldest first."""
+    """A conversation with its message history, oldest first (on the
+    timeline, its newest messages)."""
 
     messages: list[MessageRead]
+
+
+class TimelineDetail(ConversationDetail):
+    """The one timeline (#82), with what the page needs to run it: the quiet
+    gap after which incognito turns itself off, and the line it shows."""
+
+    quiet_gap_seconds: int
+    incognito_notice: str
+
+
+class TimelineHit(BaseModel):
+    """One timeline turn that matches a search (#82): what was said, the
+    reply, and the receipt titles that matched. Incognito and forgotten turns
+    are never hits."""
+
+    turn_id: int
+    message_id: int | None
+    at: UTCDateTime
+    surface: str | None
+    kind: str
+    said: str | None
+    reply: str | None
+    titles: list[str]
+    matched: list[Literal["words", "reply", "receipt"]]
 
 
 class MessageExchange(BaseModel):

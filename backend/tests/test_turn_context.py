@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.ai import recall, state_block, turn_context
 from app.ai.interpreter import Interpreter
@@ -19,6 +20,7 @@ from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delega
 from app.fleet.manifests import Fleet, discover_fleet
 from app.main import app
 from app.tools import registry
+from tests.eval_db import age
 from tests.fake_world import write_fixture_fleet
 from tests.scripted_provider import ScriptedProvider, text_turn
 
@@ -188,7 +190,9 @@ def _conversation(client: TestClient) -> int:
     return int(client.post("/api/agent/conversations", json={}).json()["id"])
 
 
-def test_the_route_recalls_an_earlier_conversation(client: TestClient, tmp_path: Path) -> None:
+def test_the_route_recalls_an_earlier_conversation(
+    client: TestClient, tmp_path: Path, db_session: Session
+) -> None:
     @registry.tool
     def ask_music(message: str) -> str:
         """Scratch music agent."""
@@ -200,16 +204,17 @@ def test_the_route_recalls_an_earlier_conversation(client: TestClient, tmp_path:
         app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(provider, fleet)
 
     use(ScriptedProvider([_plan_ask("music", "grab Odessa by Caribou")]))
-    first = _conversation(client)
+    timeline = _conversation(client)
     client.post(
-        f"/api/agent/conversations/{first}/messages", json={"content": "grab Odessa by Caribou"}
+        f"/api/agent/conversations/{timeline}/messages", json={"content": "grab Odessa by Caribou"}
     )
+    # Another day on the one timeline (#82): past the quiet gap.
+    age(db_session)
 
     later = ScriptedProvider([text_turn(json.dumps({"answer": "decline"}))])
     use(later)
-    second = _conversation(client)
     response = client.post(
-        f"/api/agent/conversations/{second}/messages",
+        f"/api/agent/conversations/{timeline}/messages",
         json={"content": "put that Caribou song in the house folder", "surface": "voice"},
     )
     assert response.status_code == 200
@@ -217,7 +222,7 @@ def test_the_route_recalls_an_earlier_conversation(client: TestClient, tmp_path:
     assert "Possibly what the person is pointing back at, from earlier conversations" in opening
     assert "Odessa" in opening
     assert "Surface: voice" in opening
-    # The new conversation has no record of its own: only the earlier one's hit.
+    # Past the gap the window has no record of its own: only the earlier day's hit.
     assert "The record of earlier turns in this conversation" not in opening
 
 

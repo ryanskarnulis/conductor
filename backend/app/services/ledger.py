@@ -52,7 +52,7 @@ from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
-from app.ai import confirmation, facts, memory, narrator, run_record, think
+from app.ai import confirmation, facts, incognito, memory, narrator, run_record, think
 from app.ai.runtime import AgentRunResult, ToolCallRecord
 from app.ai.plan import Ledgered, PausedPlan, RunningJob, Touched, TurnPlan, UndoReceipt
 from app.ai.state_block import Entity
@@ -93,8 +93,10 @@ def open_turn(
     *,
     surface: str | None = None,
     panel: str | None = None,
+    hidden: bool = False,
 ) -> LedgerTurn | None:
-    """Put the person's words on the record as a ``running`` turn."""
+    """Put the person's words on the record as a ``running`` turn; an
+    incognito one (``hidden``, #82) puts the placeholder there instead."""
     return _safely(
         db,
         "ledger_open_turn_failed",
@@ -104,16 +106,22 @@ def open_turn(
                 conversation_id=conversation.id,
                 user_message_id=message.id,
                 kind="message",
-                words=message.content or "",
+                words=incognito.PLACEHOLDER if hidden else message.content or "",
                 surface=surface,
                 panel=panel,
+                incognito=hidden,
             ),
         ),
     )
 
 
 def note_turn(
-    db: Session, conversation: Conversation, message: ConversationMessage
+    db: Session,
+    conversation: Conversation,
+    message: ConversationMessage,
+    *,
+    surface: str | None = None,
+    hidden: bool = False,
 ) -> LedgerTurn | None:
     """Put something the person did in the UI on the record: words, no plan."""
     return _safely(
@@ -125,7 +133,9 @@ def note_turn(
                 conversation_id=conversation.id,
                 user_message_id=message.id,
                 kind="note",
-                words=message.content or "",
+                words=incognito.PLACEHOLDER if hidden else message.content or "",
+                surface=surface,
+                incognito=hidden,
                 status="ended",
                 ended_at=utcnow(),
             ),
@@ -163,7 +173,7 @@ def close_turn(
                 db.add(bare)
                 db.flush()
                 for seq, record in records:
-                    _journal_step(db, bare, seq, record)
+                    _journal_step(db, bare, seq, record, hidden=turn.incognito)
                 db.flush()
             return
         if run.plan.first is not None:
@@ -172,14 +182,14 @@ def close_turn(
             _end_waiting_plan(db, turn, run.plan.first)
             db.flush()
             for seq, record in records[: run.plan.first_steps]:
-                _journal_step(db, first, seq, record)
+                _journal_step(db, first, seq, record, hidden=turn.incognito)
             records = records[run.plan.first_steps :]
         plan = _compiled_plan(turn, run.plan)
         db.add(plan)
         _end_waiting_plan(db, turn, run.plan)
         db.flush()
         for seq, record in records:
-            _journal_step(db, plan, seq, record)
+            _journal_step(db, plan, seq, record, hidden=turn.incognito)
         db.flush()
 
     _safely(db, "ledger_close_turn_failed", write)
@@ -199,13 +209,17 @@ def close_turn(
 _NOTES_SCANNED = 20
 
 
-def paused_plan(db: Session, conversation_id: int) -> PausedPlan | None:
+def paused_plan(
+    db: Session, conversation_id: int, *, since: datetime | None = None
+) -> PausedPlan | None:
     """Last turn's compiled plan, if it is waiting on the person (#70).
 
     Only the newest turn's plan can resume: anything said or done since (a
     note included) lets the question lapse, as an app's question does. A
     job's note (#76) is neither, so it doesn't; but a think's proposal (#78)
     posted since is the newest question, and it is the one a yes answers.
+    A quiet gap lapses it too (#82): only a turn at or after ``since`` (the
+    timeline's window) can be waiting.
     """
     turns = (
         db.execute(
@@ -213,6 +227,7 @@ def paused_plan(db: Session, conversation_id: int) -> PausedPlan | None:
             .where(
                 LedgerTurn.conversation_id == conversation_id,
                 LedgerTurn.status == "ended",
+                *_since(since),
             )
             .order_by(LedgerTurn.id.desc())
             .limit(_NOTES_SCANNED)
@@ -284,9 +299,10 @@ _RECEIPT_WORDS = {
 }
 
 
-def self_report(db: Session, conversation_id: int) -> str:
+def self_report(db: Session, conversation_id: int, *, since: datetime | None = None) -> str:
     """What conductor did lately and what's still running, from the ledger
-    alone, for "what are you doing / what did you just do?" (S16)."""
+    alone, for "what are you doing / what did you just do?" (S16): this
+    conversation's turns since ``since`` (the timeline's window, #82)."""
     turns = (
         db.execute(
             select(LedgerTurn)
@@ -294,6 +310,7 @@ def self_report(db: Session, conversation_id: int) -> str:
                 LedgerTurn.conversation_id == conversation_id,
                 LedgerTurn.status == "ended",
                 LedgerTurn.kind.in_(("message", JOB_TURN)),
+                *_since(since),
             )
             .order_by(LedgerTurn.id.desc())
             .limit(SELF_REPORT_TURNS)
@@ -306,6 +323,10 @@ def self_report(db: Session, conversation_id: int) -> str:
         if turn.forgotten_at is not None:
             # The person had it forgotten (#81): not even its words come back.
             lines.append("A turn the person asked you to forget (nothing of it is kept here)")
+            continue
+        if turn.incognito:
+            # Incognito (#82): its words were never kept, and nor is what it did here.
+            lines.append("An incognito turn (nothing of it is kept here)")
             continue
         if turn.kind == JOB_TURN:
             lines.append(f"A job reported back: {_clip(turn.words)}")
@@ -336,8 +357,8 @@ def self_report(db: Session, conversation_id: int) -> str:
                 what = f" {', '.join(titles)}" if titles else ""
                 action = (receipt.tool or "something").replace("_", " ")
                 did = _RECEIPT_WORDS.get(receipt.outcome, receipt.outcome)
-                since = " (since undone)" if receipt.undone_by_step_id is not None else ""
-                lines.append(f"  - {did}: {action}{what}{since}")
+                undone = " (since undone)" if receipt.undone_by_step_id is not None else ""
+                lines.append(f"  - {did}: {action}{what}{undone}")
         if turn.stop_reason and turn.stop_reason != "completed" and turn.kind != JOB_TURN:
             lines.append(f"- the turn ended {turn.stop_reason}")
     for job in running_jobs(db, conversation_id, limit=5):
@@ -359,7 +380,7 @@ _CONTROL_STEPS = frozenset({"cancel", "amend", "undo"})
 _WRITE_OUTCOMES = ("done", "unknown")
 
 
-def control_view(db: Session, conversation_id: int) -> Ledgered:
+def control_view(db: Session, conversation_id: int, *, since: datetime | None = None) -> Ledgered:
     """What a control step acts on (#74): the last plan that ran steps, the
     write receipts of the last few, and the jobs still running.
 
@@ -374,6 +395,7 @@ def control_view(db: Session, conversation_id: int) -> Ledgered:
                 LedgerTurn.conversation_id == conversation_id,
                 LedgerTurn.status == "ended",
                 LedgerTurn.kind == "message",
+                *_since(since),
             )
             .order_by(LedgerTurn.id.desc())
             .limit(CONTROL_TURNS)
@@ -568,6 +590,9 @@ def _clip(text: str, limit: int = 80) -> str:
 def _compiled_plan(turn: LedgerTurn, compiled: TurnPlan) -> LedgerPlan:
     body = compiled.body
     answer = body.get("answer") if isinstance(body, dict) else None
+    if turn.incognito and compiled.status != "paused":
+        # Incognito (#82): a plan nothing waits on keeps its shape, not its words.
+        body = incognito.plan_body(body)
     return LedgerPlan(
         turn_id=turn.id,
         source="compiled",
@@ -582,9 +607,12 @@ def _compiled_plan(turn: LedgerTurn, compiled: TurnPlan) -> LedgerPlan:
     )
 
 
-def recent_entities(db: Session, conversation_id: int, *, limit: int = 10) -> list[Entity] | None:
+def recent_entities(
+    db: Session, conversation_id: int, *, limit: int = 10, since: datetime | None = None
+) -> list[Entity] | None:
     """What this conversation's steps changed or found, newest first, each
-    with its title as of the receipt that touched it.
+    with its title as of the receipt that touched it: on the timeline, since
+    its quiet gap (``since``, #82). An incognito turn's are left out.
 
     ``None`` for a conversation the ledger has never closed a turn of (one from
     before #69): the state block then reads its stored records instead.
@@ -605,8 +633,10 @@ def recent_entities(db: Session, conversation_id: int, *, limit: int = 10) -> li
         .join(LedgerTurn, LedgerTurn.id == LedgerPlan.turn_id)
         .where(
             LedgerTurn.conversation_id == conversation_id,
+            LedgerTurn.incognito.is_(False),
             LedgerPlan.acted.is_(True),
             LedgerReceipt.outcome.in_(ENTITY_OUTCOMES),
+            *_since(since),
         )
         # Newest receipt first; within one receipt, the order the app listed.
         .order_by(LedgerReceipt.id.desc(), LedgerTouch.id)
@@ -697,6 +727,11 @@ def live_step(seq: int, record: ToolCallRecord) -> dict[str, Any]:
 # --- internals ----------------------------------------------------------------------------
 
 
+def _since(since: datetime | None) -> tuple[Any, ...]:
+    """The filter for turns in a window that starts at ``since`` (none: all)."""
+    return () if since is None else (LedgerTurn.created_at >= since,)
+
+
 def _add_turn(db: Session, turn: LedgerTurn) -> LedgerTurn:
     db.add(turn)
     db.flush()
@@ -713,18 +748,24 @@ def _safely(db: Session, event: str, write: Callable[[], T]) -> T | None:
         return None
 
 
-def _journal_step(db: Session, plan: LedgerPlan, seq: int, record: ToolCallRecord) -> None:
+def _journal_step(
+    db: Session, plan: LedgerPlan, seq: int, record: ToolCallRecord, *, hidden: bool = False
+) -> None:
     kind, app = step_kind(record.tool, record.arguments)
     outcome = run_record.classify(record)
+    # Incognito (#82): the step and its receipts are kept, not its words. A
+    # think keeps its problem: the background job still has to run on it, as
+    # a paused plan keeps its body.
+    keep = not hidden or kind == think.KIND
     step = LedgerStep(
         plan_id=plan.id,
         seq=seq,
         kind=kind,
         app=app,
         tool=record.tool,
-        arguments=record.arguments,
+        arguments=record.arguments if keep else incognito.arguments(record.arguments),
         outcome=outcome,
-        result=record.result,
+        result=incognito.PLACEHOLDER if hidden and record.result is not None else record.result,
         error=record.error,
     )
     db.add(step)

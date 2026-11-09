@@ -31,7 +31,7 @@ from typing import Any, Literal
 import structlog
 from pydantic import BaseModel, ValidationError
 
-from app.ai import confirmation, narrator, run_record
+from app.ai import confirmation, incognito, narrator, run_record
 from app.ai import trace as run_trace
 from app.ai.plan import TurnPlan
 from app.ai.provider import ChatProvider, ChatResult, ToolCall, ToolCallArgumentsError
@@ -329,8 +329,9 @@ class Runtime:
     def write_trace(
         self, trace: run_trace.RunTrace, result: AgentRunResult, error: str, started: float
     ) -> None:
-        """Record the finished turn; a write that fails never costs it."""
-        if self.tracer is None:
+        """Record the finished turn; a write that fails never costs it. An
+        incognito turn (#82) is never recorded: the trace holds its words."""
+        if self.tracer is None or incognito.active():
             return
         try:
             total_ms = round((time.monotonic() - started) * 1000)

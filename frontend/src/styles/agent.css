@@ -14,128 +14,6 @@ main.agent-page {
   padding: 18px;
 }
 
-/* ── Sidebar ─────────────────────────────────────────────────────────── */
-
-.agent-sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  box-shadow: var(--shadow-soft);
-  overflow-y: auto;
-}
-
-.agent-brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 2px 0;
-  color: var(--text-h);
-  font-weight: 720;
-  font-size: 1rem;
-}
-
-.agent-brand svg {
-  color: var(--accent);
-}
-
-.agent-new-chat {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 9px 12px;
-  border-radius: 10px;
-  font-weight: 600;
-}
-
-.agent-sidebar-empty {
-  margin: 4px 2px;
-  color: var(--text-muted);
-  font-size: 0.85rem;
-}
-
-.agent-conversation-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.agent-conversation {
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-  border-radius: 10px;
-  border: 1px solid transparent;
-}
-
-.agent-conversation.active {
-  background: var(--surface-strong);
-  border-color: var(--border);
-}
-
-.agent-conversation-open {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  padding: 8px 10px;
-  background: none;
-  border: none;
-  border-radius: 10px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.agent-conversation-open:hover {
-  background: var(--surface-soft);
-}
-
-.agent-conversation-title {
-  color: var(--text-h);
-  font-size: 0.88rem;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-}
-
-.agent-conversation-time {
-  color: var(--text-muted);
-  font-size: 0.75rem;
-}
-
-.agent-conversation-delete {
-  align-self: center;
-  display: inline-flex;
-  padding: 6px;
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: 8px;
-  opacity: 0;
-}
-
-.agent-conversation:hover .agent-conversation-delete,
-.agent-conversation-delete:focus-visible {
-  opacity: 1;
-}
-
-.agent-conversation-delete:hover {
-  color: var(--red);
-  background: var(--red-soft);
-}
-
 /* ── Thread ──────────────────────────────────────────────────────────── */
 
 .agent-thread {
@@ -538,10 +416,6 @@ main.agent-page {
   main.agent-page {
     grid-template-columns: 1fr;
     height: auto;
-  }
-
-  .agent-sidebar {
-    max-height: 220px;
   }
 
   .agent-thread {

@@ -31,7 +31,7 @@ from app.ai import facts
 from app.ai.facts import Saved
 from app.ai.memory import day
 from app.ai.state_block import MAX_FACTS, Fact
-from app.db.models import Conversation, LedgerTurn, MemoryFact, utcnow
+from app.db.models import Conversation, ConversationKind, LedgerTurn, MemoryFact, utcnow
 from app.services import memory as memory_index
 
 logger = structlog.get_logger(__name__)
@@ -87,6 +87,9 @@ def self_lines(db: Session) -> str:
 
 # --- the memory app ------------------------------------------------------------------------
 
+# Why an incognito turn (#82) saves no fact.
+INCOGNITO_REASON = "incognito is on, so nothing from this turn is remembered"
+
 
 def handle(
     db: Session,
@@ -95,18 +98,24 @@ def handle(
     *,
     conversation_id: int,
     turn_id: int | None,
+    hidden: bool = False,
+    since: datetime | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """One ``ask(app="memory")``: its result line and v1.1 receipts. ``words``
     is what the person said this turn ("" when a resumed plan was told only
-    "yes"); ``turn_id`` is that turn, the new fact's source. Runs in a
-    savepoint: a failure changes nothing and raises."""
+    "yes"); ``turn_id`` is that turn, the new fact's source. An incognito
+    turn (``hidden``, #82) remembers nothing. "Forget that" means a fact
+    saved in this conversation: on the timeline, since ``since`` (its window). Runs in a savepoint: a failure
+    changes nothing and raises."""
     intent = facts.parse(request)
     with db.begin_nested():
         if intent.kind == "remember":
+            if hidden:
+                return facts.refused(facts.REMEMBER, INCOGNITO_REASON)
             return _remember(db, request, words, turn_id)
         if intent.kind == "forget":
             target = facts.forget_target(intent.text, words)
-            return _forget(db, target, conversation_id, turn_id)
+            return _forget(db, target, conversation_id, turn_id, since)
         return _list(db, intent.text)
 
 
@@ -133,7 +142,11 @@ def _remember(
 
 
 def _forget(
-    db: Session, target: str, conversation_id: int, turn_id: int | None
+    db: Session,
+    target: str,
+    conversation_id: int,
+    turn_id: int | None,
+    since: datetime | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     if facts.everything(target):
         return facts.refused(
@@ -143,7 +156,7 @@ def _forget(
     wanted = facts.words_of(target)
     if not wanted:
         # "forget that": the newest fact saved in this conversation.
-        here = _saved_here(db, rows, conversation_id)
+        here = _saved_here(db, rows, conversation_id, since)
         if here is None:
             return facts.refused(
                 facts.FORGET, "nothing was saved in this conversation; say which fact to forget"
@@ -166,14 +179,17 @@ def _forget(
     return facts.forgot(saved)
 
 
-def _saved_here(db: Session, rows: list[MemoryFact], conversation_id: int) -> MemoryFact | None:
+def _saved_here(
+    db: Session, rows: list[MemoryFact], conversation_id: int, since: datetime | None = None
+) -> MemoryFact | None:
     sources = [row.source_turn_id for row in rows if row.source_turn_id is not None]
     if not sources:
         return None
+    window = () if since is None else (LedgerTurn.created_at >= since,)
     here = set(
         db.execute(
             select(LedgerTurn.id).where(
-                LedgerTurn.id.in_(sources), LedgerTurn.conversation_id == conversation_id
+                LedgerTurn.id.in_(sources), LedgerTurn.conversation_id == conversation_id, *window
             )
         ).scalars()
     )
@@ -242,7 +258,13 @@ def source(db: Session, row: MemoryFact) -> Source | None:
     if turn is None:
         return None
     conversation = db.get(Conversation, turn.conversation_id)
-    live_thread = conversation is not None and conversation.deleted_at is None
+    # The timeline (#82) is everything, so it names no thread: only a legacy
+    # conversation's title says where something was said.
+    live_thread = (
+        conversation is not None
+        and conversation.deleted_at is None
+        and conversation.kind != ConversationKind.timeline.value
+    )
     return Source(
         turn_id=turn.id,
         kind=turn.kind,

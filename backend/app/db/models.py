@@ -42,8 +42,23 @@ class ConversationRole(enum.StrEnum):
     assistant = "assistant"
 
 
+class ConversationKind(enum.StrEnum):
+    """What a conversation row is (#82).
+
+    ``timeline``: the one endless conversation every surface writes to,
+    created on first use. ``legacy``: a conversation from before the
+    timeline, reachable only through recall (#58 (c)). ``thread``: a side
+    thread (#139; its columns exist, nothing writes one yet).
+    """
+
+    timeline = "timeline"
+    thread = "thread"
+    legacy = "legacy"
+
+
 class Conversation(Base, TimestampMixin, SoftDeleteMixin):
-    """One chat thread with conductor's master agent.
+    """One chat thread with conductor's master agent: the timeline, or a
+    legacy conversation from before it (#82).
 
     Soft delete is conversation-level only: messages are immutable children
     that ride along with their conversation (no per-message delete).
@@ -56,6 +71,17 @@ class Conversation(Base, TimestampMixin, SoftDeleteMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     # Auto-derived from the first user message when not provided explicitly.
     title: Mapped[str | None] = mapped_column(default=None)
+    # Rows from before the timeline are ``legacy`` (the migration's default).
+    kind: Mapped[str] = mapped_column(
+        default=ConversationKind.timeline.value,
+        server_default=ConversationKind.legacy.value,
+        index=True,
+    )
+    # A side thread's small context, when it closed and what it flowed back
+    # into the timeline (#139): unused until then.
+    carries: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
+    closed_at: Mapped[datetime | None] = mapped_column(default=None)
+    result: Mapped[str | None] = mapped_column(default=None)
 
     messages: Mapped[list[ConversationMessage]] = relationship(
         back_populates="conversation", order_by="ConversationMessage.id"
@@ -160,6 +186,10 @@ class LedgerTurn(Base, TimestampMixin):
     # Forgotten (#81): the person had a saved fact said here forgotten (or this
     # turn forgot one). Out of memory's index, recall and every model replay.
     forgotten_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Incognito (#82): the person's words and the reply were never written
+    # (``words`` holds the placeholder); its receipts are kept, and memory,
+    # recall, the planner's context and search skip it.
+    incognito: Mapped[bool] = mapped_column(default=False, server_default="0")
 
     plans: Mapped[list[LedgerPlan]] = relationship(back_populates="turn", order_by="LedgerPlan.id")
 

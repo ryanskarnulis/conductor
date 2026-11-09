@@ -1,18 +1,7 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
-import {
-  ListMusic,
-  MessageSquarePlus,
-  PanelLeft,
-  SendHorizontal,
-  Square,
-  Trash2,
-  Volume2,
-  VolumeX,
-  X,
-} from 'lucide-react'
-import { cancelTurn } from '../../api/agent'
+import { EyeOff, ListMusic, SendHorizontal, Square, Volume2, VolumeX } from 'lucide-react'
+import { cancelTurn, getTimeline, type SendOptions } from '../../api/agent'
 import {
   Ack,
   ConfirmationCard,
@@ -26,10 +15,9 @@ import {
 } from '../../design/components'
 import { earcons, setSound, soundOn } from '../../design/earcons'
 import { prefersReducedMotion } from '../../design/motion'
-import { formatRelative } from '../../utils/dates'
 import { MicButton } from '../../voice/MicButton'
 import { playText } from '../../voice/tts'
-import type { AgentStopReason } from '../../types/agent'
+import type { AgentStopReason, Surface, Timeline } from '../../types/agent'
 import { ConductorMark } from './ConductorMark'
 import { activityLabel, elapsedSuffix } from './delegateCalls'
 import { JobCards, JobNotes } from './JobCards'
@@ -39,19 +27,23 @@ import { nextSceneState, type SceneState } from './sceneState'
 import { ShellScene } from './ShellScene'
 import { SortPanel } from '../sort/SortPanel'
 import { latestSortTurnId } from '../sort/sortTurn'
+import { dayLabel, daySeparators, incognitoLapsed, surfaceLabel, withLiveWords } from './timeline'
 import type { TurnStream } from './turnStream'
 import { buildTurns, pendingConfirm, presenceFor, type ShellTurn } from './turnView'
 import { useConversation } from './useConversation'
-import { useConversations } from './useConversations'
 import { useTurnActivity } from './useTurnActivity'
 import { delegateAckText } from './voiceAck'
 
-// The memory list (#81) is its own lazy chunk: the entry never carries it.
+// The memory list (#81) and timeline search (#82) are their own lazy chunks:
+// the entry never carries them.
 const MemoryPanel = lazy(() => import('../memory/MemoryPanel'))
+const TimelineSearch = lazy(() => import('../timeline/TimelineSearch'))
 
 // Long enough for the send-off line to be read, short enough that it still
 // feels like one motion rather than a page that forgot to redirect.
 const HANDOFF_DELAY_MS = 1_200
+// How often the incognito switch checks whether the quiet gap has passed.
+const INCOGNITO_CHECK_MS = 60_000
 
 // react-markdown is safe by default (raw HTML never rendered). Links open in
 // a new tab so a stray absolute URL in a reply can't navigate the SPA away.
@@ -89,9 +81,23 @@ function usePhone(): boolean {
   return phone
 }
 
-/** One turn of the conversation surface. The latest turn shows everything
- * (plan, confirmation, receipts, reply); earlier turns fold to what was said,
- * their receipts and the reply. */
+/** Who said it, tagged with where it came from (#82) and whether it was
+ * incognito. The live, in-flight turn has no tag yet. */
+function SaidLabel({ turn }: { turn: ShellTurn }) {
+  const who = turn.note ? 'You · from the panel' : 'You'
+  if (turn.live) return <>{who}</>
+  return (
+    <>
+      {who}
+      <span className="tl-tag">{surfaceLabel(turn.surface)}</span>
+      {turn.incognito && <span className="tl-tag tl-tag--incognito">incognito</span>}
+    </>
+  )
+}
+
+/** One turn of the timeline. The latest turn shows everything (plan,
+ * confirmation, receipts, reply); earlier turns fold to what was said, their
+ * receipts and the reply. */
 function TurnView({
   turn,
   latest,
@@ -106,9 +112,10 @@ function TurnView({
   onAnswer: (words: string) => void
 }) {
   const stop = turn.stopReason !== null && turn.stopReason !== 'completed' ? STOP_FALLBACK[turn.stopReason] : null
+  const classes = `shell-turn${latest ? '' : ' shell-turn--old'}${turn.incognito ? ' shell-turn--incognito' : ''}`
   return (
-    <article className={`shell-turn${latest ? '' : ' shell-turn--old'}`} aria-label={latest ? 'Latest turn' : 'Earlier turn'}>
-      {turn.said !== '' && <Utterance text={turn.said} label={turn.note ? 'You · from the panel' : 'You'} />}
+    <article id={`turn-${turn.key}`} className={classes} aria-label={latest ? 'Latest turn' : 'Earlier turn'}>
+      {turn.said !== '' && <Utterance text={turn.said} label={<SaidLabel turn={turn} />} />}
       {latest && turn.ack && <Ack text={turn.ack} />}
       {latest && turn.resumedNote && <ResumedNote text={turn.resumedNote} />}
       {latest && turn.steps.length > 0 && <PlanSteps steps={turn.steps} />}
@@ -163,29 +170,48 @@ function TurnView({
   )
 }
 
-export function AgentPage() {
-  const params = useParams<{ conversationId?: string }>()
-  const navigate = useNavigate()
-  const activeId = params.conversationId !== undefined ? Number(params.conversationId) : null
+/** The one timeline (#82), created on first use; a failed read says so. */
+function useTimeline(): { timeline: Timeline | null; error: string | null } {
+  const [timeline, setTimeline] = useState<Timeline | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    getTimeline().then(
+      (found) => {
+        if (active) setTimeline(found)
+      },
+      (e: unknown) => {
+        if (active) setError(e instanceof Error ? e.message : 'Failed to load the timeline')
+      },
+    )
+    return () => {
+      active = false
+    }
+  }, [])
+  return { timeline, error }
+}
 
-  const { conversations, loading: listLoading, error: listError, refresh, create, remove } = useConversations()
-  const onExchange = useCallback(() => void refresh(), [refresh])
-  const { detail, loading, error, pendingText, handoff, send, note, refresh: refreshThread } = useConversation(
-    activeId !== null && Number.isFinite(activeId) ? activeId : null,
-    onExchange,
-  )
+export function AgentPage() {
+  const { timeline, error: timelineError } = useTimeline()
+  const activeId = timeline?.id ?? null
+
+  const { detail, loading, error, pendingText, handoff, send, liveWords, note, refresh: refreshThread } = useConversation(activeId)
 
   // The sort panel opens on a turn where music actually ran its sorting tool
-  // and then stays open (see sortTurn.ts) until dismissed.
-  const messages = useMemo(() => detail?.messages ?? [], [detail])
+  // and then stays open (see sortTurn.ts) until dismissed. This session's
+  // incognito turns show the words the person read live (#82).
+  const messages = useMemo(() => withLiveWords(detail?.messages ?? [], liveWords), [detail, liveWords])
   const lastMessage = messages.length > 0 ? messages[messages.length - 1] : undefined
   const sortTurnId = latestSortTurnId(messages)
   const [panelHiddenFor, setPanelHiddenFor] = useState<number | null>(null)
 
   const [draft, setDraft] = useState('')
-  const [threadsOpen, setThreadsOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const [memoryOpen, setMemoryOpen] = useState(false)
   const [sound, setSoundState] = useState(soundOn)
+  // Incognito (#82): per request, off when flipped back or after the quiet gap.
+  const [incognito, setIncognito] = useState(false)
+  const incognitoUsedAt = useRef<number | null>(null)
   const convoEndRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLElement>(null)
   const deviceRef = useRef<HTMLDivElement>(null)
@@ -195,9 +221,9 @@ export function AgentPage() {
   const [held, setHeld] = useState<TurnStream | null>(null)
   const onTurnEnded = useCallback((ended: TurnStream) => setHeld(ended.paused !== null ? ended : null), [])
   const live = useTurnActivity(activeId, sending, onTurnEnded)
-  // Jobs the conversation started (#90): followed while no send is in flight,
+  // Jobs the timeline started (#90): followed while no send is in flight,
   // each a card until its note lands in the thread.
-  const jobs = useJobs(activeId !== null && Number.isFinite(activeId) ? activeId : null, !sending, refreshThread)
+  const jobs = useJobs(activeId, !sending, refreshThread)
   const cards = useMemo(() => jobCards(jobs.state, jobs.asks, new Set(messages.map((m) => m.id))), [jobs.state, jobs.asks, messages])
   const activity = live?.activity ?? null
   const stream = live?.stream ?? null
@@ -212,6 +238,8 @@ export function AgentPage() {
   }, [])
 
   const turns = useMemo(() => buildTurns(messages, pendingText, activity, stream, held), [messages, pendingText, activity, stream, held])
+  const items = useMemo(() => groupJobNotes(turns), [turns])
+  const separators = useMemo(() => daySeparators(items.map((item) => (item.kind === 'notes' ? item.turns[0]?.at : item.turn.when))), [items])
   const confirm = sending ? null : pendingConfirm(messages)
   // A job's note lands in the thread but is never the turn the page is about.
   const latestAt = turns.findLastIndex((turn) => !turn.jobNote)
@@ -242,6 +270,38 @@ export function AgentPage() {
     })
   }
 
+  // Incognito turns itself off after the same quiet gap the planner uses.
+  const gapMs = (timeline?.quiet_gap_seconds ?? 0) * 1000
+  const toggleIncognito = () => {
+    incognitoUsedAt.current = incognito ? null : Date.now()
+    setIncognito(!incognito)
+  }
+  useEffect(() => {
+    if (!incognito) return
+    const timer = setInterval(() => {
+      if (incognitoLapsed(incognitoUsedAt.current, Date.now(), gapMs)) {
+        incognitoUsedAt.current = null
+        setIncognito(false)
+      }
+    }, INCOGNITO_CHECK_MS)
+    return () => clearInterval(timer)
+  }, [incognito, gapMs])
+
+  /** How this turn goes out: its surface, and incognito while it is on (and
+   * the quiet gap hasn't lapsed it). Nothing extra for a plain typed turn. */
+  const sendOptions = (surface?: Surface): SendOptions | undefined => {
+    let hidden = incognito
+    if (hidden && incognitoLapsed(incognitoUsedAt.current, Date.now(), gapMs)) {
+      hidden = false
+      incognitoUsedAt.current = null
+      setIncognito(false)
+    }
+    if (hidden) incognitoUsedAt.current = Date.now()
+    if (!surface && !hidden) return undefined
+    return { ...(surface ? { surface } : {}), ...(hidden ? { incognito: true } : {}) }
+  }
+  const say = (words: string, surface?: Surface) => send(words, sendOptions(surface))
+
   // Earcons: a finished turn plucks each app string that returned a receipt;
   // a confirmation sounds once. Off unless Sound is on.
   const heardRef = useRef<number | null>(null)
@@ -258,14 +318,15 @@ export function AgentPage() {
     if (pendingConfirm(messages)) earcons.confirmation()
   }, [lastMessage, messages])
 
-  // Voice-initiated turns speak the reply (typed turns never do).
+  // Voice-initiated turns speak the reply (typed turns never do), and are
+  // tagged as voice on the timeline (#82).
   const voiceTurnRef = useRef(false)
   const ackedAppsRef = useRef(new Set<string>())
   const onTranscript = async (text: string) => {
     voiceTurnRef.current = true
     ackedAppsRef.current = new Set()
     try {
-      const reply = await send(text)
+      const reply = await say(text, 'voice')
       if (reply && localStorage.getItem('agent-voice-output') !== 'off') {
         void playText(reply)
       }
@@ -295,28 +356,15 @@ export function AgentPage() {
     convoEndRef.current?.scrollIntoView?.({ block: 'end' })
   }, [messages.length, pendingText, activity])
 
-  // Escape closes the conversations drawer.
+  // A search hit brings its turn into view, when it's on the page.
+  const [openTo, setOpenTo] = useState<number | null>(null)
   useEffect(() => {
-    if (!threadsOpen) return
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') setThreadsOpen(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [threadsOpen])
-
-  const openConversation = (id: number) => {
-    setThreadsOpen(false)
-    navigate(`/c/${id}`)
-  }
-  const startConversation = async () => {
-    const conversation = await create()
-    openConversation(conversation.id)
-  }
-  // No confirm prompt: deletes are soft (recoverable server-side).
-  const removeConversation = async (id: number) => {
-    await remove(id)
-    if (id === activeId) navigate('/')
+    if (openTo === null || searchOpen) return
+    document.getElementById(`turn-m${openTo}`)?.scrollIntoView?.({ block: 'center' })
+  }, [openTo, searchOpen])
+  const openHit = (messageId: number | null) => {
+    setSearchOpen(false)
+    setOpenTo(messageId)
   }
 
   const submit = async (event: FormEvent) => {
@@ -324,11 +372,11 @@ export function AgentPage() {
     const content = draft.trim()
     if (content === '' || sending || activeId === null) return
     setDraft('')
-    await send(content)
+    await say(content)
   }
   const answer = (words: string) => {
     if (sending || activeId === null) return
-    void send(words)
+    void say(words)
   }
   const stopTurn = () => {
     if (activeId !== null) void cancelTurn(activeId)
@@ -343,16 +391,6 @@ export function AgentPage() {
   return (
     <main className="shell" data-view={phone ? 'phone' : 'desktop'}>
       <header className="shell-bar">
-        <button
-          type="button"
-          className="shell-iconbtn"
-          aria-label="Conversations"
-          aria-expanded={threadsOpen}
-          aria-controls="shell-threads"
-          onClick={() => setThreadsOpen((open) => !open)}
-        >
-          <PanelLeft size={17} aria-hidden="true" />
-        </button>
         <span className="shell-brand">
           <ConductorMark size={18} />
           <span className="shell-wordmark">Conductor</span>
@@ -362,9 +400,25 @@ export function AgentPage() {
         <button
           type="button"
           className="shell-iconbtn"
+          aria-label="Search the timeline"
+          aria-expanded={searchOpen}
+          aria-controls="shell-search"
+          onClick={() => {
+            setMemoryOpen(false)
+            setSearchOpen((open) => !open)
+          }}
+        >
+          Search
+        </button>
+        <button
+          type="button"
+          className="shell-iconbtn"
           aria-expanded={memoryOpen}
           aria-controls="shell-memory"
-          onClick={() => setMemoryOpen((open) => !open)}
+          onClick={() => {
+            setSearchOpen(false)
+            setMemoryOpen((open) => !open)
+          }}
         >
           Memory
         </button>
@@ -372,45 +426,6 @@ export function AgentPage() {
           {sound ? 'Sound: on' : 'Sound'}
         </button>
       </header>
-
-      <aside id="shell-threads" className="shell-threads" aria-label="Conversations" hidden={!threadsOpen}>
-        <div className="shell-threads-head">
-          <button type="button" className="agent-new-chat" onClick={() => void startConversation()}>
-            <MessageSquarePlus size={17} aria-hidden="true" />
-            New conversation
-          </button>
-          <button type="button" className="shell-iconbtn" aria-label="Close conversations" onClick={() => setThreadsOpen(false)}>
-            <X size={17} aria-hidden="true" />
-          </button>
-        </div>
-        {listError && (
-          <p role="alert" className="error">
-            {listError}
-          </p>
-        )}
-        {listLoading && <div className="page-loading">Loading…</div>}
-        {!listLoading && conversations.length === 0 && <p className="agent-sidebar-empty">No conversations yet.</p>}
-        <ul className="agent-conversation-list">
-          {conversations.map((conversation) => (
-            <li key={conversation.id}>
-              <div className={`agent-conversation${conversation.id === activeId ? ' active' : ''}`}>
-                <button type="button" className="agent-conversation-open" onClick={() => openConversation(conversation.id)}>
-                  <span className="agent-conversation-title">{conversation.title ?? 'New conversation'}</span>
-                  <span className="agent-conversation-time">{formatRelative(conversation.updated_at)}</span>
-                </button>
-                <button
-                  type="button"
-                  className="agent-conversation-delete"
-                  aria-label={`Delete conversation ${conversation.title ?? conversation.id}`}
-                  onClick={() => void removeConversation(conversation.id)}
-                >
-                  <Trash2 size={15} aria-hidden="true" />
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      </aside>
 
       <div className="shell-stage" ref={deviceRef}>
         <ShellScene getState={getSceneState} phone={phone} reducedMotion={reducedMotion} panelRef={panelRef} deviceRef={deviceRef} />
@@ -420,41 +435,53 @@ export function AgentPage() {
             <Suspense fallback={null}>
               <MemoryPanel conversationId={activeId} onClose={() => setMemoryOpen(false)} onChanged={refreshThread} />
             </Suspense>
+          ) : searchOpen ? (
+            <Suspense fallback={null}>
+              <TimelineSearch onClose={() => setSearchOpen(false)} onOpen={openHit} />
+            </Suspense>
           ) : activeId === null ? (
             <div className="shell-welcome">
               <h1>Conductor</h1>
-              <p>
-                One place to talk to the house. Ask for anything an app can do — “what’s due today?”, “play e4” — and
-                conductor routes it to the right app’s agent and relays the answer.
-              </p>
-              <button type="button" className="agent-new-chat" onClick={() => void startConversation()}>
-                <MessageSquarePlus size={17} aria-hidden="true" />
-                Start a conversation
-              </button>
+              {timelineError ? (
+                <p role="alert" className="error">
+                  {timelineError}
+                </p>
+              ) : (
+                <div className="page-loading">Loading the timeline…</div>
+              )}
             </div>
           ) : (
             <>
-              <div className="shell-convo" aria-label="Conversation">
+              <div className="shell-convo" aria-label="Timeline">
                 {error && (
                   <p role="alert" className="error">
                     {error}
                   </p>
                 )}
-                {loading && <div className="page-loading">Loading conversation…</div>}
-                {groupJobNotes(turns).map((item) =>
-                  item.kind === 'notes' ? (
-                    <JobNotes key={item.key} turns={item.turns} />
-                  ) : (
-                    <TurnView
-                      key={item.turn.key}
-                      turn={item.turn}
-                      latest={item.index === latestAt}
-                      confirm={item.index === latestAt && confirm ? confirm : null}
-                      busy={sending}
-                      onAnswer={answer}
-                    />
-                  ),
-                )}
+                {loading && <div className="page-loading">Loading the timeline…</div>}
+                {items.map((item, index) => {
+                  const day = separators.get(index)
+                  return (
+                    <Fragment key={item.kind === 'notes' ? item.key : item.turn.key}>
+                      {day && (
+                        <p className="tl-day" role="separator">
+                          {dayLabel(day)}
+                        </p>
+                      )}
+                      {item.kind === 'notes' ? (
+                        <JobNotes turns={item.turns} />
+                      ) : (
+                        <TurnView
+                          turn={item.turn}
+                          latest={item.index === latestAt}
+                          confirm={item.index === latestAt && confirm ? confirm : null}
+                          busy={sending}
+                          onAnswer={answer}
+                        />
+                      )}
+                    </Fragment>
+                  )
+                })}
                 <JobCards
                   cards={cards}
                   announce={jobs.state.announce}
@@ -492,17 +519,32 @@ export function AgentPage() {
                 <div ref={convoEndRef} className="agent-thread-sentinel" aria-hidden="true" />
               </div>
 
+              {incognito && (
+                <p className="tl-incognito-note" role="status">
+                  {timeline?.incognito_notice}
+                </p>
+              )}
               <form className="agent-composer" onSubmit={(e) => void submit(e)}>
                 <textarea
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={onComposerKeyDown}
-                  placeholder={sending ? 'Conductor is working…' : 'Ask conductor…'}
+                  placeholder={sending ? 'Conductor is working…' : incognito ? 'Ask conductor, incognito…' : 'Ask conductor…'}
                   aria-label="Message conductor"
                   rows={1}
                   disabled={sending}
                 />
                 <MicButton onTranscript={onTranscript} disabled={sending} />
+                <button
+                  type="button"
+                  className="agent-voice-toggle tl-incognito"
+                  onClick={toggleIncognito}
+                  aria-pressed={incognito}
+                  aria-label="Incognito"
+                  title={incognito ? 'Incognito on: this turn’s words won’t be kept' : 'Incognito: don’t keep this turn’s words'}
+                >
+                  <EyeOff size={17} aria-hidden="true" />
+                </button>
                 <button
                   type="button"
                   className="agent-voice-toggle"

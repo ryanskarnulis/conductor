@@ -1,4 +1,5 @@
-"""Session scenarios: S1–S16 (#56, ``docs/revamp-research-2026-11.md`` §1.1), M1–M3 (#81, #134).
+"""Session scenarios: S1–S16 (#56, ``docs/revamp-research-2026-11.md`` §1.1), M1–M3 (#81, #134),
+T1–T2 and S1v (#82: one timeline, incognito, a voice-tagged S1).
 
 Each is the person's side of a conversation plus checks on what came of it.
 Checks read the end state and the replies, never the path: which tools ran in
@@ -37,6 +38,7 @@ from tests.session_harness import (
     NewConversation,
     Say,
     Scenario,
+    Search,
     Session,
     Settle,
     StopAfter,
@@ -155,6 +157,22 @@ S1 = Scenario(
     "what's due today: an answer from PCC's data",
     (Say("what's due today?"),),
     (_s1,),
+    tier="gate",
+    script=lambda w: [
+        plan(look("tasks")),
+        _say("Two things due today: “Buy groceries” and “Call mom”."),
+    ],
+)
+
+
+# S1 again, said by voice (#82): every timeline entry carries its surface, and
+# the voice tag puts the spoken-reply line in State.
+S1V = Scenario(
+    "S1v",
+    "what's due today, by voice: the same answer from PCC's data",
+    (Say("what's due today?", surface="voice"),),
+    (_s1,),
+    # Gate since #82: 10/10 across two live runs (5/5 each).
     tier="gate",
     script=lambda w: [
         plan(look("tasks")),
@@ -784,8 +802,83 @@ FACT_IN_ASK = Scenario(
 )
 
 
+# --- T1 the timeline across a quiet gap (#82) --------------------------------------------
+
+
+def _timeline_recall(session: Session) -> None:
+    only_writes(session, {("create", "shel"), ("create", "steel")})
+    later = _lower(session.turn("later").reply)
+    # The decision is a day old, past the quiet gap: it is no longer "this
+    # conversation", and said in words only, so recall is the one way back.
+    assert "steel" in later, "the earlier day's decision (steel rack) wasn't recalled"
+    assert "wood" not in later, "made up a decision"
+
+
+TIMELINE_RECALL = Scenario(
+    "T1",
+    "one timeline: a decision said yesterday, past the quiet gap, comes back through recall",
+    (
+        Say("for the garage shelves, let's go with the steel rack", label="decide"),
+        NewConversation(),
+        Say("what did we decide about the garage shelves?", label="later"),
+    ),
+    (_timeline_recall,),
+    # Gate since #82: 10/10 across two live runs (5/5 each).
+    tier="gate",
+    script=lambda w: [
+        answer("chat"),
+        _spoken("Steel rack it is."),
+        plan({"do": "recall", "query": "garage shelves decision"}),
+        _say("Yesterday you said to go with the steel rack."),
+    ],
+)
+
+
+# --- T2 incognito (#82) ----------------------------------------------------------------------
+
+_GATE_CODE = "4417"
+
+
+def _incognito_kept_nothing(session: Session) -> None:
+    secret, later = session.turn("secret"), session.turn("later")
+    assert secret.incognito, "the secret wasn't sent incognito"
+    saved = [r for r in session.world.receipts if r.app == "memory"]
+    assert not saved, "an incognito turn saved a fact: " + ", ".join(r.title for r in saved)
+    # Not the plan: nothing the later turn sent anywhere carries the words.
+    sent = json.dumps([call.get("arguments") for call in later.tools])
+    assert _GATE_CODE not in sent, f"the later plan carried the incognito words: {sent}"
+    # Not recall: a recall the later turn ran found nothing of it.
+    recalled = json.dumps([call.get("app_record") for call in later.tools])
+    assert _GATE_CODE not in recalled, "recall found the incognito words"
+    assert _GATE_CODE not in (later.reply or ""), "the later reply knew the incognito words"
+    # Not search.
+    assert session.searches["code"] == [], f"search found it: {session.searches['code']}"
+
+
+INCOGNITO = Scenario(
+    "T2",
+    "incognito: 'remember the gate code' keeps nothing; later the plan, recall and search "
+    "don't know it",
+    (
+        Say(f"remember the gate code is {_GATE_CODE}", label="secret", incognito=True),
+        Say("what's the gate code?", label="later"),
+        Search(_GATE_CODE, label="code"),
+    ),
+    (_incognito_kept_nothing,),
+    # Gate since #82: 10/10 across two live runs (5/5 each).
+    tier="gate",
+    script=lambda w: [
+        _ask("memory", f"remember the gate code is {_GATE_CODE}"),
+        _say("Nothing was saved: incognito is on, so nothing from this turn is remembered."),
+        plan({"do": "recall", "query": "gate code"}),
+        _say("I have no record of the gate code."),
+    ],
+)
+
+
 SCENARIOS: tuple[Scenario, ...] = (
     S1,
+    S1V,
     S2,
     S2R,
     S3,
@@ -805,4 +898,6 @@ SCENARIOS: tuple[Scenario, ...] = (
     REMEMBER_USED,
     FORGET_GONE,
     FACT_IN_ASK,
+    TIMELINE_RECALL,
+    INCOGNITO,
 )

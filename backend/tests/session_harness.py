@@ -59,6 +59,8 @@ class TurnRecord:
     label: str | None = None
     # The person pressed Stop during this turn: it ends ``cancelled``.
     stopped: bool = False
+    # Sent incognito (#82): its words and reply are never written.
+    incognito: bool = False
 
     @property
     def acted(self) -> list[str]:
@@ -74,12 +76,16 @@ class Driver(Protocol):
         fresh conversation."""
 
     def new_conversation(self) -> None:
-        """A later session (another day, another surface): a new conversation
-        over the same world. Whatever the runtime remembers across it is its
-        memory."""
+        """A later session (another day, another surface) over the same
+        world: since the timeline (#82), the same conversation after a quiet
+        gap. Whatever the runtime remembers across it is its memory."""
 
-    def say(self, text: str, *, surface: str) -> TurnRecord:
-        """One person turn through the runtime's real entry point."""
+    def say(self, text: str, *, surface: str, incognito: bool = False) -> TurnRecord:
+        """One person turn through the runtime's real entry point; an
+        ``incognito`` one keeps none of its words (#82)."""
+
+    def search(self, query: str) -> list[dict[str, Any]]:
+        """The person's timeline search (#82): the turns it finds."""
 
     def stop(self) -> None:
         """The person's Stop on the in-flight turn (``"stop"`` capability)."""
@@ -103,6 +109,17 @@ class Say:
     text: str
     label: str | None = None
     surface: str = "desktop"
+    # Incognito (#82): the apps see the request; conductor keeps no words.
+    incognito: bool = False
+
+
+@dataclass(frozen=True)
+class Search:
+    """The person searches the timeline (#82); what it found is kept on the
+    session under ``label`` for the checks."""
+
+    query: str
+    label: str
 
 
 @dataclass(frozen=True)
@@ -116,7 +133,7 @@ class ConfirmIfAsked:
 
 @dataclass(frozen=True)
 class NewConversation:
-    pass
+    """Another day: the timeline after a quiet gap (#82), not a new thread."""
 
 
 @dataclass(frozen=True)
@@ -141,7 +158,7 @@ class StopAfter:
     label: str | None = None
 
 
-Step = Say | ConfirmIfAsked | NewConversation | Advance | Settle | StopAfter
+Step = Say | ConfirmIfAsked | NewConversation | Advance | Settle | StopAfter | Search
 
 
 # --- the session a check reads ------------------------------------------------------
@@ -153,6 +170,8 @@ class Session:
     turns: list[TurnRecord] = field(default_factory=list)
     unprompted: list[str] = field(default_factory=list)
     claims: list[tuple[int, Claim]] = field(default_factory=list)
+    # What each ``Search`` step found, by its label.
+    searches: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     def turn(self, label: str) -> TurnRecord:
         for record in self.turns:
@@ -290,10 +309,15 @@ def run_sample(scenario: Scenario, driver: Driver, world: World | None = None) -
 
 
 def _say(
-    driver: Driver, session: Session, text: str, label: str | None, surface: str
+    driver: Driver,
+    session: Session,
+    text: str,
+    label: str | None,
+    surface: str,
+    incognito: bool = False,
 ) -> TurnRecord:
     session.world.turn = len(session.turns) + 1
-    record = driver.say(text, surface=surface)
+    record = driver.say(text, surface=surface, incognito=incognito)
     record.label = label
     session.turns.append(record)
     session.world.receipts.extend(memory_writes(record))
@@ -327,7 +351,10 @@ def memory_writes(record: TurnRecord) -> list[Receipt]:
 def _run_step(step: Step, driver: Driver, session: Session) -> TurnRecord | None:
     world = session.world
     if isinstance(step, Say):
-        return _say(driver, session, step.text, step.label, step.surface)
+        return _say(driver, session, step.text, step.label, step.surface, step.incognito)
+    if isinstance(step, Search):
+        session.searches[step.label] = driver.search(step.query)
+        return None
     if isinstance(step, ConfirmIfAsked):
         last = session.last
         if session.writes(last) or not (last.reply and "?" in last.reply):
@@ -431,7 +458,8 @@ class LoopDriver:
     "new conversation" must not find another world's conversations (#64's
     cross-conversation recall reads them). ``settle`` runs before the
     unprompted messages are read: time has passed, so the job watcher looks
-    at every running job now (#76).
+    at every running job now (#76). ``pass_time`` is "another day" on the
+    one timeline (#82): the record moves back past the quiet gap.
     """
 
     def __init__(
@@ -443,6 +471,7 @@ class LoopDriver:
         reset: Callable[[], None] = lambda: None,
         fresh_db: Callable[[], None] = lambda: None,
         settle: Callable[[], None] = lambda: None,
+        pass_time: Callable[[], None] = lambda: None,
     ) -> None:
         self._client = client
         self._holder = holder
@@ -450,6 +479,7 @@ class LoopDriver:
         self._reset = reset
         self._fresh_db = fresh_db
         self._settle = settle
+        self._pass_time = pass_time
         self._conversation: int | None = None
         self._seen: int = 0
         # The OpenAPI paths, not ``app.routes``: included routers nest there.
@@ -466,24 +496,28 @@ class LoopDriver:
     def begin(self, world: World) -> None:
         self._fresh_db()
         self._holder.bind(world)
-        self.new_conversation()
-
-    def new_conversation(self) -> None:
-        created = self._client.post("/api/agent/conversations", json={})
-        assert created.status_code == 201, created.text
-        self._conversation = created.json()["id"]
+        timeline = self._client.get("/api/agent/timeline")
+        assert timeline.status_code == 200, timeline.text
+        self._conversation = timeline.json()["id"]
         self._seen = 0
 
-    def say(self, text: str, *, surface: str) -> TurnRecord:
+    def new_conversation(self) -> None:
+        # One timeline (#82): another day is a quiet gap, not a new thread.
+        self._pass_time()
+
+    def say(self, text: str, *, surface: str, incognito: bool = False) -> TurnRecord:
         # A voice turn reaches conductor as the transcribed text plus its
-        # surface, as the voice client sends it (#64's ``Now``).
+        # surface, as the voice client sends it (#64's ``Now``); an incognito
+        # one carries the page's switch (#82).
         assert self._conversation is not None
         self._reset()
         index = self._holder.world.turn if self._holder.world else 0
         started = time.monotonic()
+        body: dict[str, Any] = {"content": text, "surface": surface}
+        if incognito:
+            body["incognito"] = True
         response = self._client.post(
-            f"/api/agent/conversations/{self._conversation}/messages",
-            json={"content": text, "surface": surface},
+            f"/api/agent/conversations/{self._conversation}/messages", json=body
         )
         seconds = time.monotonic() - started
         if response.status_code != 200:
@@ -505,7 +539,13 @@ class LoopDriver:
             stop_reason=assistant["stop_reason"],
             tools=list(assistant["tool_calls"] or []),
             seconds=seconds,
+            incognito=incognito,
         )
+
+    def search(self, query: str) -> list[dict[str, Any]]:
+        found = self._client.get("/api/agent/timeline/search", params={"q": query})
+        assert found.status_code == 200, found.text
+        return list(found.json())
 
     def settle(self) -> None:
         self._settle()
@@ -565,6 +605,7 @@ __all__ = [
     "Sample",
     "Say",
     "Scenario",
+    "Search",
     "Settle",
     "Session",
     "StopAfter",

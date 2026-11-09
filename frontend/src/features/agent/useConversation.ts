@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getConversation, postMessage, postNote } from '../../api/agent'
+import { getConversation, postMessage, postNote, type SendOptions } from '../../api/agent'
 import { ApiError } from '../../api/client'
 import type { ConversationDetail } from '../../types/agent'
 import { handoffFrom, type Handoff } from './handoff'
@@ -17,7 +17,10 @@ interface UseConversation {
   handoff: Handoff | null
   /** Resolves to the assistant's reply text on success (possibly ''), or
    * null when the run failed — voice uses the text to speak the reply. */
-  send: (content: string) => Promise<string | null>
+  send: (content: string, options?: SendOptions) => Promise<string | null>
+  /** This session's incognito turns (#82): message id → the words or reply
+   * the person read live. The server never wrote them; a reload forgets them. */
+  liveWords: ReadonlyMap<number, string | null>
   /** Record an action taken in the UI as a turn of its own. No model runs —
    * the sort panel files through the app directly, and the thread still has to
    * show that the question was answered. */
@@ -69,6 +72,8 @@ export function useConversation(
   const [errorState, setErrorState] = useState<Tagged<string> | null>(null)
   const [pending, setPending] = useState<Tagged<string> | null>(null)
   const [handoffState, setHandoffState] = useState<Tagged<Handoff> | null>(null)
+  // Incognito turns' words and replies, by message id: this page's memory only.
+  const [liveWords, setLiveWords] = useState<ReadonlyMap<number, string | null>>(() => new Map())
 
   const detail = forId(loaded, conversationId)
   const error = forId(errorState, conversationId)
@@ -97,14 +102,20 @@ export function useConversation(
   }, [conversationId])
 
   const send = useCallback(
-    async (content: string): Promise<string | null> => {
+    async (content: string, options?: SendOptions): Promise<string | null> => {
       if (conversationId === null) return null
       setErrorState(null)
       setPending({ id: conversationId, value: content })
       let reply: string | null = null
       try {
-        const exchange = await postMessage(conversationId, content)
+        const exchange = options ? await postMessage(conversationId, content, options) : await postMessage(conversationId, content)
         reply = exchange.assistant_message.content ?? ''
+        if (exchange.user_message.incognito) {
+          // Incognito (#82): the server wrote "(incognito)". The person reads
+          // the words and the reply in this page only, until it reloads.
+          const { user_message: said, assistant_message: answered } = exchange
+          setLiveWords((prev) => new Map(prev).set(said.id, said.content).set(answered.id, answered.content))
+        }
         // Read the handoff off the live turn only. It rides on the persisted
         // trajectory, so history has it too — but replaying history must not
         // re-navigate, which is why it's captured here and not derived from
@@ -160,5 +171,5 @@ export function useConversation(
     }
   }, [conversationId, onExchange])
 
-  return { detail, loading, error, pendingText, handoff, send, note, refresh }
+  return { detail, loading, error, pendingText, handoff, send, liveWords, note, refresh }
 }

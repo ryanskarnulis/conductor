@@ -1,10 +1,11 @@
 import { apiClient, apiUrl } from './client'
 import type {
   AgentMessage,
-  Conversation,
   ConversationDetail,
   JobCancelResult,
   MessageExchange,
+  Surface,
+  Timeline,
   TurnActivity,
 } from '../types/agent'
 
@@ -13,18 +14,10 @@ import type {
 // token. Match the backend provider's own read timeout, not the 30 s default.
 const AGENT_RUN_TIMEOUT_MS = 300_000
 
-export async function listConversations(): Promise<Conversation[]> {
-  const res = await apiClient('/api/agent/conversations')
-  return (await res.json()) as Conversation[]
-}
-
-export async function createConversation(): Promise<Conversation> {
-  const res = await apiClient('/api/agent/conversations', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
-  })
-  return (await res.json()) as Conversation
+/** The one timeline (#82), created on first use: every surface writes to it. */
+export async function getTimeline(): Promise<Timeline> {
+  const res = await apiClient('/api/agent/timeline')
+  return (await res.json()) as Timeline
 }
 
 /** Record something the person did in the UI (filing a song from the sort
@@ -44,18 +37,22 @@ export async function getConversation(id: number): Promise<ConversationDetail> {
   return (await res.json()) as ConversationDetail
 }
 
-export async function deleteConversation(id: number): Promise<void> {
-  await apiClient(`/api/agent/conversations/${id}`, { method: 'DELETE' })
+/** How a turn is sent: the surface it came from, and incognito (#82): its
+ * words and reply are never written; the apps still see the request. */
+export interface SendOptions {
+  surface?: Surface
+  incognito?: boolean
 }
 
 export async function postMessage(
   conversationId: number,
   content: string,
+  options: SendOptions = {},
 ): Promise<MessageExchange> {
   const res = await apiClient(`/api/agent/conversations/${conversationId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, ...options }),
     timeoutMs: AGENT_RUN_TIMEOUT_MS,
   })
   return (await res.json()) as MessageExchange

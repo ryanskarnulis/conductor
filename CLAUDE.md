@@ -99,6 +99,23 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   calls from earlier conversations when the registry has no match), then the
   person's words. The planner prompt stays byte-identical; the opening is
   capped (`turn_context.MAX_CHARS`).
+- **One timeline** (#82, `app/services/conversations.py`): every surface
+  writes to one conversation (`kind = timeline`, created clean on first use;
+  `POST /agent/conversations` answers it and it is never deleted: "forget
+  that" is how). Older conversations are `legacy`: out of the API, still
+  read by recall and matches. "This conversation" for the planner is the
+  timeline since its last quiet gap (`QUIET_GAP`, 3 h): stored turns, recent
+  entities, a waiting plan, undo, the self-report, "forget that" and the
+  apps' subagent threads (`thread_key`) all follow that window. Older turns
+  arrive only as cross-day hits labelled with their day. Session evals'
+  "new conversation" is the record moved back a day (`tests/eval_db.age`).
+- **Incognito** (#82, `app/ai/incognito.py`): a per-request switch. The
+  person's words and the reply are stored as "(incognito)", and calls,
+  steps and finished plans keep no words; receipts and entities stay. Memory
+  indexing, recall, matches, recent entities, the self-report and timeline
+  search skip it; no fact is saved or attached; the trace and the capture
+  write nothing, and log lines blank wordy fields. Only the live response
+  carries the reply. The page turns it off after the same quiet gap.
 - **Delegate v1.1** (#67): each `ask` mints one `Idempotency-Key`; only a
   connection dropped after send is resent, under that key. The app's typed
   record is stored per call (`app_record`, never sent to the model), and a 5xx

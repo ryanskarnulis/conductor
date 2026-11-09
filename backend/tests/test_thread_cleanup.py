@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api import routes_agent
-from app.db.models import DelegateThread
+from app.db.models import Conversation, DelegateThread
 from app.fleet.delegate import CONDUCTOR_ACTOR, DelegateClient
 from app.fleet.manifests import AgentSpec, Fleet, FleetApp
 from app.fleet.thread_cleanup import SubagentThreadCleanup
@@ -120,7 +120,12 @@ def test_a_master_with_no_threads_makes_no_calls(session_factory: sessionmaker[S
 def test_deleting_a_conversation_cleans_up_its_threads(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
-    conversation_id = int(client.post("/api/agent/conversations", json={}).json()["id"])
+    # The timeline is never deleted (#82); a side thread (#139) will be.
+    with session_factory() as session:
+        thread = Conversation(title="side", kind="thread")
+        session.add(thread)
+        session.commit()
+        conversation_id = thread.id
     DbThreadStore(session_factory).set(str(conversation_id), "tasks", 41)
     seen: list[httpx.Request] = []
     fastapi_app.dependency_overrides[routes_agent.get_thread_cleanup] = lambda: _cleanup(

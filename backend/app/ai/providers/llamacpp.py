@@ -28,6 +28,7 @@ import httpx
 import structlog
 from pydantic import BaseModel, Field, ValidationError
 
+from app.ai import incognito
 from app.ai.context_capture import CallStamp, ContextCapture, context_capture_from_settings
 from app.ai.provider import (
     ChatResult,
@@ -317,7 +318,8 @@ class LlamaCppProvider:
         )
 
     def _begin_capture(self) -> CallStamp | None:
-        if self._capture is None:
+        # An incognito turn's calls (#82) are never captured: they hold its words.
+        if self._capture is None or incognito.active():
             return None
         try:
             return self._capture.begin()

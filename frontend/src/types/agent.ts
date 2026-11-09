@@ -84,10 +84,42 @@ export interface AgentMessage {
   tool_calls: ToolCallRecord[] | null
   stop_reason: AgentStopReason | typeof JOB_NOTE | null
   created_at: string
+  /** The surface the turn came from (#82): null is the web page, typed. */
+  surface?: Surface | null
+  /** An incognito turn (#82): its words and reply were never written, so
+   * `content` is "(incognito)" — except on the live exchange, which carries
+   * what the person reads now. */
+  incognito?: boolean
 }
+
+/** Where a turn came from (backend `MessageCreate.surface`). */
+export type Surface = 'desktop' | 'phone' | 'voice' | 'room_speaker'
+
+/** What an incognito turn's words and reply are stored as. */
+export const INCOGNITO = '(incognito)'
 
 export interface ConversationDetail extends Conversation {
   messages: AgentMessage[]
+}
+
+/** The one timeline (#82): its newest messages, the quiet gap after which
+ * incognito turns itself off, and the line the switch shows. */
+export interface Timeline extends ConversationDetail {
+  quiet_gap_seconds: number
+  incognito_notice: string
+}
+
+/** One timeline turn a search found (backend `TimelineHit`). */
+export interface TimelineHit {
+  turn_id: number
+  message_id: number | null
+  at: string
+  surface: Surface | null
+  kind: 'message' | 'note' | 'job' | string
+  said: string | null
+  reply: string | null
+  titles: string[]
+  matched: ('words' | 'reply' | 'receipt')[]
 }
 
 export interface MessageExchange {

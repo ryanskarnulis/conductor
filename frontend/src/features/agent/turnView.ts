@@ -55,6 +55,12 @@ export interface ShellTurn {
   jobNote?: boolean
   /** When a job's note was posted. */
   at?: string | null
+  /** When the turn began (#82: the timeline's day separators). */
+  when?: string | null
+  /** The surface it came from (#82), null for the web page typed. */
+  surface?: string | null
+  /** Incognito (#82): its words and reply were never written. */
+  incognito?: boolean
 }
 
 export interface PendingConfirmView {
@@ -356,6 +362,9 @@ export function buildTurns(
       live: false,
       jobNote: reply?.stop_reason === JOB_NOTE,
       at: reply?.stop_reason === JOB_NOTE ? reply.created_at : null,
+      when: m.created_at,
+      surface: m.surface ?? null,
+      incognito: m.incognito === true,
     })
     if (reply && !orphan) i++
   }

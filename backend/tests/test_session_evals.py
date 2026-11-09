@@ -52,7 +52,7 @@ from app.services.job_watcher import JobWatcher
 from app.services.thinker import Thinker, think_provider_from_settings
 from app.tools import registry
 from tests import eval_seed
-from tests.eval_db import database_wiper
+from tests.eval_db import database_ager, database_wiper
 from tests.evalstats import (
     Decision,
     GateAborted,
@@ -76,6 +76,7 @@ from tests.session_harness import (
 )
 from tests.session_scenarios import (
     FORGET_GONE,
+    INCOGNITO,
     REMEMBER_USED,
     S2,
     S3,
@@ -86,6 +87,7 @@ from tests.session_scenarios import (
     S15,
     S16,
     SCENARIOS,
+    TIMELINE_RECALL,
     YES,
     answer,
     ask,
@@ -197,6 +199,7 @@ class _ScriptedRun:
             tool_names=_tool_names,
             reset=rate_limit._reset,
             fresh_db=database_wiper(db_session),
+            pass_time=database_ager(db_session),
             settle=settle,
         )
 
@@ -294,6 +297,43 @@ def test_compiled_s5_a_guessed_decision_still_gets_codes_no_record(
     script[-1] = text_turn("You picked the wooden shelves.")
     sample = scripted.run(S5, script)
     assert "no record" in (sample.session.last.reply or "")
+
+
+def test_compiled_t1_sees_only_recall_of_the_day_before(scripted: _ScriptedRun) -> None:
+    # #82: past the quiet gap the decision isn't "this conversation" any more;
+    # the planner's opening has no record of it, and the recall cites it by day.
+    sample = scripted.run(TIMELINE_RECALL)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    planner = [r for r in scripted.provider.requests if _is_planner(r)]
+    assert "steel" not in planner[-1]["messages"][1]["content"].split("The person said")[0]
+    (recalled,) = sample.session.turn("later").tools
+    assert "steel rack" in recalled["app_record"][0]["fact"]
+
+
+def test_a_t1_answer_without_the_recall_fails(scripted: _ScriptedRun) -> None:
+    assert TIMELINE_RECALL.script is not None
+    script = TIMELINE_RECALL.script(World())
+    script[2:] = [answer("chat"), text_turn('{"about_you": false, "reply": "Wood, I think."}')]
+    _fails(scripted.run(TIMELINE_RECALL, script), "wasn't recalled")
+
+
+def test_compiled_t2_keeps_the_incognito_words_out_of_the_next_plan(
+    scripted: _ScriptedRun,
+) -> None:
+    sample = scripted.run(INCOGNITO)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    planner = [r for r in scripted.provider.requests if _is_planner(r)]
+    assert "4417" not in planner[-1]["messages"][1]["content"].split("The person said")[0]
+
+
+def test_a_t2_plan_carrying_the_incognito_words_fails(scripted: _ScriptedRun) -> None:
+    assert INCOGNITO.script is not None
+    script = INCOGNITO.script(World())
+    script[2:] = [
+        plan({"do": "recall", "query": "gate code 4417"}),
+        text_turn("I have no record of the gate code."),
+    ]
+    _fails(scripted.run(INCOGNITO, script), "carried the incognito words")
 
 
 def test_compiled_s11_says_what_cant_be_undone_when_the_narrator_doesnt(
@@ -473,6 +513,7 @@ def live(
             tool_names=_tool_names,
             reset=rate_limit._reset,
             fresh_db=database_wiper(db_session),
+            pass_time=database_ager(db_session),
             # A think (#78) runs on the real 26B, unseeded, when S14 waits.
             settle=_watching(session_factory, holder, provider, think_provider_from_settings),
         )
