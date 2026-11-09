@@ -173,6 +173,18 @@ def user_message(context: str | None, words: str) -> str:
     return f"{context}\n\n{said}" if context else said
 
 
+def _problems(plan: plans.Plan, words: str, checks: plans.Checks) -> list[str]:
+    """The validator's objections, plus the repairs that read the person's
+    words against State: a recalled answer (#127), a remembered topic
+    nothing saved is about, and a lookup of a fact State lists (#134)."""
+    return (
+        plans.problems(plan, checks)
+        + plans.recalled_answer(plan, words, checks.context)
+        + plans.remembered_topic(plan, words, checks.context)
+        + plans.looked_up_fact(plan, words, checks.context)
+    )
+
+
 def compile_turn(
     chat: PlannerChat,
     *,
@@ -210,9 +222,7 @@ def compile_turn(
             found = [f"not a plan: {str(exc).splitlines()[0][:200]}"]
             plan = None
         if plan is not None:
-            found = plans.problems(plan, checks) + plans.recalled_answer(
-                plan, words, checks.context
-            )
+            found = _problems(plan, words, checks)
         compiled.problems = found
         if plan is not None and not found:
             compiled.plan = plan
@@ -289,9 +299,7 @@ def repair_turn(
     except ValueError as exc:
         previous.problems = [f"not a plan: {str(exc).splitlines()[0][:200]}"]
         return previous
-    problems = (
-        plans.problems(plan, checks) + plans.recalled_answer(plan, words, checks.context)
-    ) or plans.unrunnable(plan)
+    problems = _problems(plan, words, checks) or plans.unrunnable(plan)
     previous.problems = problems
     if not problems:
         previous.plan = plan
