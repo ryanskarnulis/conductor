@@ -172,7 +172,8 @@ S1V = Scenario(
     "what's due today, by voice: the same answer from PCC's data",
     (Say("what's due today?", surface="voice"),),
     (_s1,),
-    tier="frontier",
+    # Gate since #82: 10/10 across two live runs (5/5 each).
+    tier="gate",
     script=lambda w: [
         plan(look("tasks")),
         _say("Two things due today: “Buy groceries” and “Call mom”."),
@@ -822,7 +823,8 @@ TIMELINE_RECALL = Scenario(
         Say("what did we decide about the garage shelves?", label="later"),
     ),
     (_timeline_recall,),
-    tier="frontier",
+    # Gate since #82: 10/10 across two live runs (5/5 each).
+    tier="gate",
     script=lambda w: [
         answer("chat"),
         _spoken("Steel rack it is."),
@@ -863,7 +865,8 @@ INCOGNITO = Scenario(
         Search(_GATE_CODE, label="code"),
     ),
     (_incognito_kept_nothing,),
-    tier="frontier",
+    # Gate since #82: 10/10 across two live runs (5/5 each).
+    tier="gate",
     script=lambda w: [
         _ask("memory", f"remember the gate code is {_GATE_CODE}"),
         _say("Nothing was saved: incognito is on, so nothing from this turn is remembered."),

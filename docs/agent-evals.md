@@ -1015,3 +1015,59 @@ Session evals, final code, gate tier at 5. M3 is new and gated:
 - Frontier: S3, S11, S12, S14 and S15 were 5/5, S10 4/5 (one Stop reply
   quoted a call line), and S13 0/5 (the brief, as before).
 - Claims were 128/129 backed (the S10 Stop line). No infra misses.
+
+### One timeline and incognito (#82, 2026-11-09)
+
+The planner prompt, step kinds, compiler and validator are unchanged. What
+changed is the opening: "this conversation" is now the timeline since its
+last quiet gap (3 h), and older turns come only as cross-day hits.
+
+- **The harness.** `NewConversation` is now another day on the same
+  timeline: `tests/eval_db.age` moves the record back a day, past the gap.
+  `Say(..., incognito=True)` sends the switch, and a `Search` step runs the
+  person's timeline search.
+- **New scenarios**, in the gate after 10/10 across two live runs:
+  - **T1**: a decision said in words, then a day later "what did we
+    decide?". It can only come back through recall.
+  - **T2**: an incognito "remember the gate code is 4417" saves no fact.
+    The next turn's plan and recall never carry the code, and search
+    doesn't find it.
+  - **S1v**: S1 with the voice surface tag.
+
+Plan evals at n=20 on gemma-4-12b, main (`826af54`) and this branch, run back
+to back:
+
+| group | floor | main | this change |
+|---|---|---|---|
+| golden | 0.8 | 393/420 | 390/420 |
+| cross | 0.8 | 139/140 | 138/140 |
+| ref | 0.85 | 78/80 | 77/80 |
+| control | 0.8 | 80/100 | 80/100 |
+| memory | 0.8 | 139/140 | 138/140 |
+| knowledge | 0.65 | 60/60 | 59/60 |
+| hard | 0.5 | 19/20 | 20/20 |
+| self | 0.55 | 59/60 | 60/60 |
+| holdout | 0.85 | 185/200 | 189/200 |
+| long | 0.7 | 152/160 | 153/160 |
+| stale | 0.8 | 80/80 | 80/80 |
+
+Every group passed its gate on both, and every plan was valid. The compile
+path is identical, so the differences are sampling noise.
+
+Session evals, gate tier at 5 and frontier at 5:
+
+| scenario | run 1 | run 2 |
+|---|---|---|
+| S1, S2, S2r, S4, S5, S6, S7, S8, S9, S16, M1, M2, M3 | 5/5 each | — |
+| **S1v** by voice | **5/5** | **5/5** |
+| **T1** recall across the gap | **5/5** | **5/5** |
+| **T2** incognito | **5/5** | **5/5** |
+
+- Frontier: S3, S10, S12 and S14 were 5/5. S11 was 4/5 (one reply didn't
+  say the download can't be undone), then 5/5. S13 was 0/5 (the brief, as
+  before).
+- S15 was 2/5, then 3/5. Every miss was "Suddenly never queued": music
+  filed the library instead. Main read 1/5 in the same window, so the
+  timeline didn't cause it. Both turns sit in one window, where the opening
+  is unchanged.
+- Claims were 126/126 backed. No infra misses.
