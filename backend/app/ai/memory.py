@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
+from app import clock
+
 # A recall step's tool name on the record: conductor's own read of its ledger.
 RECALL_TOOL = "recall"
 # How many turns one recall cites.
@@ -124,13 +126,14 @@ class Recalled:
 
 
 def day(when: datetime | date) -> str:
-    """``Tuesday 2026-11-03``."""
-    return f"{when:%A} {when.isoformat()[:10]}"
+    """``Tuesday 2026-11-03``: a timestamp's day is the household's (#130)."""
+    on = clock.local_day(when) if isinstance(when, datetime) else when
+    return f"{on:%A} {on.isoformat()}"
 
 
 def cues(when: datetime | date, today: date) -> list[str]:
     """Ways a reply can say when: the weekday, the date, and a relative word."""
-    on = when.date() if isinstance(when, datetime) else when
+    on = clock.local_day(when) if isinstance(when, datetime) else when
     found = [f"{on:%A}", on.isoformat(), f"{on:%B} {on.day}"]
     ago = (today - on).days
     if ago == 0:

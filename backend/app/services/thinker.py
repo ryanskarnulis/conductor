@@ -49,6 +49,7 @@ from typing import Any, Literal
 import structlog
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import clock as household
 from app.ai import foreground, think, turn_events
 from app.ai.provider import ChatProvider, ChatResult, ProviderError
 from app.ai.providers.llamacpp import LlamaCppProvider
@@ -211,7 +212,9 @@ class Thinker:
             {"role": "system", "content": think.system_prompt(self._fleet)},
             {
                 "role": "user",
-                "content": think.opening(job.problem, job.asked, job.given, job.asked_at.date()),
+                "content": think.opening(
+                    job.problem, job.asked, job.given, household.local_day(job.asked_at)
+                ),
             },
         ]
         try:
