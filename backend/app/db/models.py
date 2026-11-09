@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import enum
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import JSON, ForeignKey, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from app import clock
 
 
 class Base(DeclarativeBase):
@@ -19,8 +21,9 @@ def utcnow() -> datetime:
     shapes makes serialized JSON ambiguous (JS parses the naive form as local
     time). All Python-side writes go through this. ``server_default=func.now()``
     stays on the columns purely as DDL; the ORM default always wins on insert.
+    The read is the household clock's (#130), so tests pin one clock.
     """
-    return datetime.now(UTC)
+    return clock.utc_now()
 
 
 class TimestampMixin:

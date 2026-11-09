@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import clock
 from app.ai import dataflow, memory, narrator, state_block, turn_context
 from app.ai.interpreter import Interpreter
 from app.ai.runtime import ToolCallRecord
@@ -25,6 +26,7 @@ from app.ai.memory import Candidate, Found, Hit, Recalled
 from app.ai.recall import EarlierCall
 from app.ai.state_block import Entity, Match, Now
 from app.api import routes_agent
+from app.config import get_settings
 from app.db.models import (
     Conversation,
     LedgerEntity,
@@ -390,8 +392,38 @@ def test_what_did_we_decide_is_cited_or_honestly_unknown(talk: Talk, db_session:
     assert said[0] == "for the garage shelves, let's go with the steel rack"
     # "and not wood" never says "garage": its quiet topic brings it along.
     assert "and not wood" in said
-    today = date.today()
+    # The household's day, not the machine's (#130): the labels and this agree.
+    today = clock.local_today()
     assert memory.day(today) in reply["content"] or "today" in reply["content"].lower()
+
+
+def test_tonight_is_today_in_the_calendar_and_in_recall(
+    talk: Talk, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Sunday 18:30 in Denver is 01:30 UTC Monday (#130): the turn is stored at
+    # that UTC instant, and everything conductor says calls it Sunday.
+    tonight = datetime(2026, 11, 9, 1, 30, tzinfo=UTC)
+    monkeypatch.setattr(clock, "utc_now", lambda: tonight)
+    monkeypatch.setattr(get_settings(), "conductor_timezone", "America/Denver")
+    talk.say(
+        "for the garage shelves, let's go with the steel rack",
+        plan_turn({"answer": "chat"}),
+        text_turn('{"about_you": false, "reply": "Ok."}'),
+    )
+    talk.new()
+    reply, provider = talk.say(
+        "what did we decide about the garage shelves?",
+        plan_turn(steps(recall("garage shelves decision"))),
+        text_turn("Today you said to go with the steel rack."),
+    )
+    opening = provider.requests[0]["messages"][1]["content"]
+    assert "Today: Sunday 2026-11-08" in opening and "Tomorrow: Monday 2026-11-09" in opening
+    assert "Next Monday: Monday 2026-11-09" in opening
+    receipt = provider.requests[1]["messages"][1]["content"].split("Receipts:\n")[1]
+    (step,) = json.loads(receipt.split("\n\n")[0])["steps"]
+    assert step["found"][0]["said"] == "for the garage shelves, let's go with the steel rack"
+    assert "Sunday 2026-11-08" in receipt and "2026-11-09" not in receipt
+    assert "today" in reply["content"].lower()
 
 
 def test_quiet_topics_are_built_by_code_and_follow_the_conversation(

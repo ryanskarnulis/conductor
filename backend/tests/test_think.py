@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import clock as household
 from app.ai import foreground, interpreter, narrator, think, turn_events
 from app.ai import plan as plans
 from app.ai.interpreter import Interpreter
@@ -298,6 +299,25 @@ def test_the_26b_thinks_under_json_schema_and_its_proposal_posts_untried(
     # The proposal is an exchange: the next turn's state block asks about it.
     turns = conversations_service.stored_turns(db_session, run_with.conversation)
     assert turns[-1]["content"] == note["content"]
+
+
+def test_the_26b_calendar_is_the_households_day_as_of_the_ask(
+    run_with: Any,
+    fleet: Fleet,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Asked Sunday 18:30 in Denver, 01:30 UTC Monday (#130); thought about later.
+    monkeypatch.setattr(household, "utc_now", lambda: datetime(2026, 11, 9, 1, 30, tzinfo=UTC))
+    monkeypatch.setattr(get_settings(), "conductor_timezone", "America/Denver")
+    _detach(run_with)
+    later = Clock()
+    later.now = datetime(2026, 11, 9, 9, 0, tzinfo=UTC)
+    monkeypatch.setattr(household, "utc_now", later)
+    watcher, _, provider = _thinker(session_factory, fleet, GOOD, clock=later)
+    assert watcher.sweep(force=True) == 1
+    opening = provider.requests[0]["messages"][1]["content"]
+    assert "Today: Sunday 2026-11-08" in opening and "Tomorrow: Monday 2026-11-09" in opening
 
 
 def test_yes_runs_the_proposal_as_a_normal_plan(

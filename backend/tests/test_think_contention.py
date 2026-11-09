@@ -29,7 +29,6 @@ from __future__ import annotations
 import os
 import threading
 import time
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +36,7 @@ import httpx
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import clock
 from app.ai import compiler, foreground, think
 from app.ai import plan as plans
 from app.ai.providers.llamacpp import LlamaCppProvider
@@ -98,7 +98,7 @@ def test_foreground_latency_during_a_think(session_factory: sessionmaker[Session
                 "plan my week around the garage project",
                 "plan my week around the garage project",
                 [],
-                date.today(),
+                clock.local_today(),
             ),
         },
     ]

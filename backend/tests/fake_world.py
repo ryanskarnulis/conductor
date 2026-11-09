@@ -42,6 +42,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from app import clock
 from app.fleet.delegate import (
     ConfirmRequired,
     DelegateConfirmRefused,
@@ -276,14 +277,14 @@ class ChessGame:
 class World:
     """Every app's state, the receipts of every write, and the threads used.
 
-    ``today`` anchors the seeded dates (the loop's prompt reads the real date,
+    ``today`` anchors the seeded dates (the prompt reads the household's date,
     so the world must too). ``turn`` is advanced by the harness so receipts
     know which turn wrote them. ``on_write`` is the Stop seam: called after
     every receipt, it lets a trajectory or a Stop scenario act mid-delegate.
     """
 
     def __init__(self, today: date | None = None) -> None:
-        self.today = today or date.today()
+        self.today = today or clock.local_today()
         self.turn = 0
         self.receipts: list[Receipt] = []
         self.reads: list[tuple[str, str, int]] = []  # (app, what, turn)
