@@ -174,14 +174,22 @@ def user_message(context: str | None, words: str) -> str:
 
 
 def _problems(plan: plans.Plan, words: str, checks: plans.Checks) -> list[str]:
-    """The validator's objections, plus the repairs that read the person's
-    words against State: a recalled answer (#127), a remembered topic
-    nothing saved is about, and a lookup of a fact State lists (#134)."""
+    """The validator's objections, and a recalled answer (#127): a plan with
+    any of these doesn't run."""
+    return plans.problems(plan, checks) + plans.recalled_answer(plan, words, checks.context)
+
+
+def _nudges(plan: plans.Plan, words: str, checks: plans.Checks) -> list[str]:
+    """Repairs that read the person's words against State (#134): a
+    remembered topic nothing saved is about, a lookup of a fact State lists,
+    a question about you filed as general knowledge. The first plan gets
+    them once; a repaired plan that keeps its choice still runs, since each
+    of these plans can run and a turn that answers beats code's "couldn't
+    put that together"."""
     return (
-        plans.problems(plan, checks)
-        + plans.recalled_answer(plan, words, checks.context)
-        + plans.remembered_topic(plan, words, checks.context)
+        plans.remembered_topic(plan, words, checks.context)
         + plans.looked_up_fact(plan, words, checks.context)
+        + plans.about_you(plan, words)
     )
 
 
@@ -223,6 +231,8 @@ def compile_turn(
             plan = None
         if plan is not None:
             found = _problems(plan, words, checks)
+            if attempt == 0:
+                found += _nudges(plan, words, checks)
         compiled.problems = found
         if plan is not None and not found:
             compiled.plan = plan

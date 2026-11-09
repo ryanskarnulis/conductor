@@ -181,11 +181,13 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   whose request shares two terms with a saved fact carries it (#134,
   `facts.related`, at most two): code sends it after the request, quoted and
   marked as context, never rewriting the words; the step's `facts` argument
-  records it, and the record lines models read leave it out. Two validator
-  repairs keep plans on that path: "what do you remember about X?" with no
-  saved fact about X is a `recall` (`plan.remembered_topic`), and a lookup
-  of a fact State lists before another app's ask is dropped
-  (`plan.looked_up_fact`).
+  records it, and the record lines models read leave it out. Three
+  validator nudges (one repair, then the plan runs as compiled) keep plans
+  on that path: "what do you remember about X?" with no saved fact about X
+  is a `recall` (`plan.remembered_topic`), a lookup of a fact State lists
+  before another app's ask is dropped (`plan.looked_up_fact`), and "what
+  can you do?" or "what do you know about me?" is never `knowledge`
+  (`plan.about_you`).
 - **Data flows as quoted data, never as control** (#72, `app/ai/dataflow.py`).
   Code fills `{sN}` from step N's receipt: its main touched title (job refs
   skipped, up to 3 joined), cleaned and quoted. No title, or more than 3,

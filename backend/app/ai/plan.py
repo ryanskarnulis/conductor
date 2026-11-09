@@ -505,6 +505,41 @@ def recalled_answer(plan: Plan, words: str, context: str) -> list[str]:
     return []
 
 
+# A question about conductor itself or what it keeps about the person (#134),
+# which is never general knowledge: "what can you do?", "what did you just do?".
+_ABOUT_YOU = re.compile(
+    r"^\W*(?:(?:so|and|hey|ok|okay)[\s,]+)?(?:what|which)\s+(?:else\s+)?(?:"
+    r"can\s+you\s+(?:do|help)|are\s+you\s+(?:doing|working|up\s+to)|"
+    r"did\s+you\s+(?:just\s+)?do|have\s+you\s+(?:just\s+)?done)\b",
+    re.IGNORECASE,
+)
+_ABOUT_ME = re.compile(
+    r"^\W*(?:what|how\s+much)\s+(?:else\s+)?do\s+you\s+(?:know|remember)\s+about\s+(?:me|myself)\b",
+    re.IGNORECASE,
+)
+
+
+def about_you(plan: Plan, words: str) -> list[str]:
+    """A ``knowledge`` answer to a question about conductor itself ("what can
+    you do?") or what it keeps about the person ("what do you know about
+    me?"): since #81's memory line the 12B files these as general knowledge
+    about half the time. Knowledge doesn't know conductor; the repair points
+    at the answer that does. Only these few phrasings; ``chat`` stays."""
+    if not isinstance(plan, Direct) or plan.answer != "knowledge":
+        return []
+    if _ABOUT_ME.search(words):
+        return [
+            "they asked what you know about them, which isn't general knowledge: ask memory, "
+            'or answer {"answer": "self"}'
+        ]
+    if _ABOUT_YOU.search(words):
+        return [
+            "they asked about you, which isn't general knowledge: answer "
+            '{"answer": "self"} (the narrator answers from State and the app list)'
+        ]
+    return []
+
+
 # "what do you remember about the fence project?" (#134): what was said or
 # done before, unless it is about the person or something they saved.
 _REMEMBER_ABOUT = re.compile(

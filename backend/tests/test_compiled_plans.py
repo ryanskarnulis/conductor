@@ -306,6 +306,31 @@ def test_looking_up_a_fact_state_lists_before_an_ask_gets_the_repair() -> None:
     assert plans.looked_up_fact(by_recall, unrelated, sundays) == []
 
 
+@pytest.mark.parametrize(
+    ("words", "says"),
+    [
+        ("what can you do?", '{"answer": "self"}'),
+        ("So what else can you help with?", '{"answer": "self"}'),
+        ("what are you working on right now?", '{"answer": "self"}'),
+        ("what did you just do?", '{"answer": "self"}'),
+        ("what do you know about me?", "ask memory"),
+        ("what do you remember about myself", "ask memory"),
+        ("how long do I boil an egg?", None),
+        ("what do you know about the capital of Portugal?", None),
+        ("what am I working on this week?", None),
+        ("what can I do with leftover rice?", None),
+    ],
+)
+def test_a_question_about_you_is_never_general_knowledge(words: str, says: str | None) -> None:
+    # #134: since #81, "what can you do?" was filed as knowledge about half the time.
+    knowledge = plans.Direct(answer="knowledge")
+    found = plans.about_you(knowledge, words)
+    assert (found[0] if found else None) is None if says is None else says in found[0]
+    # Only a knowledge answer is sent back: self, chat and asks pass.
+    for other in ({"answer": "self"}, {"answer": "chat"}, steps(ask("memory", words))):
+        assert plans.about_you(plans.load(other), words) == []
+
+
 def test_the_planner_prompt_lists_the_fleet_and_never_caps_steps(fleet: Fleet) -> None:
     prompt = compiler.planner_prompt(fleet)
     assert "- tasks (ask, look): Manages projects and tasks." in prompt
@@ -723,12 +748,15 @@ def test_a_question_about_itself_filed_as_knowledge_answers_from_the_ledger(
     provider = ScriptedProvider(
         [
             plan_turn({"answer": "knowledge"}),
+            # #134's nudge asks once for self; a planner that keeps knowledge still runs.
+            plan_turn({"answer": "knowledge"}),
             text_turn('{"about_you": true, "reply": "I added \\"water the plants\\"."}'),
         ]
     )
     reply = run_with(provider, "what did you just do?")["content"]
     assert reply == 'I added "water the plants".'  # no general-knowledge label
-    request = provider.requests[1]
+    assert "they asked about you" in provider.requests[1]["messages"][-1]["content"]
+    request = provider.requests[2]
     assert request["response_format"]["json_schema"]["name"] == "answer"
     assert 'You were asked: "add a task to water the plants"' in request["messages"][1]["content"]
 
