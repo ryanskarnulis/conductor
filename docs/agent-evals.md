@@ -740,7 +740,7 @@ Session evals, gate tier at 5 samples, frontier at 5:
 | S6 (gate) | 19/20 | 4/5 (asked music without the title once) |
 | S3, S10 | 5/5 | 5/5 |
 | S11 | 4/5 | 5/5 |
-| **S12** | 0 (`unsupported`) | **5/5**: the scripted run no longer marks it unsupported |
+| **S12** | 0 (`unsupported`: needed `ask_chess`) | **5/5**: it needs no `ask_chess` now; open and look run it |
 | S13 | 0 | 0/5 (the brief leaves out the songs to sort) |
 | S14 | 6/10 (#78) | 2/5: the 12B planned a think 2 of 5 times; both passed |
 | S15 | 14/20 | 2/5, then 5/10: every plan was `ask:music \| ask:tasks`, and the misses dropped `{s1}` (#127) |
