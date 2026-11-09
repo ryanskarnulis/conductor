@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import date
 from collections.abc import AsyncIterator, Generator, Sequence
 from typing import Any
 
@@ -31,6 +30,7 @@ from fastapi.responses import Response
 from fastapi.sse import EventSourceResponse, format_sse_event
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import clock
 from app.ai import (
     confirmation,
     foreground,
@@ -474,7 +474,7 @@ def post_message(
     conversation = _get_or_404(db, conversation_id)
     turns = _stored_turns(db, conversation.id)
     turn_opening = turn_context.build(
-        date.today(),
+        clock.local_today(),
         Now(surface=data.surface, panel=data.panel),
         data.content,
         history=lambda: turns,

@@ -65,6 +65,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
 
 ## Rules
 
+- **One household timezone** (#130, `CONDUCTOR_TIMEZONE`, env only, default
+  `America/Denver`): storage is UTC; every "today", calendar line and day a
+  timestamp is labelled with goes through `app/clock.py`, never
+  `date.today()` or a UTC `.date()`.
 - **Conductor is the delegation root** (depth-1): it is the only client of
   other apps' delegate APIs, and it never grows an `agent:` block of its own.
 - **Vendored Glitch** (`app/ai/personality-global.md`) is a verbatim copy of

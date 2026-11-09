@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from app import clock
 from app.ai import run_record
 from app.ai.runtime import ToolCallRecord
 
@@ -230,7 +231,8 @@ def _touched(record: ToolCallRecord) -> str:
 
 def _hit_line(call: EarlierCall) -> str:
     line = _record_line(call.record) or ""
-    when = f"{call.when:%A} {call.when.date().isoformat()}"
+    on = clock.local_day(call.when)  # the household's day (#130)
+    when = f"{on:%A} {on.isoformat()}"
     return _truncate(
         f'{when} (as of then), asked "{_truncate(_flat(call.asked), 80)}": {line}', HIT_CHARS
     )

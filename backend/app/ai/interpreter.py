@@ -82,11 +82,11 @@ import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import date
 from typing import Any
 
 import structlog
 
+from app import clock
 from app.ai import (
     compiler,
     control,
@@ -985,7 +985,7 @@ class Interpreter:
         else:
             try:
                 found = state.memory(step.query)
-                record.result, record.app_record = memory.record(found, date.today())
+                record.result, record.app_record = memory.record(found, clock.local_today())
             except Exception as exc:
                 logger.warning("plan_recall_failed", error=str(exc), error_type=type(exc).__name__)
                 record.error = "couldn't look back: memory couldn't be read"

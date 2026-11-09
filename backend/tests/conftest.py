@@ -47,6 +47,13 @@ def fleet_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def household_zone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default household timezone (#130), whatever a dev's .env says: the
+    tests' fixed timestamps are labelled in it. Tests that need another pin it."""
+    monkeypatch.setattr(get_settings(), "conductor_timezone", "America/Denver")
+
+
+@pytest.fixture(autouse=True)
 def no_real_glance(monkeypatch: pytest.MonkeyPatch) -> None:
     """A plan's `look` must never dial a real app (a dev PCC may be listening
     on its manifest port). Tests that look inject a reader; one that doesn't
