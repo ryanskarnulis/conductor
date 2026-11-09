@@ -1,12 +1,14 @@
 """Plan-level evals (#70): does the 12B compile the right plan? (opt-in, the real model)
 
 Spike D1's bench in the repo (``plan_cases.py``): every routing golden as a
-plan, the S1–S16 scenarios, the held-out set, and the long-plan cases. Each
-sample is one compile as the interpreter does it (prompt, schema, validator,
-its repair, and since #75 one more round when the plan still can't run)
-against the real llama-server, with the real workspace manifests; nothing
-runs. Since #75 (per #59) this suite and the session evals are the eval gate. A sample passes when the plan is valid and matches one
-of the case's shapes.
+plan, the S1–S16 scenarios, D1's old held-out set (now the ``mixed`` group,
+#142) and the long-plan cases. Each sample is one compile as the interpreter
+does it (prompt, schema, validator, its repair, and since #75 one more round
+when the plan still can't run) against the real llama-server, with the real
+workspace manifests; nothing runs. Since #75 (per #59) this suite and the
+session evals are the eval gate. A sample passes when the plan is valid and
+matches one of the case's shapes. Each group also reports its first-try rate:
+samples right on the planner's first reply, with no repair (#142).
 
 Gated per group under the vendored Wilson rule (``evalstats.decide``): red
 takes evidence (the upper bound below the floor). Floors are set from the
@@ -16,8 +18,11 @@ group's observed rate; ``long`` from this suite's first run.
     cd backend
     CONDUCTOR_PLAN_EVALS=1 .venv/bin/pytest tests/test_plan_evals.py -v -s
 
-``CONDUCTOR_PLAN_SAMPLES`` (default 5) samples each case; ``-k <group>`` runs
-one group; ``CONDUCTOR_EVAL_REPORT=path`` appends one JSON line per sample.
+``CONDUCTOR_PLAN_SAMPLES`` (default 20, #142) samples each case; ``-k <group>``
+runs one group; ``CONDUCTOR_EVAL_REPORT=path`` appends one JSON line per sample.
+
+The held-out set (``held_out_cases.py``) runs only at milestones and is never
+tuned against: ``CONDUCTOR_HELDOUT_EVALS=1`` runs it, gated as one pool.
 """
 
 from __future__ import annotations
@@ -39,17 +44,23 @@ from app.ai.provider import ChatResult, ProviderError
 from app.ai.providers.llamacpp import provider_from_settings
 from app.fleet.manifests import Fleet, GlanceSpec, discover_fleet
 from tests.evalstats import Decision, decide, wilson_interval
-from tests.plan_cases import CASES, HOLDOUT, LONG, Case, empty_state
+from tests.held_out_cases import HELD_OUT, KINDS
+from tests.plan_cases import CASES, LONG, MIXED, Case, empty_state
 
-pytestmark = pytest.mark.skipif(
+plan_evals = pytest.mark.skipif(
     os.environ.get("CONDUCTOR_PLAN_EVALS") != "1",
     reason="plan evals run the real model: set CONDUCTOR_PLAN_EVALS=1",
+)
+held_out_evals = pytest.mark.skipif(
+    os.environ.get("CONDUCTOR_HELDOUT_EVALS") != "1",
+    reason="the held-out set runs only at milestones: set CONDUCTOR_HELDOUT_EVALS=1",
 )
 
 WORKSPACE_ROOT = Path(
     os.environ.get("CONDUCTOR_EVAL_FLEET_DIR", str(Path(__file__).resolve().parents[3]))
 )
-SAMPLES = int(os.environ.get("CONDUCTOR_PLAN_SAMPLES", "5"))
+# n=5 was too noisy to gate on (#142: chess-resign read 5/20 to 15/20 on one day).
+SAMPLES = int(os.environ.get("CONDUCTOR_PLAN_SAMPLES", "20"))
 _REPORT = os.environ.get("CONDUCTOR_EVAL_REPORT")
 _INFRA_RETRIES = 3
 
@@ -65,13 +76,17 @@ FLOORS: dict[str, float] = {
     "knowledge": 0.65,
     "hard": 0.5,
     "self": 0.55,
-    "holdout": 0.85,
+    # D1's old held-out set (#142): tuned against since 2026-11-06, so ordinary.
+    "mixed": 0.85,
     "long": 0.7,
     # A question about now over a recalled answer (#127): it reads the app.
     "stale": 0.8,
 }
 
-ALL: tuple[Case, ...] = CASES + HOLDOUT + LONG
+ALL: tuple[Case, ...] = CASES + MIXED + LONG
+
+# The held-out set's one pooled floor, fixed before its first run (#142).
+HELD_OUT_FLOOR = 0.8
 
 
 @pytest.fixture(scope="module")
@@ -166,6 +181,8 @@ def _sample(case: Case, fleet: Fleet, prompt: str) -> dict[str, Any]:
         "correct": correct,
         "valid": plan is not None,
         "first_valid": first_valid,
+        # Right on the planner's first reply: no repair, nudge or extra round.
+        "first_right": correct and first_valid,
         "repaired": compiled.repaired,
         # Planner calls: 1; 2 after the compiler's repair; 3 after #75's round.
         "calls": len(compiled.raw),
@@ -177,11 +194,59 @@ def _sample(case: Case, fleet: Fleet, prompt: str) -> dict[str, Any]:
     }
 
 
-@pytest.mark.parametrize("group", list(FLOORS))
-def test_plan_group(group: str, fleet: Fleet) -> None:
-    prompt = compiler.planner_prompt(fleet)
-    cases = [case for case in ALL if case.group == group]
-    assert cases, group
+@dataclasses.dataclass(frozen=True)
+class Summary:
+    """One group's samples, counted: the score, and the first-try rate beside it."""
+
+    label: str
+    passed: int
+    runs: int
+    first_right: int
+    valid: int
+    first_valid: int
+    third_call: int
+    right_within_two: int
+    p50_seconds: float
+    max_steps: int
+
+    @classmethod
+    def of(cls, label: str, rows: list[dict[str, Any]]) -> Summary:
+        return cls(
+            label=label,
+            passed=sum(row["correct"] for row in rows),
+            runs=len(rows),
+            first_right=sum(row["first_right"] for row in rows),
+            valid=sum(row["valid"] for row in rows),
+            first_valid=sum(row["first_valid"] for row in rows),
+            third_call=sum(row["calls"] >= 3 for row in rows),
+            right_within_two=sum(row["correct"] and row["calls"] <= 2 for row in rows),
+            p50_seconds=statistics.median(row["seconds"] for row in rows),
+            max_steps=max(row["steps"] for row in rows),
+        )
+
+    def line(self, floor: float) -> str:
+        low, high = wilson_interval(self.passed, self.runs)
+        return (
+            f"[plan-eval] GROUP {self.label}: {self.passed}/{self.runs} "
+            f"({self.passed / self.runs:.0%}, Wilson {low:.2f}–{high:.2f}, floor {floor}) "
+            f"first-try {self.first_right}/{self.runs} ({self.first_right / self.runs:.0%}) "
+            f"valid {self.valid}/{self.runs} first-valid {self.first_valid}/{self.runs} "
+            f"third-call {self.third_call}/{self.runs} "
+            f"right-within-two {self.right_within_two}/{self.runs} "
+            f"p50 {self.p50_seconds:.2f}s max steps {self.max_steps}"
+        )
+
+    def verdict(self, floor: float) -> str | None:
+        """Why the group is red, or None: the Wilson rule on the final score."""
+        if decide(self.passed, self.runs, floor) is not Decision.BELOW_FLOOR:
+            return None
+        return (
+            f"{self.label} is below its floor with evidence: {self.passed}/{self.runs} vs "
+            f"{floor} (first-try {self.first_right}/{self.runs})"
+        )
+
+
+def _run(cases: list[Case], fleet: Fleet, prompt: str, label: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for case in cases:
         verdicts = []
@@ -198,20 +263,77 @@ def test_plan_group(group: str, fleet: Fleet) -> None:
             if row["case"] == case.id and not row["correct"]
         )
         miss = f"  misses: {dict(misses)}" if misses else ""
-        print(f"[plan-eval] {group} {case.id}: {''.join(verdicts)}{miss}")
-    passed = sum(row["correct"] for row in rows)
-    runs = len(rows)
-    floor = FLOORS[group]
-    low, high = wilson_interval(passed, runs)
-    seconds = [row["seconds"] for row in rows]
-    print(
-        f"[plan-eval] GROUP {group}: {passed}/{runs} ({passed / runs:.0%}, Wilson "
-        f"{low:.2f}–{high:.2f}, floor {floor}) valid {sum(r['valid'] for r in rows)}/{runs} "
-        f"first-try {sum(r['first_valid'] for r in rows)}/{runs} "
-        f"third-call {sum(r['calls'] >= 3 for r in rows)}/{runs} "
-        f"right-within-two {sum(r['correct'] and r['calls'] <= 2 for r in rows)}/{runs} "
-        f"p50 {statistics.median(seconds):.2f}s max steps {max(r['steps'] for r in rows)}"
-    )
-    assert decide(passed, runs, floor) is not Decision.BELOW_FLOOR, (
-        f"{group} is below its floor with evidence: {passed}/{runs} vs {floor}"
-    )
+        print(f"[plan-eval] {label} {case.id}: {''.join(verdicts)}{miss}")
+    return rows
+
+
+@plan_evals
+@pytest.mark.parametrize("group", list(FLOORS))
+def test_plan_group(group: str, fleet: Fleet) -> None:
+    prompt = compiler.planner_prompt(fleet)
+    cases = [case for case in ALL if case.group == group]
+    assert cases, group
+    summary = Summary.of(group, _run(cases, fleet, prompt, group))
+    print(summary.line(FLOORS[group]))
+    red = summary.verdict(FLOORS[group])
+    assert red is None, red
+
+
+@held_out_evals
+def test_held_out(fleet: Fleet) -> None:
+    """Milestones only; never tuned against (#142). Read per kind, gated as one pool."""
+    prompt = compiler.planner_prompt(fleet)
+    rows: list[dict[str, Any]] = []
+    for kind in KINDS:
+        cases = [case for case in HELD_OUT if case.group == kind]
+        kind_rows = _run(cases, fleet, prompt, f"held-out {kind}")
+        print(Summary.of(f"held-out {kind}", kind_rows).line(HELD_OUT_FLOOR))
+        rows += kind_rows
+    summary = Summary.of("held-out", rows)
+    print(summary.line(HELD_OUT_FLOOR))
+    red = summary.verdict(HELD_OUT_FLOOR)
+    assert red is None, red
+
+
+# --- the summary itself (no model: runs in the ordinary suite) -----------------------------
+
+
+def _row(
+    *, correct: bool, valid: bool = True, repaired: bool = False, calls: int = 1
+) -> dict[str, Any]:
+    first_valid = valid and not repaired
+    return {
+        "correct": correct,
+        "valid": valid,
+        "first_valid": first_valid,
+        "first_right": correct and first_valid,
+        "repaired": repaired,
+        "calls": calls,
+        "seconds": 0.5,
+        "steps": 1,
+    }
+
+
+def test_a_repaired_plan_counts_in_the_score_but_not_the_first_try_rate() -> None:
+    rows = [
+        _row(correct=True),
+        _row(correct=True, repaired=True, calls=2),
+        _row(correct=True, repaired=True, calls=3),
+        _row(correct=False),
+        _row(correct=False, valid=False, repaired=True, calls=3),
+    ]
+    summary = Summary.of("self", rows)
+    assert (summary.passed, summary.first_right, summary.runs) == (3, 1, 5)
+    assert (summary.valid, summary.first_valid) == (4, 2)
+    assert (summary.third_call, summary.right_within_two) == (2, 2)
+    line = summary.line(0.55)
+    assert "GROUP self: 3/5" in line
+    assert "first-try 1/5 (20%)" in line
+
+
+def test_the_gate_reads_the_final_score_and_names_the_first_try_rate() -> None:
+    nudged = [_row(correct=True, repaired=True, calls=2)] * 20
+    assert Summary.of("self", nudged).verdict(0.55) is None
+    missed = [_row(correct=False)] * 20
+    red = Summary.of("self", missed).verdict(0.55)
+    assert red is not None and "first-try 0/20" in red
