@@ -67,6 +67,8 @@ FLOORS: dict[str, float] = {
     "self": 0.55,
     "holdout": 0.85,
     "long": 0.7,
+    # A question about now over a recalled answer (#127): it reads the app.
+    "stale": 0.8,
 }
 
 ALL: tuple[Case, ...] = CASES + HOLDOUT + LONG

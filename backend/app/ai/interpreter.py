@@ -22,7 +22,9 @@ it runs, across apps (#72):
   cited by day and conversation. No app, no model. ``{sN}`` on it is the one
   entity it resolved, if one clearly answers.
 - ``ask_user``: the plan pauses on the question; the person's answer resumes
-  the same plan, ``{s1}`` replaced by their words.
+  the same plan. Each option is resolved in code to the entity State named
+  for it (#120, :mod:`app.ai.options`), so ``{s1}`` is the picked entity's
+  title with its trust; an answer that picks no option goes in as they said it.
 - ``{sN}`` in a step's text: the main title step N's receipt touched, quoted,
   filled in by code when the step runs (:mod:`app.ai.dataflow`, which holds
   the rules for no title, several titles and outside text).
@@ -85,6 +87,7 @@ from app.ai import (
     dataflow,
     memory,
     narrator,
+    options,
     run_record,
     speaker,
     think,
@@ -339,10 +342,17 @@ class Interpreter:
             assert isinstance(resumed, plans.StepPlan)
             turn.body = paused.body
             steps = resumed.steps[paused.resume_at :]
-            values = {"s1": dataflow.answer(plan.resume)}
             asked = resumed.steps[paused.resume_at - 1 : paused.resume_at]
+            offered = asked[0].options if asked and isinstance(asked[0], plans.AskUser) else []
+            # The person's pick, as the entity State named for it (#120).
+            value, picked = options.chosen(plan.resume, options.stored(paused.body, offered))
+            values = {"s1": value}
             turn_events.resumed(
-                "ask_user", step=asked[0].id if asked else None, answer=values["s1"].text
+                "ask_user",
+                step=asked[0].id if asked else None,
+                answer=value.text,
+                untrusted=value.untrusted,
+                entity=picked.entity if picked is not None else None,
             )
             return self._execute(state, turn, steps, paused.resume_at, values)
         assert isinstance(plan, plans.StepPlan)
@@ -612,6 +622,8 @@ class Interpreter:
                 return self._rt.stop("cancelled", state.records, state.messages)
             if isinstance(step, plans.AskUser):
                 turn.status, turn.pause, turn.resume_at = "paused", "ask_user", position + 1
+                if turn.body is not None:
+                    turn.body = options.annotate(turn.body, step.options, state.context or "")
                 return self._ask_user(state, step)
             group = _read_group(steps, index)
             if len(group) > 1:
@@ -968,9 +980,9 @@ class Interpreter:
 
     def _ask_user(self, state: _Run, step: plans.AskUser) -> AgentRunResult:
         question = step.question.strip()
-        options = [option.strip() for option in step.options if option.strip()]
-        if options:
-            question = f"{question} ({' / '.join(options)})"
+        offered = [option.strip() for option in step.options if option.strip()]
+        if offered:
+            question = f"{question} ({' / '.join(offered)})"
         turn_events.paused("ask_user", question=question, step=step.id)
         reply = self._with_record_line(state, question)
         return self._rt.finish("completed", reply, state.records, state.messages)

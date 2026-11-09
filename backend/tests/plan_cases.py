@@ -12,13 +12,17 @@ matchers: no I/O.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from itertools import permutations
+from typing import Any
 
 from pydantic import BaseModel
 
 from app.ai import plan as plans
+from app.ai import recall
+from app.ai.runtime import ToolCallRecord
 from app.ai.state_block import calendar_lines
 
 
@@ -180,6 +184,27 @@ def empty_state() -> str:
     return state()
 
 
+def _call(tool: str, arguments: dict[str, Any], result: str) -> ToolCallRecord:
+    return ToolCallRecord(tool=tool, arguments=arguments, result=result)
+
+
+def before(
+    words: str,
+    *,
+    earlier: Sequence[tuple[str, ToolCallRecord]] = (),
+    history: Sequence[dict[str, Any]] = (),
+) -> str:
+    """An empty state block, then "Before this turn:" as the shipped recall
+    renders it: ``earlier`` other conversations' calls (asked, record) from
+    Tuesday, and this conversation's ``history`` (#127's leak)."""
+    tuesday = datetime(2026, 11, 3, 18, 0, tzinfo=UTC)
+    hits = recall.hits(
+        words, [recall.EarlierCall(tuesday, asked, record) for asked, record in earlier]
+    )
+    section = recall.section(recall.Recall.of(list(history)), hits)
+    return state() + (f"\n\n{section}" if section else "")
+
+
 def one(*steps: M, say: str = "result", ordered: bool = True) -> Shape:
     return Shape(steps=steps, say=say, ordered=ordered)
 
@@ -190,6 +215,12 @@ def none(say: str) -> Shape:
 
 READ_TASKS = M(("look", "ask"), "tasks")
 READ_MUSIC = M(("look", "ask"), "music")
+
+_WEEK = "what am I working on this week?"
+_DUE = "what's due today?"
+_PLAYLIST = "download this playlist https://www.youtube.com/playlist?list=PL9"
+_PLAYLIST_NOW = "is that playlist done downloading yet?"
+_CHESS_NOW = "how is that chess game going?"
 
 _LAST_S3 = (
     's1 ask music "download the new Caribou album" -> queued album "Honey" '
@@ -423,6 +454,70 @@ CASES: tuple[Case, ...] = (
     ),
     Case("status-last", "what did you just do?", (none("status"),), "self", state(last=_LAST_S3)),
     Case("chat-thanks", "thanks!", (none("chat"),), "self"),
+    # --- a question about now, over a recalled answer (#127, #122's leak) --------------
+    Case(
+        "stale-week-recalled",
+        _WEEK,
+        (one(READ_TASKS),),
+        "stale",
+        before(
+            _WEEK,
+            earlier=[(_WEEK, _call("ask_tasks", {"message": _WEEK}, "Nothing's due today."))],
+        ),
+    ),
+    Case(
+        "stale-due-same-thread",
+        _DUE,
+        (one(READ_TASKS),),
+        "stale",
+        before(
+            _DUE,
+            history=[
+                {"role": "user", "content": _DUE},
+                {
+                    "role": "assistant",
+                    "content": "Nothing's due today.",
+                    "tool_calls": [
+                        _call("ask_tasks", {"message": _DUE}, "No tasks due today.").model_dump()
+                    ],
+                },
+            ],
+        ),
+    ),
+    Case(
+        "stale-playlist-recalled",
+        _PLAYLIST_NOW,
+        (one(READ_MUSIC),),
+        "stale",
+        before(
+            _PLAYLIST_NOW,
+            earlier=[
+                (
+                    _PLAYLIST,
+                    _call(
+                        "ask_music",
+                        {"message": _PLAYLIST},
+                        "Queued 40 songs from the playlist; it's downloading now.",
+                    ),
+                )
+            ],
+        ),
+    ),
+    Case(
+        "stale-chess-recalled",
+        _CHESS_NOW,
+        (one(M("look", "chess")), one(M("open", "chess"))),
+        "stale",
+        before(
+            _CHESS_NOW,
+            earlier=[
+                (
+                    "how is our chess game going?",
+                    _call("look_chess", {}, "Your move, move 12; material is even."),
+                )
+            ],
+        ),
+    ),
 )
 
 

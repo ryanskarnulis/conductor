@@ -53,9 +53,10 @@ export function valueFromRecord(entries: readonly AppRecordEntry[]): RefValue | 
   return { text, untrusted }
 }
 
-/** The person's own answer to an `ask_user`: trusted, as the backend splices it. */
-export function answerValue(words: string): RefValue {
-  return { text: words.trim().replace(/\{/g, '(').replace(/\}/g, ')'), untrusted: false }
+/** An `ask_user` answer as the backend splices it: the person's own words
+ * (trusted), or the picked option's entity title with its trust (#120). */
+export function answerValue(words: string, untrusted = false): RefValue {
+  return { text: words.trim().replace(/\{/g, '(').replace(/\}/g, ')'), untrusted }
 }
 
 /** A step's words as parts: plain text and refs, each ref filled when its

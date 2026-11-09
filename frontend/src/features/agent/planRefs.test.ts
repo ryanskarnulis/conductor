@@ -56,4 +56,10 @@ describe('answerValue', () => {
   it('splices the answer as said, braces softened', () => {
     expect(answerValue(' the {first} one ').text).toBe('the (first) one')
   })
+
+  it('keeps a picked outside title unfilled until its step runs (#120)', () => {
+    const value = answerValue('“Odessa”', true)
+    expect(value.untrusted).toBe(true)
+    expect(fillParts('file {s1}', { s1: value }).text).toBe('file {s1}')
+  })
 })
