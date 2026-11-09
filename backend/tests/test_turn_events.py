@@ -22,16 +22,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai import turn_events
-from app.ai.loop import AgentLoop
+from app.ai.interpreter import Interpreter
 from app.api import routes_agent, turn_activity
 from app.api.turn_activity import Heartbeat, TurnEvent
 from app.db.models import LedgerStep, LedgerTurn
-from app.fleet.manifests import Fleet, discover_fleet
+from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
+from app.fleet.manifests import AgentSpec, Fleet, FleetApp, discover_fleet
 from app.fleet.tools import build_delegate_tools
 from app.main import app
 from app.tools import registry
 from tests.fake_world import World, client_factory, write_fixture_fleet
-from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
+from tests.scripted_provider import ScriptedProvider, text_turn
 
 Item = TurnEvent | Heartbeat
 
@@ -268,47 +269,75 @@ def test_a_stale_turns_events_are_dropped_and_the_first_plan_stands() -> None:
 # --- the seam: no step lands ahead of its record ----------------------------------------
 
 
-def test_a_step_lands_only_once_its_record_exists() -> None:
+def _tasks_only() -> Fleet:
+    return Fleet(
+        apps=(
+            FleetApp(
+                name="tasks",
+                title="Tasks",
+                upstream="127.0.0.1:8100",
+                agent=AgentSpec(description="Manages tasks.", api="/api/agent", examples=()),
+            ),
+        )
+    )
+
+
+@pytest.fixture
+def delegation() -> Generator[DelegationContext, None, None]:
+    context = DelegationContext(
+        master_conversation_id="1", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
+    )
+    with use_delegation_context(context):
+        yield context
+
+
+def test_a_step_lands_only_once_its_record_exists(delegation: DelegationContext) -> None:
     events: list[tuple[str, dict[str, Any]]] = []
     seen_while_running: list[list[str]] = []
 
     @registry.tool
-    def scratch_gate() -> str:
-        """Scratch tool that looks at the stream while it runs."""
+    def ask_tasks(message: str) -> str:
+        """Scratch ask that looks at the stream while it runs."""
         seen_while_running.append([kind for kind, _ in events])
         return "ok"
 
-    provider = ScriptedProvider([tool_calls_turn(("scratch_gate", {})), text_turn("done")])
+    provider = ScriptedProvider([_plan_turn(_ask("tasks", "go"))])
     with turn_events.publishing(lambda kind, data: events.append((kind, data))):
-        run = AgentLoop(provider).run("go")
+        run = Interpreter(provider, _tasks_only()).run("go")
 
     assert run.stop_reason == "completed"
-    assert seen_while_running == [["step_started"]]  # running: started, not landed
-    (_, started), (_, landed) = events
-    assert (started["seq"], started["tool"]) == (1, "scratch_gate")
-    assert (landed["seq"], landed["kind"], landed["outcome"]) == (1, "unknown", "done")
-    assert landed["receipts"] == []
+    # Running: the plan and the step's start are out, its receipt isn't.
+    assert seen_while_running == [["plan", "step_started"]]
+    (_, plan), (_, started), (_, landed) = events
+    assert [step["id"] for step in plan["steps"]] == ["s1"]
+    assert (started["seq"], started["tool"]) == (1, "ask_tasks")
+    assert (landed["seq"], landed["kind"], landed["outcome"]) == (1, "ask", "done")
+    # An answer with no record: conductor's unknown receipt, as the ledger keeps it.
+    assert [(r["source"], r["outcome"]) for r in landed["receipts"]] == [("conductor", "unknown")]
 
 
-def test_no_sink_is_a_no_op_and_a_broken_sink_never_costs_the_turn() -> None:
+def test_no_sink_is_a_no_op_and_a_broken_sink_never_costs_the_turn(
+    delegation: DelegationContext,
+) -> None:
     turn_events.receipt(1, _record())  # nothing bound: nothing happens
 
     def explode(_kind: str, _data: dict[str, Any]) -> None:
         raise RuntimeError("sink bug")
 
     @registry.tool
-    def scratch_fine() -> str:
-        """Scratch tool."""
+    def ask_tasks(message: str) -> str:
+        """Scratch ask."""
         return "ok"
 
-    provider = ScriptedProvider([tool_calls_turn(("scratch_fine", {})), text_turn("fine")])
+    provider = ScriptedProvider([_plan_turn(_ask("tasks", "go"))])
     with turn_events.publishing(explode):
-        run = AgentLoop(provider).run("go")
-    assert (run.stop_reason, run.reply) == ("completed", "fine")
+        run = Interpreter(provider, _tasks_only()).run("go")
+    assert run.stop_reason == "completed"
+    assert [record.tool for record in run.tool_calls] == ["ask_tasks"]
 
 
 def _record(**fields: Any) -> Any:
-    from app.ai.loop import ToolCallRecord  # noqa: PLC0415
+    from app.ai.runtime import ToolCallRecord  # noqa: PLC0415
 
     return ToolCallRecord(**{"tool": "ask_tasks", "arguments": {"message": "x"}, **fields})
 
@@ -375,8 +404,8 @@ def turn(
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
 
     def run(provider: ScriptedProvider, words: str) -> tuple[dict[str, Any], list[TurnEvent]]:
-        app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-            provider, fleet=fleet, narrate=True
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+            provider, fleet, narrate=True
         )
         follower = _Follower(conversation)
         response = client.post(
@@ -549,8 +578,8 @@ def test_the_turn_ends_on_the_stream_only_after_the_ledger_committed_it(
         real_end(conversation_id, stop, **ended)
 
     monkeypatch.setattr(turn_activity, "end", spy)
-    app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-        ScriptedProvider([text_turn("hi")])
+    app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+        ScriptedProvider([text_turn('{"answer": "decline"}')]), Fleet(apps=())
     )
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
     follower = _Follower(conversation)
@@ -565,8 +594,8 @@ def test_the_turn_ends_on_the_stream_only_after_the_ledger_committed_it(
 def test_a_failed_turn_ends_the_stream_with_its_stop_reason(client: TestClient) -> None:
     from app.ai.provider import ProviderRequestError  # noqa: PLC0415
 
-    app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-        ScriptedProvider([ProviderRequestError("model down")])
+    app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+        ScriptedProvider([ProviderRequestError("model down")]), Fleet(apps=())
     )
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
     follower = _Follower(conversation)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -14,8 +15,10 @@ from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.orm import Session
 
 from app.ai import state_block, turn_context
-from app.ai.loop import AgentLoop, AgentRunResult, ToolCallRecord
+from app.ai.interpreter import Interpreter
+from app.ai.plan import TurnPlan
 from app.ai.provider import ProviderRequestError
+from app.ai.runtime import AgentRunResult, ToolCallRecord
 from app.ai.state_block import Entity, Now
 from app.api import routes_agent
 from app.config import get_settings
@@ -26,15 +29,18 @@ from app.db.models import (
     ConversationRole,
     LedgerEntity,
     LedgerJob,
+    LedgerPlan,
     LedgerReceipt,
     LedgerStep,
     LedgerTouch,
     LedgerTurn,
 )
+from app.fleet.manifests import AgentSpec, Fleet, FleetApp
 from app.fleet.tools import OUTCOME_UNKNOWN
 from app.main import app
 from app.services import ledger
-from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
+from app.tools import registry
+from tests.scripted_provider import ScriptedProvider, text_turn
 
 BACKEND = Path(__file__).resolve().parents[1]
 
@@ -55,14 +61,16 @@ def _user(db: Session, conversation: Conversation, words: str) -> ConversationMe
     return message
 
 
-def _run(*records: ToolCallRecord, stop: str = "completed") -> AgentRunResult:
+def _run(
+    *records: ToolCallRecord, stop: str = "completed", plan: TurnPlan | None = None
+) -> AgentRunResult:
     return AgentRunResult(
         reply="ok",
         stop_reason=stop,  # type: ignore[arg-type]
         tool_calls=list(records),
-        iterations=1,
         messages=[],
         run_id="run-1",
+        plan=plan or TurnPlan(status="ran"),
     )
 
 
@@ -290,6 +298,99 @@ def test_a_journal_failure_never_costs_the_turn(
     assert (kept.words, kept.status) == ("hi", "running")
 
 
+def test_a_split_control_step_is_its_own_plan_with_the_turns_first_records(
+    db_session: Session,
+) -> None:
+    # #75: a control step split off a longer plan ran first, as a plan of its
+    # own; seq stays each record's place in the turn, as the live channel saw it.
+    conversation = _conversation(db_session)
+    control = TurnPlan(body={"steps": [{"id": "s2", "do": "undo", "target": "last"}]}, status="ran")
+    rest = TurnPlan(
+        body={"steps": [{"id": "s1", "do": "ask", "app": "tasks", "request": "x"}]},
+        status="ran",
+        first=control,
+        first_steps=1,
+    )
+    undone = _ask([{"tool": "trash_task", "outcome": "done", "touched": [_ref("task", "2", "A")]}])
+    asked = _ask([{"tool": "create_task", "outcome": "done", "touched": [_ref("task", "3", "B")]}])
+    turn = ledger.open_turn(db_session, conversation, _user(db_session, conversation, "words"))
+    ledger.close_turn(db_session, turn, _run(undone, asked, plan=rest))
+    db_session.commit()
+    plans = db_session.execute(select(LedgerPlan).order_by(LedgerPlan.id)).scalars().all()
+    assert [(p.source, p.body) for p in plans] == [
+        ("compiled", control.body),
+        ("compiled", rest.body),
+    ]
+    assert [[(s.seq, s.receipts[0].tool) for s in p.steps] for p in plans] == [
+        [(1, "trash_task")],
+        [(2, "create_task")],
+    ]
+
+
+def test_a_failed_turn_journals_what_ran_under_its_plan(db_session: Session) -> None:
+    # A failure stop carries its plan (#75): the write before the crash has a
+    # receipt under the compiled plan, never a stray loop row.
+    conversation = _conversation(db_session)
+    wrote = _ask([{"tool": "create_task", "outcome": "done", "touched": [_ref("task", "4", "C")]}])
+    crashed = ToolCallRecord(
+        tool="ask_tasks", arguments={"message": "y"}, error="internal error: boom"
+    )
+    turn = ledger.open_turn(db_session, conversation, _user(db_session, conversation, "words"))
+    plan = TurnPlan(body={"steps": []}, status="ran", note="stopped after s2")
+    ledger.close_turn(db_session, turn, _run(wrote, crashed, stop="internal_error", plan=plan))
+    db_session.commit()
+    (row,) = db_session.execute(select(LedgerPlan)).scalars().all()
+    assert (row.source, row.status, row.note) == ("compiled", "ran", "stopped after s2")
+    assert [(s.outcome, [r.outcome for r in s.receipts]) for s in row.steps] == [
+        ("done", ["done"]),
+        ("failed", []),
+    ]
+
+
+def test_rows_from_before_75_still_read(db_session: Session) -> None:
+    # A pre-#75 turn: the compiled plan fell back and the loop's plan acted.
+    conversation = _conversation(db_session)
+    message = _user(db_session, conversation, "add milk")
+    old = LedgerTurn(
+        conversation_id=conversation.id,
+        user_message_id=message.id,
+        kind="message",
+        words="add milk",
+        status="ended",
+        stop_reason="completed",
+    )
+    db_session.add(old)
+    db_session.flush()
+    fell_back = LedgerPlan(
+        turn_id=old.id,
+        source="compiled",
+        body={"steps": [{"id": "s1", "do": "look", "app": "tasks"}]},
+        acted=False,
+        status="fell_back",
+        note="data_flow",
+    )
+    loop = LedgerPlan(turn_id=old.id, source="loop")
+    db_session.add_all([fell_back, loop])
+    db_session.flush()
+    db_session.add(
+        LedgerStep(
+            plan_id=loop.id,
+            seq=1,
+            kind="ask",
+            app="tasks",
+            tool="ask_tasks",
+            arguments={"message": "add milk"},
+            outcome="done",
+            result="Added milk.",
+        )
+    )
+    db_session.commit()
+    report = ledger.self_report(db_session, conversation.id)
+    assert 'You were asked: "add milk"' in report
+    assert "- asked tasks: it answered" in report
+    assert ledger.paused_plan(db_session, conversation.id) is None
+
+
 # --- the state block reads the ledger ------------------------------------------------------
 
 
@@ -357,15 +458,39 @@ def _create(client: TestClient) -> int:
     return int(client.post("/api/agent/conversations", json={}).json()["id"])
 
 
+_TASKS = Fleet(
+    apps=(
+        FleetApp(
+            name="tasks",
+            title="Tasks",
+            upstream="127.0.0.1:8100",
+            agent=AgentSpec(description="Tasks.", api="/api/agent", examples=()),
+        ),
+    )
+)
+
+
 def _use(provider: ScriptedProvider) -> None:
-    app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(provider)
+    app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+        provider, _TASKS, narrate=True
+    )
 
 
 def test_a_message_turn_and_a_note_are_on_the_ledger(
     client: TestClient, db_session: Session
 ) -> None:
+    @registry.tool
+    def ask_tasks(message: str) -> str:
+        """Scratch ask: an answer with no readable record."""
+        return "Nobody's home."
+
     conversation = _create(client)
-    _use(ScriptedProvider([tool_calls_turn(("list_agents", {})), text_turn("Nobody's home.")]))
+    plan = {
+        "steps": [
+            {"id": "s1", "do": "ask", "app": "tasks", "request": "who?", "destructive": False}
+        ]
+    }
+    _use(ScriptedProvider([text_turn(json.dumps(plan)), text_turn("Nobody's home.")]))
     response = client.post(
         f"/api/agent/conversations/{conversation}/messages",
         json={"content": "who's there?", "surface": "voice", "panel": "music"},
@@ -382,7 +507,12 @@ def test_a_message_turn_and_a_note_are_on_the_ledger(
     assert (first.surface, first.panel, first.stop_reason) == ("voice", "music", "completed")
     assert first.assistant_message_id == response.json()["assistant_message"]["id"]
     assert first.run_id
-    assert [(s.kind, s.tool) for p in first.plans for s in p.steps] == [("local", "list_agents")]
+    # One compiled plan, the one that acted: no `loop` rows since #75.
+    assert [(p.source, p.status, p.acted) for p in first.plans] == [("compiled", "ran", True)]
+    assert [(s.kind, s.tool) for p in first.plans for s in p.steps] == [("ask", "ask_tasks")]
+    # The app answered with no record it could read: conductor's unknown receipt.
+    (step,) = first.plans[0].steps
+    assert [(r.source, r.outcome) for r in step.receipts] == [("conductor", "unknown")]
     assert turns[1].plans == []
 
 
@@ -400,6 +530,8 @@ def test_a_failed_run_still_ends_its_ledger_turn(client: TestClient, db_session:
         "provider_error",
         None,
     )
+    # The compile died: there was no plan, and none is made up.
+    assert turn.plans == []
 
 
 # --- the migration ------------------------------------------------------------------------

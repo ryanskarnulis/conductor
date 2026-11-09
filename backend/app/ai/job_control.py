@@ -34,7 +34,7 @@ from app.fleet.jobs import FINISHED, JobError, JobGone, JobRead
 
 if TYPE_CHECKING:
     from app.ai.interpreter import Interpreter, _Run
-    from app.ai.loop import AgentRunResult
+    from app.ai.runtime import AgentRunResult
 
 logger = structlog.get_logger(__name__)
 
@@ -108,7 +108,7 @@ def amend(
 
 def _cancel_one(interp: Interpreter, state: _Run, job: RunningJob) -> str:
     """Ask the app to stop one job; code's line for what came of it."""
-    from app.ai.loop import ToolCallRecord  # noqa: PLC0415
+    from app.ai.runtime import ToolCallRecord  # noqa: PLC0415
 
     subject = narrator.job_subject(job.app, job.title, job.untrusted)
     tool = run_record.JOB_CANCEL_PREFIX + job.app
@@ -265,6 +265,4 @@ def _listing(running: Sequence[RunningJob]) -> str:
 
 def _say(interp: Interpreter, state: _Run, reply: str) -> AgentRunResult:
     """Code's own reply: plain facts, no model call."""
-    return interp._loop._finish(
-        "completed", narrator.fit(reply, state.trace.surface), state.records, 1, state.messages
-    )
+    return interp.say(state, reply)

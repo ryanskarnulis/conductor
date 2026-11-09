@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from app.ai import plan as plans
 from app.ai import recall
-from app.ai.loop import ToolCallRecord
+from app.ai.runtime import ToolCallRecord
 from app.ai.state_block import calendar_lines
 
 

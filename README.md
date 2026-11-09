@@ -8,13 +8,14 @@ This is Phase 3 of the workspace's
 [`agent-standard/AGENTS-MASTER-PLAN.md`](../agent-standard/AGENTS-MASTER-PLAN.md).
 **Current state: Phase 3 complete (PRs #1–#6, routing evals GO 12/12); only
 the hub-app "Later" item remains open.** On top of the agent
-engine (tool registry, llama.cpp provider, bounded loop, layered Glitch
-personality) and fleet delegation (`ask_<app>` tools discovered from `app.yaml`
+engine (compiled plans: planner → validator → interpreter → narrator, over a
+llama.cpp provider; #75 retired the tool-calling loop) and fleet delegation
+(`ask_<app>` tools discovered from `app.yaml`
 `agent:` blocks, also exposed over an MCP stdio server via `.mcp.json`),
 conductor persists master conversations in SQLite (SQLAlchemy + Alembic) and
-fronts its loop with a REST chat API — conversation CRUD,
+fronts its turns with a REST chat API — conversation CRUD,
 `POST /api/agent/conversations/{id}/messages` for the synchronous
-message → loop round trip, `GET …/events`, a Server-Sent Events stream of
+message → turn round trip, `GET …/events`, a Server-Sent Events stream of
 the turn's beats, plan steps and receipts as they land, and `GET …/activity`,
 the poll fallback. The web UI is a PCC-style chat panel: conversation
 sidebar, markdown replies with the delegate-call trajectory above each one,
@@ -23,7 +24,8 @@ poll) while a turn runs. The subagent-thread map is DB-backed, so
 follow-ups keep their app-side context across restarts. The routing eval
 harness (`docs/agent-evals.md`) closed Phase 3's go/no-go gate: gemma-4-12b
 routes all goldens, refuses out-of-fleet asks, and holds destructive-op
-confirmation. See `CLAUDE.md` for details.
+confirmation; it retired at #75, and the plan-level and session evals gate
+now. See `CLAUDE.md` for details.
 
 ## Architecture sketch
 
@@ -52,7 +54,7 @@ implementation.
 Frontend:  React + Vite + TypeScript
 Backend:   FastAPI + SQLAlchemy 2.0 + Alembic (SQLite in data/)
 Config:    pydantic-settings
-Agent:     tool registry + llama.cpp provider + bounded loop (gemma-4-12b)
+Agent:     plan compiler + interpreter + narrator, llama.cpp provider (gemma-4-12b)
 ```
 
 ## Voice (STT/TTS)

@@ -2,21 +2,24 @@
 
 A turn's trace record (:mod:`app.ai.trace`) and its captured model calls
 (:mod:`app.ai.context_capture`) hold everything the turn saw: the utterance,
-the history, the system prompt and tool schemas as sent, every model response
-byte for byte, and every tool answer. :func:`replay` runs today's loop over
-them with no model and no apps:
+the opening (state block and recall), every model request and response byte
+for byte, and every step's answer. :func:`replay` runs today's interpreter
+over them with no model and no apps:
 
 - the real :class:`~app.ai.providers.llamacpp.LlamaCppProvider` is served the
   captured response bodies in ``seq`` order through an ``httpx.MockTransport``,
   so parsing, validation and errors take the live code path;
-- tool calls are answered from the trace's recorded calls, in order;
-- the system prompt and tool schemas are the captured ones, not today's.
+- each step's call (an ask, a look, a recall) is answered from the trace's
+  recorded calls, in order;
+- the planner prompt is today's, built from the ``fleet`` passed in, so a
+  manifest change since the turn shows up as a request that drifted.
 
 It then reports whether today's code rebuilt each request the turn sent,
-byte for byte as JSON, and ended the same way (stop reason, reply, tool
+byte for byte as JSON, and ended the same way (stop reason, reply, step
 trajectory). A divergence names the first call where the requests differ. A
 traced misfire is a ready-made regression case: replay it before and after a
-fix.
+fix. A turn that resumed a paused plan, acted on the ledger or thought in the
+background reads state the trace doesn't keep, and diverges.
 """
 
 from __future__ import annotations
@@ -29,18 +32,22 @@ from typing import Any
 
 import httpx
 
+from app.ai import memory
+from app.ai import plan as plans
 from app.ai.context_capture import read_captures
-from app.ai.loop import (
-    _INTERNAL_ERROR,
-    AgentLoop,
+from app.ai.interpreter import Interpreter, _Run
+from app.ai.provider import ToolCall
+from app.ai.providers.llamacpp import LlamaCppProvider
+from app.ai.run_record import NOT_RUN_PREFIX
+from app.ai.runtime import (
+    ACTOR,
+    INTERNAL_ERROR,
     AgentRunFailed,
     AgentRunResult,
     ToolCallRecord,
 )
-from app.ai.provider import ToolCall, ToolSpec
-from app.ai.providers.llamacpp import LlamaCppProvider
-from app.ai.run_record import NOT_RUN_PREFIX
 from app.ai.trace import KIND_RUN
+from app.fleet.manifests import Fleet
 
 _REPLAY_BASE_URL = "http://replay.invalid/v1"
 
@@ -85,30 +92,15 @@ def load_trace(path: Path, run_id: str) -> dict[str, Any]:
     raise ReplayError(f"no trace record for run {run_id} in {path}")
 
 
-class _ReplayLoop(AgentLoop):
-    """The live loop, with the tool answers, prompt and tool list from the capture."""
+class _ReplayInterpreter(Interpreter):
+    """The live interpreter, with each step's answer from the capture."""
 
-    def __init__(
-        self,
-        provider: LlamaCppProvider,
-        *,
-        record: dict[str, Any],
-        system_prompt: str,
-        specs: list[ToolSpec],
-    ) -> None:
-        limits = record.get("limits") or {}
-        super().__init__(
-            provider,
-            max_iterations=int(limits.get("max_iterations", 6)),
-            max_corrections=int(limits.get("max_corrections", 3)),
-            max_tokens=int(limits.get("max_tokens", 2048)),
-            max_tool_calls=int(limits.get("max_tool_calls", 12)),
-            # A narrated turn (#65) captured the narrator's call too.
-            narrate=record.get("narration") is not None,
-        )
-        self._captured_prompt = system_prompt
-        self._captured_specs = specs
-        # Only calls that were dispatched answer from the record; the loop
+    def __init__(self, provider: LlamaCppProvider, fleet: Fleet, *, record: dict[str, Any]) -> None:
+        # A narrated turn (#65) captured the narrator's call too; a turn that
+        # replied from the record never called it.
+        path = (record.get("narration") or {}).get("path")
+        super().__init__(provider, fleet, narrate=path != "code:record")
+        # Only calls that were sent answer from the record; the interpreter
         # writes the "not run" ones itself.
         self._answers = [
             ToolCallRecord.model_validate(tool)
@@ -116,46 +108,37 @@ class _ReplayLoop(AgentLoop):
             if not (tool.get("error") or "").startswith(NOT_RUN_PREFIX)
         ]
 
-    def _tool_specs(self) -> list[ToolSpec]:
-        return self._captured_specs
-
-    def _system_prompt(self) -> str:
-        return self._captured_prompt
-
-    def _dispatch(self, call: ToolCall, actor: str) -> tuple[ToolCallRecord, str, bool]:
+    def _answer_for(self, name: str, arguments: dict[str, Any]) -> ToolCallRecord:
         if not self._answers:
-            raise ReplayError(f"the trace has no recorded answer for {call.name}")
+            raise ReplayError(f"the trace has no recorded answer for {name}")
         recorded = self._answers.pop(0)
-        if recorded.tool != call.name or recorded.arguments != call.arguments:
+        if recorded.tool != name or recorded.arguments != arguments:
             raise ReplayError(
-                f"replay asked for {call.name}({call.arguments}); the turn ran "
+                f"replay asked for {name}({arguments}); the turn ran "
                 f"{recorded.tool}({recorded.arguments})"
             )
-        if recorded.error == _INTERNAL_ERROR:
+        if recorded.error == INTERNAL_ERROR:
             raise RuntimeError("replayed crash")
-        if recorded.error is not None:
-            schema = recorded.error.startswith(("Invalid arguments: ", "Unknown tool "))
-            return recorded, f"Error: {recorded.error}", schema
-        return recorded, recorded.result or "", False
+        return recorded
+
+    def _call(self, call: ToolCall, actor: str) -> ToolCallRecord:
+        return self._answer_for(call.name, call.arguments)
+
+    def _recall(self, state: _Run, step: plans.Recall) -> ToolCallRecord:
+        record = self._answer_for(memory.RECALL_TOOL, {"query": step.query})
+        state.records.append(record)
+        return record
 
 
-def replay(trace_path: Path, context_path: Path, run_id: str) -> ReplayReport:
-    """Replay one captured turn and report whether today's loop reproduces it."""
+def replay(trace_path: Path, context_path: Path, run_id: str, fleet: Fleet) -> ReplayReport:
+    """Replay one captured turn over ``fleet`` and report whether today's
+    interpreter reproduces it."""
     record = load_trace(trace_path, run_id)
     captures = read_captures(context_path, run_id)
     if not captures or captures[0].get("request") is None:
         raise ReplayError(f"no captured model calls for run {run_id} in {context_path}")
     report = ReplayReport(run_id=run_id, calls_captured=len(captures))
     first_request = json.loads(captures[0]["request"])
-    system_prompt = str(first_request["messages"][0]["content"])
-    specs = [
-        ToolSpec(
-            name=tool["function"]["name"],
-            description=tool["function"]["description"],
-            parameters=tool["function"]["parameters"],
-        )
-        for tool in first_request.get("tools") or []
-    ]
 
     def serve(request: httpx.Request) -> httpx.Response:
         seq = report.calls_replayed
@@ -176,14 +159,13 @@ def replay(trace_path: Path, context_path: Path, run_id: str) -> ReplayReport:
     provider = LlamaCppProvider(
         _REPLAY_BASE_URL, model, client=httpx.Client(transport=httpx.MockTransport(serve))
     )
-    loop = _ReplayLoop(provider, record=record, system_prompt=system_prompt, specs=specs)
+    interpreter = _ReplayInterpreter(provider, fleet, record=record)
     try:
-        result: AgentRunResult = loop.run(
+        result: AgentRunResult = interpreter.run(
             str(record["utterance"]),
-            history=record.get("history") or [],
             context=record.get("context"),
             surface=record.get("surface"),
-            actor=str(record.get("actor") or "agent:loop"),
+            actor=str(record.get("actor") or ACTOR),
         )
     except AgentRunFailed as exc:
         result = exc.result

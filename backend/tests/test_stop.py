@@ -1,9 +1,10 @@
 """Stop (#66): conductor's cancel, passed on to the app's cancel.
 
-The loop stops at its next boundary and replies from the record; the route
-reaches the in-flight turn; the ask tool hands the Stop to the app; the
-client speaks the app's ``…/cancel``. The whole path, mid-delegate, is the
-trajectory walk ``test_stop_mid_delegate`` and session eval S10.
+The interpreter stops at its next boundary (before the compile, between steps,
+before the narrator) and replies from the record; the route reaches the
+in-flight turn; the ask tool hands the Stop to the app; the client speaks the
+app's ``…/cancel``. The whole path, mid-delegate, is the trajectory walk
+``test_stop_mid_delegate`` and session eval S10.
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.ai.loop import AgentLoop
+from app.ai.interpreter import Interpreter
+from app.ai.provider import ChatResult
 from app.ai.stop import STOPPED_ERROR, Stop, use_stop
 from app.api import routes_agent, turn_activity
 from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
@@ -34,9 +36,40 @@ from app.fleet.tools import build_delegate_tools
 from app.main import app
 from app.tools import registry
 from app.tools.registry import ToolError
-from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
+from tests.scripted_provider import ScriptedProvider, text_turn
 
-# --- the loop ---------------------------------------------------------------------
+
+def _tasks_fleet() -> Fleet:
+    return Fleet(
+        apps=(
+            FleetApp(
+                name="tasks",
+                title="Tasks",
+                upstream="127.0.0.1:8100",
+                agent=AgentSpec(description="Manages tasks.", api="/api/agent", examples=()),
+            ),
+        )
+    )
+
+
+@pytest.fixture
+def delegation() -> Generator[DelegationContext, None, None]:
+    context = DelegationContext(
+        master_conversation_id="m1", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
+    )
+    with use_delegation_context(context):
+        yield context
+
+
+# --- the interpreter ----------------------------------------------------------------
+
+
+def _plan(*requests: str) -> ChatResult:
+    steps = [
+        {"id": f"s{n}", "do": "ask", "app": "tasks", "request": request, "destructive": False}
+        for n, request in enumerate(requests, start=1)
+    ]
+    return text_turn(json.dumps({"steps": steps}))
 
 
 @pytest.fixture
@@ -46,77 +79,75 @@ def stop() -> Stop:
 
 @pytest.fixture
 def notes(stop: Stop) -> Generator[list[str], None, None]:
+    """``ask_tasks`` as a scratch tool: it notes each request, and the person
+    presses Stop while a request that says "stop" runs."""
     store: list[str] = []
 
     @registry.tool
-    def add_note(text: str) -> str:
-        """Append a note."""
-        store.append(text)
-        return f"added: {text}"
-
-    @registry.tool
-    def add_then_stop(text: str) -> str:
-        """Append a note; the person presses Stop while it runs."""
-        store.append(text)
-        stop.request()
-        return f"added: {text}"
+    def ask_tasks(message: str) -> str:
+        """Hand a request to tasks."""
+        store.append(message)
+        if "stop" in message:
+            stop.request()
+        return f"added: {message}"
 
     yield store
 
 
-def test_a_stop_before_the_run_calls_nothing(stop: Stop) -> None:
+def test_a_stop_before_the_turn_calls_nothing(stop: Stop, delegation: DelegationContext) -> None:
     provider = ScriptedProvider([text_turn("never")])
     stop.request()
-    run = AgentLoop(provider).run("hi", stop=stop)
+    run = Interpreter(provider, _tasks_fleet()).run("hi", stop=stop)
     assert run.stop_reason == "cancelled"
     assert run.reply is None  # nothing ran: the client shows its own stop line
     assert provider._turns, "a model call started after Stop"
 
 
-def test_a_stop_mid_batch_skips_the_rest_and_replies_from_the_record(
-    notes: list[str], stop: Stop
+def test_a_stop_during_the_compile_runs_no_step(
+    notes: list[str], stop: Stop, delegation: DelegationContext
 ) -> None:
-    provider = ScriptedProvider(
-        [
-            tool_calls_turn(("add_then_stop", {"text": "milk"}), ("add_note", {"text": "eggs"})),
-            text_turn("never"),
-        ]
-    )
-    run = AgentLoop(provider).run("add milk and eggs", stop=stop)
+    class _StopsWhilePlanning(ScriptedProvider):
+        def chat(self, *args: Any, **kwargs: Any) -> Any:
+            result = super().chat(*args, **kwargs)
+            stop.request()  # Stop lands while the planner writes the plan
+            return result
+
+    provider = _StopsWhilePlanning([_plan("add milk"), text_turn("never")])
+    run = Interpreter(provider, _tasks_fleet(), narrate=True).run("add milk", stop=stop)
     assert run.stop_reason == "cancelled"
-    assert notes == ["milk"]
+    assert notes == []
+    assert [(r.tool, r.error) for r in run.tool_calls] == [("ask_tasks", STOPPED_ERROR)]
+    assert run.reply is None  # nothing reached an app
+    assert len(provider._turns) == 1, "the narrator was called after Stop"
+
+
+def test_a_stop_between_steps_skips_the_rest_and_replies_from_the_record(
+    notes: list[str], stop: Stop, delegation: DelegationContext
+) -> None:
+    provider = ScriptedProvider([_plan("add milk then stop", "add eggs"), text_turn("never")])
+    run = Interpreter(provider, _tasks_fleet(), narrate=True).run("add milk and eggs", stop=stop)
+    assert run.stop_reason == "cancelled"
+    assert notes == ["add milk then stop"]
     assert [(r.tool, r.error) for r in run.tool_calls] == [
-        ("add_then_stop", None),
-        ("add_note", STOPPED_ERROR),
+        ("ask_tasks", None),
+        ("ask_tasks", STOPPED_ERROR),
     ]
     assert run.reply is not None
     assert run.reply.startswith("I stopped before finishing: you stopped me.")
-    assert "- #1 add_then_stop" in run.reply.split("Not run:")[0]
-    assert "#2 add_note" in run.reply.split("Not run:")[1]
-    # Every call has its one answer in the transcript.
-    assert sum(1 for m in run.messages if m["role"] == "tool") == 2
+    assert "- #1 ask_tasks" in run.reply.split("Not run:")[0]
+    assert "#2 ask_tasks" in run.reply.split("Not run:")[1]
+    assert run.plan is not None and run.plan.note == "stopped before s2"
     assert provider._turns, "a model call started after Stop"
 
 
-def test_a_stopped_run_is_never_narrated(notes: list[str], stop: Stop) -> None:
-    class _StopsOnTheText(ScriptedProvider):
-        def chat(self, *args: Any, **kwargs: Any) -> Any:
-            result = super().chat(*args, **kwargs)
-            if not result.tool_calls:
-                stop.request()  # Stop lands while the planner writes its reply
-            return result
-
-    provider = _StopsOnTheText(
-        [
-            tool_calls_turn(("add_note", {"text": "milk"})),
-            text_turn("Added milk."),
-            text_turn("the narrator's words"),
-        ]
-    )
-    run = AgentLoop(provider, narrate=True).run("add milk", stop=stop)
+def test_a_stopped_turn_is_never_narrated(
+    notes: list[str], stop: Stop, delegation: DelegationContext
+) -> None:
+    provider = ScriptedProvider([_plan("add milk, stop"), text_turn("the narrator's words")])
+    run = Interpreter(provider, _tasks_fleet(), narrate=True).run("add milk", stop=stop)
     assert run.stop_reason == "cancelled"
     assert run.reply is not None and "the narrator's words" not in run.reply
-    assert "- #1 add_note" in run.reply
+    assert "- #1 ask_tasks" in run.reply
     assert len(provider._turns) == 1, "the narrator was called after Stop"
 
 
@@ -152,23 +183,25 @@ def test_cancel_stops_the_turn_in_flight(client: TestClient) -> None:
     answers: list[dict[str, Any]] = []
 
     @registry.tool
-    def slow_write(text: str) -> str:
+    def ask_tasks(message: str) -> str:
         """A write the person stops while it runs."""
         answers.append(client.post(f"/api/agent/conversations/{conversation}/cancel").json())
-        return f"wrote {text}"
+        return f"wrote {message}"
 
-    provider = ScriptedProvider(
-        [tool_calls_turn(("slow_write", {"text": "a"})), text_turn("never")]
+    provider = ScriptedProvider([_plan("write a", "write b"), text_turn("never")])
+    app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+        provider, _tasks_fleet(), narrate=True
     )
-    app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(provider)
     response = client.post(
-        f"/api/agent/conversations/{conversation}/messages", json={"content": "write a"}
+        f"/api/agent/conversations/{conversation}/messages", json={"content": "write a and b"}
     )
     assert response.status_code == 200
     assert answers == [{"cancel_requested": True}]
     assistant = response.json()["assistant_message"]
     assert assistant["stop_reason"] == "cancelled"
-    assert "- #1 slow_write" in assistant["content"]
+    assert "- #1 ask_tasks" in assistant["content"]
+    assert [call["error"] for call in assistant["tool_calls"]] == [None, STOPPED_ERROR]
+    assert provider._turns, "the narrator was called after Stop"
     assert turn_activity.get(conversation) is None
 
 
@@ -224,28 +257,6 @@ class _CancellableClient:
         return True
 
 
-def _tasks_fleet() -> Fleet:
-    return Fleet(
-        apps=(
-            FleetApp(
-                name="tasks",
-                title="Tasks",
-                upstream="127.0.0.1:8100",
-                agent=AgentSpec(description="Manages tasks.", api="/api/agent", examples=()),
-            ),
-        )
-    )
-
-
-@pytest.fixture
-def delegation() -> Generator[DelegationContext, None, None]:
-    context = DelegationContext(
-        master_conversation_id="m1", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
-    )
-    with use_delegation_context(context):
-        yield context
-
-
 def test_the_ask_tool_passes_the_stop_on_and_says_what_the_app_did(
     delegation: DelegationContext,
 ) -> None:
@@ -258,6 +269,25 @@ def test_the_ask_tool_passes_the_stop_on_and_says_what_the_app_did(
     assert isinstance(result, str)
     assert "stop reason: cancelled" in result
     assert "Done: create_task (Book dentist)." in result
+
+
+def test_a_stop_mid_delegate_ends_the_turn_with_what_the_app_did(
+    delegation: DelegationContext,
+) -> None:
+    # The whole path in one turn: the plan's ask is in flight, Stop reaches the
+    # app, the app's record of what it did is kept, the next step never runs.
+    stop = Stop()
+    fake = _CancellableClient(stop)
+    build_delegate_tools(_tasks_fleet(), lambda _: fake)
+    provider = ScriptedProvider([_plan("book the dentist", "add eggs"), text_turn("never")])
+    run = Interpreter(provider, _tasks_fleet(), narrate=True).run("book it", stop=stop)
+    assert fake.cancelled == [7] and fake.sent == 1
+    assert run.stop_reason == "cancelled"
+    first, second = run.tool_calls
+    assert first.app_record is not None and first.app_record[0]["outcome"] == "done"
+    assert second.error == STOPPED_ERROR
+    assert run.reply is not None and "Book dentist" in run.reply
+    assert provider._turns, "the narrator was called after Stop"
 
 
 def test_a_stopped_run_never_starts_a_delegate_call(delegation: DelegationContext) -> None:

@@ -1,6 +1,6 @@
 """Typed step events for the live push channel (#38): the one seam.
 
-The interpreter and the loop report what a turn's steps do through these
+The interpreter reports what a turn's steps do through these
 calls; the route binds a sink for exactly the run (:func:`publishing`), and the
 in-process registry (``app/api/turn_activity.py``) fans the events out to
 ``GET …/events``. With no sink bound (evals, direct callers) every call is a
@@ -8,7 +8,7 @@ no-op, and a sink that raises is logged and never costs the turn.
 
 **Nothing streams ahead of its receipt.** Each payload is built from the record
 the ledger journals: a step's outcome is :func:`run_record.classify` of its
-:class:`~app.ai.loop.ToolCallRecord`, and its receipts are the ones
+:class:`~app.ai.runtime.ToolCallRecord`, and its receipts are the ones
 :func:`app.services.ledger.live_step` says the ledger will write. A step is
 announced as started before its call goes out and as landed only once the
 call's record exists. ``seq`` is the step's place in the turn's record, which
@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import structlog
 
 if TYPE_CHECKING:
-    from app.ai.loop import ToolCallRecord
+    from app.ai.runtime import ToolCallRecord
 
 logger = structlog.get_logger(__name__)
 
@@ -73,7 +73,7 @@ def step_started(seq: int, tool: str, arguments: dict[str, Any]) -> None:
 
 def receipt(seq: int, record: ToolCallRecord) -> None:
     """The ``seq``-th call's record exists: what it did, as the ledger keeps it."""
-    from app.services import ledger  # noqa: PLC0415 (the ledger imports the loop)
+    from app.services import ledger  # noqa: PLC0415 (the ledger imports the runtime)
 
     _emit("receipt", ledger.live_step(seq, record))
 

@@ -1,10 +1,10 @@
-"""The interpreter (#70, #72): run a compiled plan for one turn.
+"""The interpreter (#70, #72, #75): every conductor turn, compiled and run.
 
-The loop hands a turn here when it is built with a fleet
-(``CONDUCTOR_COMPILER``). The compiler writes the plan (:mod:`app.ai.compiler`)
-and code runs it, step by step, through the loop's own dispatch, so the
-delegate budget, Idempotency-Keys, receipts, Stop and the narrator are the
-same as the loop's. What it runs, across apps (#72):
+Conductor turns go planner → validator → interpreter → narrator only (#75).
+The compiler writes the plan (:mod:`app.ai.compiler`) and code runs it, step
+by step, on the turn runtime (:mod:`app.ai.runtime`: the registry's dispatch,
+the delegate budget, Idempotency-Keys, receipts, Stop and the narrator). What
+it runs, across apps (#72):
 
 - ``ask``: the app's agent, through its ``ask_<app>`` tool. A ``destructive``
   ask to an app that doesn't confirm its own writes pauses first on code's
@@ -32,15 +32,19 @@ same as the loop's. What it runs, across apps (#72):
 - ``cancel``/``amend``/``undo``: on what's waiting or what just ran, over the
   ledger (:mod:`app.ai.control`, #74), each as a plan of its own; ``cancel``
   and ``amend`` on a running job go to the jobs runtime
-  (:mod:`app.ai.job_control`, #76).
+  (:mod:`app.ai.job_control`, #76). One inside a longer plan is split off and
+  runs first (#75); then the rest runs, unless it waits on a question the
+  control step left or depended on what it acted on (then it is not run,
+  and said).
 - A step whose receipt carries a job ref detaches: the app accepted the work
   and the reply says so now ("queued 40"); the ledger's job row and the
   watcher (:mod:`app.services.job_watcher`) follow it from there.
-- ``think`` (#78), always last: handed to the background as a job conductor
-  owns (:mod:`app.ai.think`, run by :mod:`app.services.thinker`) with what
-  its ``inputs`` found; code replies at once. Its proposal posts later as
-  the job's note and waits like a gate: ``confirm`` yes runs it as a normal
-  plan, no (or anything else) lets it lapse.
+- ``think`` (#78): handed to the background as a job conductor owns
+  (:mod:`app.ai.think`, run by :mod:`app.services.thinker`) with what its
+  ``inputs`` found; code replies at once. The plan ends at the think (#75):
+  steps after it are not run, and said. Its proposal posts later as the
+  job's note and waits like a gate. With the lane off (``CONDUCTOR_THINK``)
+  the think is not run and code says so.
 - The direct answers (:mod:`app.ai.speaker`), ``self`` from the ledger.
 
 Independent reads (:func:`plans.reads_only`: asks to different apps, phrased
@@ -53,9 +57,12 @@ A step that fails ends the plan: the steps after it are on the record as not
 run, and the narrator says so. In a parallel group the reads beside it have
 already run; the plan ends after the group.
 
-A plan the interpreter can't run yet, or no valid plan after one repair,
-returns ``None`` and the loop takes the turn; the compiled plan is
-kept on the result either way (:class:`TurnPlan`), so the ledger records it.
+**No plan, no guess** (#75). A plan the validator still refuses after the
+compiler's repair, or one with a ``{sN}`` no step can name, gets one more
+round (:func:`compiler.repair_turn`). Still nothing runnable: code asks which
+app was meant when the tries disagreed on it, else says plainly it couldn't
+put the request together. A model outage is a failed turn (502), never a
+question.
 
 For a slow plan (one that asks an app) code speaks an honest ack as soon as the
 plan is valid: what's about to happen, never what's done.
@@ -65,13 +72,15 @@ from __future__ import annotations
 
 import contextvars
 import time
-from datetime import date
+import uuid
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from datetime import date
+from typing import Any
 
 import structlog
+
 from app.ai import (
     compiler,
     control,
@@ -87,9 +96,27 @@ from app.ai import (
 from app.ai import glance as glances
 from app.ai import plan as plans
 from app.ai import trace as run_trace
-from app.ai.provider import ChatResult, ProviderError, ToolCall
+from app.ai.confirmation import PendingConfirm
 from app.ai.plan import Ledgered, PausedPlan, TurnPlan
-from app.ai.stop import STOPPED_ERROR, Stop, current_stop
+from app.ai.provider import (
+    ChatProvider,
+    ChatResult,
+    ProviderError,
+    ProviderResponseError,
+    ToolCall,
+)
+from app.ai.runtime import (
+    ACTOR,
+    DEFAULT_MAX_TOKENS,
+    INTERNAL_ERROR,
+    Activity,
+    AgentRunFailed,
+    AgentRunResult,
+    OnActivity,
+    Runtime,
+    ToolCallRecord,
+)
+from app.ai.stop import STOPPED_ERROR, Stop, current_stop, use_stop
 from app.config import get_settings
 from app.fleet.context import current_delegation_context
 from app.fleet.glance import GlanceError, GlanceReader, read_glance
@@ -97,18 +124,28 @@ from app.fleet.jobs import JobCanceller, cancel_job
 from app.fleet.manifests import Fleet
 from app.fleet.tools import ask_tool_name, look_tool_name, open_tool_name
 
-if TYPE_CHECKING:
-    from app.ai.loop import AgentLoop, AgentRunResult, LoopActivity, OnActivity, ToolCallRecord
-
 logger = structlog.get_logger(__name__)
 
 # How a recall step reads the ledger (#80): its query in, what memory found out.
 MemoryReader = Callable[[str], memory.Recalled]
 
 _AFTER_FAILURE = f"{run_record.NOT_RUN_PREFIX}an earlier step of the plan didn't finish"
+# A think's proposal comes back later (#78), so nothing runs after it (#75).
+_AFTER_THINK = (
+    f"{run_record.NOT_RUN_PREFIX}nothing runs after handing a problem to the thinking model"
+)
+_THINK_OFF = f"{run_record.NOT_RUN_PREFIX}the thinking model is switched off here"
+# The rest of a plan whose control step ran first (#75), when it can't go on.
+_WAITS_ON_QUESTION = f"{run_record.NOT_RUN_PREFIX}the question before it needs your answer first"
 _LEFT_IT = "Okay, I left it."
 _SET_ASIDE = "Okay, I set that plan aside. Nothing changed."
 _CONFIRM_TOOL = "confirm"
+# Code's answers when no plan can run (#75): never a guessed action.
+UNPLANNED = "I couldn't put that together. Try it in two parts?"
+ONE_CONTROL = "I can only undo, cancel or change one thing at a time. Say them one by one?"
+THINK_OFF = "I can't think that through here: the thinking model is switched off."
+# What a control step did, as the reason the rest of its plan didn't run.
+_ACTED_ON = {"cancel": "cancelled", "amend": "changed", "undo": "undone"}
 
 
 @dataclass
@@ -120,6 +157,7 @@ class _Run:
     trace: run_trace.RunTrace
     on_activity: OnActivity | None
     stop: Stop | None
+    context: str | None = None
     records: list[ToolCallRecord] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
     # Whether ``words`` is what the person asked for. A resumed or confirmed
@@ -131,22 +169,30 @@ class _Run:
     found: dict[str, ToolCallRecord] = field(default_factory=dict)
     # Memory over the ledger (#80): a recall step's query in, what it found out.
     memory: MemoryReader | None = None
-    # What the planner was shown (State and recall): an ask_user's options
-    # resolve against it (#120).
-    context: str = ""
+    # The turn's plan, once compiled: what the ledger journals.
+    plan: TurnPlan | None = None
+    # Where this plan's records start: a control step split off and run first
+    # (#75) has its own reply, so the rest's reply narrates only its own.
+    since: int = 0
+    # Steps after a think in the plan running now (#75): never run, said.
+    dropped: list[plans.Step] = field(default_factory=list)
 
 
 class Interpreter:
-    """Compiles and runs one turn on behalf of an :class:`AgentLoop`."""
+    """Compiles and runs every conductor turn over one provider and the fleet."""
 
     def __init__(
         self,
-        loop: AgentLoop,
+        provider: ChatProvider,
         fleet: Fleet,
+        *,
         glance: GlanceReader | None = None,
         jobs: JobCanceller | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        tracer: run_trace.Tracer | None = None,
+        narrate: bool = False,
     ) -> None:
-        self._loop = loop
+        self._rt = Runtime(provider, max_tokens=max_tokens, tracer=tracer, narrate=narrate)
         self._fleet = fleet
         # How a look reads a glance; tests pass a fake, none dials the network.
         self._glance: GlanceReader = glance or read_glance
@@ -163,30 +209,88 @@ class Interpreter:
         self,
         words: str,
         *,
-        context: str | None,
-        actor: str,
-        trace: run_trace.RunTrace,
-        on_activity: OnActivity | None,
-        stop: Stop | None,
-        paused: PausedPlan | None,
-        self_facts: Callable[[], str] | None,
+        actor: str = ACTOR,
+        on_activity: OnActivity | None = None,
+        conversation_id: str | None = None,
+        context: str | None = None,
+        surface: str | None = None,
+        stop: Stop | None = None,
+        paused: PausedPlan | None = None,
+        self_facts: Callable[[], str] | None = None,
         control_view: Callable[[], Ledgered] | None = None,
         recall: MemoryReader | None = None,
-    ) -> tuple[AgentRunResult | None, TurnPlan]:
-        """The turn's result, or ``None`` when the loop should take it; and the plan."""
-        loop = self._loop
+    ) -> AgentRunResult:
+        """Run one turn. Always returns, except on a failure stop.
+
+        Binds a request id (unless the caller bound one) and the turn's
+        ``run_id`` for every log line, its result, its trace record and its
+        captured model calls; with a tracer the turn is recorded however it
+        ends, and a trace write that fails never costs the turn. ``context``
+        (:mod:`app.ai.turn_context`: the state block and recall) opens the
+        planner's message before the person's words. ``surface`` shapes the
+        reply (on voice, two sentences and no markdown). ``stop`` is the
+        turn's Stop (#66), checked at every boundary and bound for the tools
+        so a delegate call in flight can pass it on. ``paused`` is last
+        turn's plan waiting on the person, ``self_facts`` what code knows
+        about its own recent work, ``control_view`` what the ledger says a
+        control step acts on (#74), ``recall`` how a recall step reads
+        memory (#80).
+
+        A failure stop (``provider_error``, ``internal_error``) raises
+        :class:`AgentRunFailed` with the partial turn and its plan.
+        """
+        bound = structlog.contextvars.get_contextvars()
+        bindings: dict[str, str] = {}
+        if "request_id" not in bound:
+            bindings["request_id"] = uuid.uuid4().hex[:8]
+        run_id = str(bound.get("run_id") or run_trace.new_run_id())
+        bindings["run_id"] = run_id
+        trace = run_trace.RunTrace(
+            run_id=run_id,
+            actor=actor,
+            utterance=words,
+            conversation_id=conversation_id,
+            model=getattr(self._rt.provider, "model", None),
+            context=context,
+            surface=surface,
+            system_prompt_sha256=run_trace.sha256(self._prompt),
+        )
         state = _Run(
             words,
             actor,
             trace,
             on_activity,
             stop,
+            context=context,
             view=control.View(control_view),
             memory=recall,
-            context=context or "",
         )
-        if _stopped(stop):
-            return loop._stop("cancelled", [], 0, []), TurnPlan(status="ran", note="stopped")
+        started = time.monotonic()
+        with (
+            structlog.contextvars.bound_contextvars(**bindings),
+            run_trace.tracing(trace),
+            use_stop(stop),
+        ):
+            try:
+                result = self._turn(state, paused, self_facts)
+            except AgentRunFailed as exc:
+                exc.result.run_id, exc.result.plan = run_id, state.plan
+                trace.plan = state.plan.model_dump() if state.plan else None
+                self._rt.write_trace(trace, exc.result, str(exc), started)
+                raise
+            result.run_id, result.plan = run_id, state.plan
+            trace.plan = state.plan.model_dump() if state.plan else None
+            self._rt.write_trace(trace, result, "", started)
+            return result
+
+    def _turn(
+        self, state: _Run, paused: PausedPlan | None, self_facts: Callable[[], str] | None
+    ) -> AgentRunResult:
+        """Compile the turn, then answer, resume, confirm, control or run it."""
+        rt = self._rt
+        if _stopped(state.stop):
+            state.plan = TurnPlan(status="ran", note="stopped")
+            return rt.stop("cancelled", [], [])
         pending = current_delegation_context().pending_confirm
         # Code's question and a think's proposal (#78) both take a yes that
         # runs a paused plan.
@@ -196,68 +300,42 @@ class Interpreter:
             calls_per_app=current_delegation_context().calls_per_turn_per_app,
             confirmable=pending is not None or gate is not None,
             resumable=paused is not None and paused.reason == "ask_user",
-            context=context or "",
+            context=state.context or "",
         )
-        loop._emit(on_activity, _activity("model"))
+        rt.emit(state.on_activity, Activity(kind="model"))
         started = time.monotonic()
-        try:
-            compiled = compiler.compile_turn(
-                self._planner_chat(trace),
-                system_prompt=self._prompt,
-                context=context,
-                words=words,
-                fleet=self._fleet,
-                checks=checks,
-            )
-        except ProviderError as exc:
-            logger.error("plan_compile_failed", error=str(exc))
-            raise loop._failed("provider_error", f"agent run failed: {exc}", [], 1, []) from exc
-        except Exception as exc:
-            logger.exception("plan_compile_crashed", error_type=type(exc).__name__)
-            raise loop._failed("internal_error", f"agent run crashed: {exc}", [], 1, []) from exc
+        compiled = self._compile(state, checks)
         compile_ms = round((time.monotonic() - started) * 1000)
         state.messages = [
             {"role": "system", "content": self._prompt},
-            {"role": "user", "content": compiler.user_message(context, words)},
+            {"role": "user", "content": compiler.user_message(state.context, state.words)},
             *({"role": "assistant", "content": raw} for raw in compiled.raw),
         ]
         plan = compiled.plan
         if plan is None:
-            logger.info("plan_fell_back", reason="invalid", problems=compiled.problems)
-            return None, TurnPlan(
-                status="invalid", note="; ".join(compiled.problems)[:500], acted=False
+            state.plan = TurnPlan(
+                status="invalid",
+                note="; ".join(compiled.problems)[:500] or None,
+                repaired=compiled.repaired,
             )
+            return self._unplanned(state, compiled)
         body = plans.dump(plan)
         confirm_app = (gate.app if gate else None) or (pending.app if pending else None)
-        reason = plans.fallback_reason(
-            plan,
-            confirm_app=confirm_app,
-            pending=paused is not None or pending is not None,
-        )
         logger.info(
-            "plan_compiled",
-            plan=plans.describe(plan),
-            repaired=compiled.repaired,
-            ms=compile_ms,
-            fallback=reason,
+            "plan_compiled", plan=plans.describe(plan), repaired=compiled.repaired, ms=compile_ms
         )
-        if reason is None and not get_settings().conductor_think and _thinks(plan):
-            reason = "kind:think"  # the lane is switched off: the loop takes it
-        if reason is not None:
-            return None, TurnPlan(
-                body=body, status="fell_back", note=reason, acted=False, repaired=compiled.repaired
-            )
         ack = plans.ack(plan)
         if ack is not None:
-            loop._emit(on_activity, _activity("model", ack=ack))
+            rt.emit(state.on_activity, Activity(kind="model", ack=ack))
         turn = TurnPlan(body=body, status="ran", ack=ack, repaired=compiled.repaired)
+        state.plan = turn
         if isinstance(plan, plans.Resume) or (
             isinstance(plan, plans.StepPlan) and isinstance(plan.steps[0], plans.Confirm)
         ):
             state.restate = False
         if isinstance(plan, plans.Direct):
             turn.status = "answered"
-            return self._answer(state, plan, self_facts), turn
+            return self._answer(state, plan, self_facts)
         if isinstance(plan, plans.Resume):
             assert paused is not None  # the validator only allows a resume while paused
             resumed = plans.load(paused.body)
@@ -276,11 +354,14 @@ class Interpreter:
                 untrusted=value.untrusted,
                 entity=picked.entity if picked is not None else None,
             )
-            return self._execute(state, turn, steps, paused.resume_at, values), turn
+            return self._execute(state, turn, steps, paused.resume_at, values)
         assert isinstance(plan, plans.StepPlan)
+        controls = [step for step in plan.steps if step.do in plans.CONTROL_KINDS]
+        if controls and len(plan.steps) > 1:
+            return self._split(state, turn, plan, controls, paused=paused, pending=pending)
         first = plan.steps[0]
         if isinstance(first, plans.Confirm):
-            result = self._confirm(
+            return self._confirm(
                 state,
                 turn,
                 plan,
@@ -289,13 +370,115 @@ class Interpreter:
                 pending_app=confirm_app,
                 undoing=control.undo_waiting(paused, pending),
             )
-            return result, turn
         if first.do in plans.CONTROL_KINDS:
-            result = control.run(
-                self, state, turn, first, state.view, paused=paused, pending=pending
-            )
-            return result, turn
-        return self._execute(state, turn, plan.steps, 0, {}), turn
+            return control.run(self, state, turn, first, state.view, paused=paused, pending=pending)
+        return self._execute(state, turn, plan.steps, 0, {})
+
+    # --- compiling ---------------------------------------------------------------------------
+
+    def _compile(self, state: _Run, checks: plans.Checks) -> compiler.Compiled:
+        """The plan, after the compiler's repair and, when it still can't
+        run, one more round (#75). A server answer that wasn't a completion
+        counts as a reply that isn't a plan; an outage fails the turn."""
+        chat = self._planner_chat(state.trace)
+        try:
+            try:
+                compiled = compiler.compile_turn(
+                    chat,
+                    system_prompt=self._prompt,
+                    context=state.context,
+                    words=state.words,
+                    fleet=self._fleet,
+                    checks=checks,
+                )
+            except ProviderResponseError as exc:
+                logger.warning("plan_compile_unusable", error=str(exc))
+                compiled = compiler.Compiled(plan=None, problems=[_not_a_plan(exc)])
+            found = compiled.problems if compiled.plan is None else plans.unrunnable(compiled.plan)
+            if found:
+                logger.info("plan_repair_again", problems=found)
+                try:
+                    compiled = compiler.repair_turn(
+                        chat,
+                        system_prompt=self._prompt,
+                        context=state.context,
+                        words=state.words,
+                        fleet=self._fleet,
+                        checks=checks,
+                        previous=compiled,
+                        found=found,
+                    )
+                except ProviderResponseError as exc:
+                    logger.warning("plan_compile_unusable", error=str(exc))
+                    compiled.plan, compiled.problems = None, [_not_a_plan(exc)]
+        except ProviderError as exc:
+            logger.error("plan_compile_failed", error=str(exc))
+            raise self._rt.failed("provider_error", f"agent run failed: {exc}", [], []) from exc
+        except Exception as exc:
+            logger.exception("plan_compile_crashed", error_type=type(exc).__name__)
+            raise self._rt.failed("internal_error", f"agent run crashed: {exc}", [], []) from exc
+        return compiled
+
+    def _unplanned(self, state: _Run, compiled: compiler.Compiled) -> AgentRunResult:
+        """No plan code can run, after every repair (#75): code asks which app
+        was meant when the tries disagreed on it, else says it couldn't put
+        the request together. Nothing runs and nothing is guessed."""
+        question = clarifying(compiled.raw)
+        path = "code:clarify" if question else "code:unplanned"
+        logger.info("plan_unplanned", problems=compiled.problems, clarify=question is not None)
+        state.trace.narration = {"path": path, "appended": [], "model_calls": 0}
+        reply = narrator.fit(question or UNPLANNED, state.trace.surface)
+        return self._rt.finish("completed", reply, [], state.messages)
+
+    # --- a control step inside a longer plan ------------------------------------------------
+
+    def _split(
+        self,
+        state: _Run,
+        turn: TurnPlan,
+        plan: plans.StepPlan,
+        controls: Sequence[plans.Step],
+        *,
+        paused: PausedPlan | None,
+        pending: PendingConfirm | None,
+    ) -> AgentRunResult:
+        """A control step inside a longer plan (#75) runs first, as a plan of
+        its own; then the rest runs. The rest is not run, and said, when the
+        control step left a question waiting or the rest depended on what it
+        acted on (a ``{sN}`` on it, or a confirm of what it cancelled)."""
+        if len(controls) > 1:
+            turn.note = "more than one control step"
+            state.trace.narration = {"path": "code:control", "appended": [], "model_calls": 0}
+            return self.say(state, ONE_CONTROL)
+        step = controls[0]
+        rest = [other for other in plan.steps if other is not step]
+        first = TurnPlan(body={"steps": [step.model_dump()]}, status="ran", repaired=turn.repaired)
+        turn.first = first
+        turn.body = {"steps": [other.model_dump() for other in rest]}
+        logger.info("plan_control_split", control=step.do, rest=len(rest))
+        done = control.run(self, state, first, step, state.view, paused=paused, pending=pending)
+        turn.first_steps = len(state.records)
+        state.since = len(state.records)
+        if done.stop_reason != "completed":
+            self._skip(rest, state, STOPPED_ERROR)
+            return self._rt.finish(done.stop_reason, done.reply, state.records, state.messages)
+        why: str | None = None
+        if first.status == "paused" or narrator.live_confirm(state.records) is not None:
+            why = _WAITS_ON_QUESTION
+        elif isinstance(rest[0], plans.Confirm) or any(
+            step.id in plans.REF.findall(plans.step_text(other)) for other in rest
+        ):
+            why = f"{run_record.NOT_RUN_PREFIX}it depended on what was {_ACTED_ON[step.do]}"
+        if why is not None:
+            self._skip(rest, state, why)
+            turn.note = why[:500]
+            line = narrator.record_line(state.records[state.since :], state.trace.surface)
+            reply = _joined(done.reply, line, state.trace.surface)
+            return self._rt.finish("completed", reply, state.records, state.messages)
+        state.restate = False  # the person's words were about the control step too
+        after = self._execute(state, turn, rest, 0, {})
+        reply = _joined(done.reply, after.reply, state.trace.surface)
+        return self._rt.finish(after.stop_reason, reply, state.records, state.messages)
 
     # --- answering and confirming -------------------------------------------------------
 
@@ -314,7 +497,7 @@ class Interpreter:
             structured=self._structured_chat(state),
         )
         state.trace.narration = {"path": f"speaker:{path}", "appended": [], "model_calls": 0}
-        return self._loop._finish("completed", reply, [], 1, state.messages)
+        return self._rt.finish("completed", reply, [], state.messages)
 
     def _facts(self, self_facts: Callable[[], str] | None) -> str:
         lines = []
@@ -351,7 +534,7 @@ class Interpreter:
             turn.body = gate.body
             if step.answer == "no":
                 turn.note = "declined at the gate"
-                return self._loop._finish("completed", _LEFT_IT, [], 1, state.messages)
+                return self._rt.finish("completed", _LEFT_IT, [], state.messages)
             paused = plans.load(gate.body)
             assert isinstance(paused, plans.StepPlan)
             steps = paused.steps[gate.resume_at :]
@@ -367,7 +550,7 @@ class Interpreter:
         if step.answer == "no":
             # The app's question lapses on its own; nothing is sent.
             turn.note = "declined the app's question"
-            return self._loop._finish("completed", _LEFT_IT, [], 1, state.messages)
+            return self._rt.finish("completed", _LEFT_IT, [], state.messages)
         turn_events.resumed("app_confirm")
         turn_events.plan(turn.body, 0)
         record = self._dispatch(state, _CONFIRM_TOOL, {"app": pending_app or ""})
@@ -379,7 +562,7 @@ class Interpreter:
                 self, state, turn, undo_step, state.view, position=position, handled=handled
             )
         if record is None or not self._went_well(record):
-            return self._finish(state, turn, rest, 1)
+            return self._finish(state, turn, rest)
         return self._execute(state, turn, rest, 1, {})
 
     def _proposal(
@@ -394,14 +577,14 @@ class Interpreter:
         if answer == "no":
             turn.ends_as = "set_aside"
             turn.note = "set the proposal aside"
-            return self._loop._finish("completed", _SET_ASIDE, [], 1, state.messages)
+            return self._rt.finish("completed", _SET_ASIDE, [], state.messages)
         turn.ends_as = "accepted"
         accepted = plans.load(proposal.body)
         assert isinstance(accepted, plans.StepPlan)
         ack = plans.ack(accepted)
         if ack is not None:
             turn.ack = ack
-            self._loop._emit(state.on_activity, _activity("model", ack=ack))
+            self._rt.emit(state.on_activity, Activity(kind="model", ack=ack))
         turn_events.resumed("proposal")
         logger.info("proposal_accepted", plan=proposal.plan_id, steps=len(accepted.steps))
         return self._execute(state, turn, accepted.steps, 0, {})
@@ -418,21 +601,29 @@ class Interpreter:
         *,
         gate_passed: str | None = None,
     ) -> AgentRunResult:
-        """Run ``steps``; ``offset`` is the first one's index in the plan."""
-        loop = self._loop
+        """Run ``steps``; ``offset`` is the first one's index in the plan.
+
+        The plan ends at a think (#75): the steps after it are kept aside and
+        go on the record as not run when the plan ends."""
         turn_events.plan(turn.body, offset)
+        cut = next((n for n, step in enumerate(steps) if isinstance(step, plans.Think)), None)
+        if cut is not None:
+            state.dropped = list(steps[cut + 1 :])
+            steps = steps[: cut + 1]
+            if state.dropped:
+                logger.info("plan_ends_at_think", dropped=[step.id for step in state.dropped])
         index = 0
         while index < len(steps):
             step = steps[index]
             position = offset + index
             if _stopped(state.stop):
-                self._skip(steps[index:], state, STOPPED_ERROR)
+                self._skip([*steps[index:], *state.dropped], state, STOPPED_ERROR)
                 turn.note = f"stopped before {step.id}"
-                return loop._stop("cancelled", state.records, 1, state.messages)
+                return self._rt.stop("cancelled", state.records, state.messages)
             if isinstance(step, plans.AskUser):
                 turn.status, turn.pause, turn.resume_at = "paused", "ask_user", position + 1
                 if turn.body is not None:
-                    turn.body = options.annotate(turn.body, step.options, state.context)
+                    turn.body = options.annotate(turn.body, step.options, state.context or "")
                 return self._ask_user(state, step)
             group = _read_group(steps, index)
             if len(group) > 1:
@@ -460,7 +651,7 @@ class Interpreter:
                 ]
                 if failed:
                     turn.note = f"stopped after {failed[0].id}"
-                    return self._finish(state, turn, steps[after:], 1)
+                    return self._finish(state, turn, steps[after:])
                 index = after
                 continue
             if isinstance(step, plans.Ask):
@@ -494,14 +685,14 @@ class Interpreter:
                 if refusal is not None:
                     return self._refuse(state, turn, steps, index, filled, refusal)
                 record = self._dispatch(state, open_tool_name(step.app), {"intent": filled.text})
-            else:  # the validator and fallback_reason keep other kinds out
-                raise AssertionError(f"the interpreter can't run {step.do}")
+            else:  # confirm and the control steps are handled before a plan runs
+                raise AssertionError(f"the interpreter can't run {step.do} here")
             if record is None or not self._went_well(record):
                 turn.note = f"stopped after {step.id}"
-                return self._finish(state, turn, steps[index + 1 :], 1)
+                return self._finish(state, turn, steps[index + 1 :])
             self._keep(state, values, step, record)
             index += 1
-        return self._finish(state, turn, [], 1)
+        return self._finish(state, turn, [])
 
     @staticmethod
     def _keep(
@@ -537,7 +728,8 @@ class Interpreter:
             turn.status, turn.pause = "paused", "app_confirm"
             turn.resume_at, turn.pause_app = resume_at, step.app
             self._carry(turn, resume_at, values)
-        return self._finish(state, turn, [], 1)
+            state.dropped = []  # still in the paused plan: said when it gets there
+        return self._finish(state, turn, [])
 
     def _think(
         self,
@@ -548,22 +740,39 @@ class Interpreter:
     ) -> AgentRunResult:
         """Hand a think to the background (#78): its record carries the job
         and what its inputs found; the reply is code's, at once. The thinker
-        runs it on the 26B later; nothing here calls a model."""
-        loop = self._loop
+        runs it on the 26B later; nothing here calls a model. The plan ends
+        here: steps after it are not run, and said (#75). With the lane off
+        the think is not run either, and code says so."""
         record = think.record(step, state.found, values)
-        loop._emit(state.on_activity, _activity("tool", tool=think.TOOL))
+        off = not get_settings().conductor_think
+        if off:
+            record = ToolCallRecord(
+                tool=record.tool,
+                arguments={"problem": record.arguments["problem"], "inputs": list(step.inputs)},
+                error=_THINK_OFF,
+            )
+        self._rt.emit(state.on_activity, Activity(kind="tool", tool=think.TOOL))
         seq = len(state.records) + 1
         turn_events.step_started(seq, record.tool, record.arguments)
-        earlier = list(state.records)
+        earlier = list(state.records[state.since :])
         state.records.append(record)
         turn_events.receipt(seq, record)
+        after = len(state.records)
+        self._skip(state.dropped, state, _AFTER_THINK)
+        state.dropped = []
+        line = narrator.record_line([*earlier, *state.records[after:]], state.trace.surface)
+        if off:
+            turn.note = "think not run: the lane is off"
+            logger.info("plan_think_off")
+            state.trace.narration = {"path": "code:think_off", "appended": [], "model_calls": 0}
+            reply = narrator.fit(f"{line} {THINK_OFF}".strip(), state.trace.surface)
+            return self._rt.finish("completed", reply, state.records, state.messages)
         ref = think.ref_of(record)
         turn.note = f"thinking in the background ({ref})"
         logger.info("plan_think_detached", ref=ref, inputs=list(step.inputs))
-        line = narrator.record_line(earlier, state.trace.surface)
         reply = think.thinking_reply(line, state.trace.surface)
         state.trace.narration = {"path": "code:think", "appended": [], "model_calls": 0}
-        return loop._finish("completed", reply, state.records, 1, state.messages)
+        return self._rt.finish("completed", reply, state.records, state.messages)
 
     @staticmethod
     def _carry(turn: TurnPlan, start: int, values: dict[str, dataflow.Value]) -> None:
@@ -582,8 +791,6 @@ class Interpreter:
     ) -> AgentRunResult:
         """A step code won't run (#72): on the record as not run, with why, and
         the plan ends there."""
-        from app.ai.loop import ToolCallRecord  # noqa: PLC0415
-
         step = steps[index]
         tool, arguments = _call_for(step)
         arguments = {name: filled.text for name in arguments}
@@ -595,37 +802,35 @@ class Interpreter:
         turn_events.receipt(len(state.records), state.records[-1])
         turn.note = f"{step.id} not run: {refusal}"[:500]
         logger.info("plan_step_refused", step=step.id, reason=refusal)
-        return self._finish(state, turn, steps[index + 1 :], 1)
+        return self._finish(state, turn, steps[index + 1 :])
 
-    def _finish(
-        self, state: _Run, turn: TurnPlan, unrun: Sequence[plans.Step], iteration: int
-    ) -> AgentRunResult:
-        loop = self._loop
+    def _finish(self, state: _Run, turn: TurnPlan, unrun: Sequence[plans.Step]) -> AgentRunResult:
+        """End the plan: what didn't run goes on the record with why, then the
+        narrator speaks from this plan's records (a stopped turn: the record)."""
         self._skip(unrun, state, _AFTER_FAILURE)
+        self._skip(state.dropped, state, _AFTER_THINK)
+        state.dropped = []
         if _stopped(state.stop):
-            return loop._stop("cancelled", state.records, iteration, state.messages)
-        reply = loop._reply(
-            state.words, None, state.records, state.trace, state.on_activity, iteration
+            return self._rt.stop("cancelled", state.records, state.messages)
+        reply = self._rt.reply(
+            state.words, state.records[state.since :], state.trace, state.on_activity
         )
-        return loop._finish("completed", reply, state.records, iteration, state.messages)
+        return self._rt.finish("completed", reply, state.records, state.messages)
 
     def _dispatch(self, state: _Run, tool: str, arguments: dict[str, Any]) -> ToolCallRecord | None:
-        """One step through the loop's dispatch; a crash fails the turn like the loop's."""
-        loop = self._loop
-        loop._emit(state.on_activity, _activity("tool", tool=tool))
+        """One step through the runtime's dispatch; a crash fails the turn."""
+        self._rt.emit(state.on_activity, Activity(kind="tool", tool=tool))
         turn_events.step_started(len(state.records) + 1, tool, arguments)
         call = ToolCall(id=f"plan-{len(state.records) + 1}", name=tool, arguments=arguments)
         try:
-            record, _feedback, _schema = self._call(call, state.actor)
+            record = self._call(call, state.actor)
         except Exception as exc:
             logger.exception("plan_step_crashed", tool=tool)
-            from app.ai.loop import ToolCallRecord  # noqa: PLC0415
-
             state.records.append(
-                ToolCallRecord(tool=tool, arguments=arguments, error=_INTERNAL_ERROR)
+                ToolCallRecord(tool=tool, arguments=arguments, error=INTERNAL_ERROR)
             )
-            raise loop._failed(
-                "internal_error", f"agent run crashed in {tool}: {exc}", state.records, 1, []
+            raise self._rt.failed(
+                "internal_error", f"agent run crashed in {tool}: {exc}", state.records, []
             ) from exc
         state.records.append(record)
         turn_events.receipt(len(state.records), record)
@@ -636,18 +841,15 @@ class Interpreter:
     ) -> list[ToolCallRecord]:
         """Independent reads at once (#72): one thread each, each running in a
         copy of the turn's context (its delegation context, Stop and trace),
-        records kept in plan order. A crash fails the turn like the loop's,
-        once every call has come back."""
-        from app.ai.loop import ToolCallRecord  # noqa: PLC0415
-
-        loop = self._loop
+        records kept in plan order. A crash fails the turn, once every call
+        has come back."""
         first = len(state.records)
         tool_calls = [
             ToolCall(id=f"plan-{first + n + 1}", name=tool, arguments=arguments)
             for n, (tool, arguments) in enumerate(calls)
         ]
         for n, call in enumerate(tool_calls):
-            loop._emit(state.on_activity, _activity("tool", tool=call.name))
+            self._rt.emit(state.on_activity, Activity(kind="tool", tool=call.name))
             turn_events.step_started(first + n + 1, call.name, call.arguments)
         logger.info("plan_reads_parallel", tools=[call.name for call in tool_calls])
         with ThreadPoolExecutor(max_workers=len(tool_calls), thread_name_prefix="plan") as pool:
@@ -659,11 +861,11 @@ class Interpreter:
         crash: tuple[str, Exception] | None = None
         for n, (call, future) in enumerate(zip(tool_calls, futures, strict=True)):
             try:
-                record, _feedback, _schema = future.result()
+                record = future.result()
             except Exception as error:
                 logger.exception("plan_step_crashed", tool=call.name)
                 record = ToolCallRecord(
-                    tool=call.name, arguments=call.arguments, error=_INTERNAL_ERROR
+                    tool=call.name, arguments=call.arguments, error=INTERNAL_ERROR
                 )
                 crash = crash or (call.name, error)
             if any(entry.get("outcome") == "done" for entry in record.app_record or []):
@@ -674,23 +876,21 @@ class Interpreter:
         state.records.extend(records)
         if crash is not None:
             tool, cause = crash
-            raise loop._failed(
-                "internal_error", f"agent run crashed in {tool}: {cause}", state.records, 1, []
+            raise self._rt.failed(
+                "internal_error", f"agent run crashed in {tool}: {cause}", state.records, []
             ) from cause
         return records
 
-    def _call(self, call: ToolCall, actor: str) -> tuple[ToolCallRecord, str, bool]:
-        """One call: a look is read here, never through the registry the model
-        is offered; everything else is the loop's own dispatch."""
+    def _call(self, call: ToolCall, actor: str) -> ToolCallRecord:
+        """One call: a look is read here, never through the registry;
+        everything else is the runtime's dispatch."""
         if run_record.is_look(call.name):
             return self._look(call)
-        return self._loop._dispatch(call, actor)
+        return self._rt.dispatch(call, actor)
 
-    def _look(self, call: ToolCall) -> tuple[ToolCallRecord, str, bool]:
+    def _look(self, call: ToolCall) -> ToolCallRecord:
         """Read one app's glance: a ``looked_up`` record built by code, or the
         reason it couldn't be read. No model call, no delegate budget."""
-        from app.ai.loop import ToolCallRecord  # noqa: PLC0415
-
         record = ToolCallRecord(tool=call.name, arguments={})
         app = self._looks.get(call.name)
         stop = current_stop()
@@ -706,17 +906,15 @@ class Interpreter:
         except GlanceError as exc:
             record.error = f"couldn't look at {app.name if app else 'the app'}: {exc}"
         logger.info("plan_look", tool=call.name, ok=record.error is None)
-        return record, record.result or f"Error: {record.error}", False
+        return record
 
     def _recall(self, state: _Run, step: plans.Recall) -> ToolCallRecord:
         """Read memory over the ledger (#80): no app, no model, no budget. The
         record is code's: one ``looked_up`` entry per cited turn, or "nothing
         on record" (still a read that went well; a later ``{sN}`` on it has
         nothing to pass on)."""
-        from app.ai.loop import ToolCallRecord  # noqa: PLC0415
-
         arguments = {"query": step.query}
-        self._loop._emit(state.on_activity, _activity("tool", tool=memory.RECALL_TOOL))
+        self._rt.emit(state.on_activity, Activity(kind="tool", tool=memory.RECALL_TOOL))
         turn_events.step_started(len(state.records) + 1, memory.RECALL_TOOL, arguments)
         record = ToolCallRecord(tool=memory.RECALL_TOOL, arguments=arguments)
         if state.memory is None:
@@ -773,8 +971,6 @@ class Interpreter:
         return run_record.classify(record) in ("done", "looked_up")
 
     def _skip(self, steps: Sequence[plans.Step], state: _Run, error: str) -> None:
-        from app.ai.loop import ToolCallRecord  # noqa: PLC0415
-
         for step in steps:
             tool, arguments = _call_for(step)
             state.records.append(ToolCallRecord(tool=tool, arguments=arguments, error=error))
@@ -784,34 +980,39 @@ class Interpreter:
 
     def _ask_user(self, state: _Run, step: plans.AskUser) -> AgentRunResult:
         question = step.question.strip()
-        options = [option.strip() for option in step.options if option.strip()]
-        if options:
-            question = f"{question} ({' / '.join(options)})"
+        offered = [option.strip() for option in step.options if option.strip()]
+        if offered:
+            question = f"{question} ({' / '.join(offered)})"
         turn_events.paused("ask_user", question=question, step=step.id)
         reply = self._with_record_line(state, question)
-        return self._loop._finish("completed", reply, state.records, 1, state.messages)
+        return self._rt.finish("completed", reply, state.records, state.messages)
 
     def _gate(self, state: _Run, step: plans.Ask, request: str) -> AgentRunResult:
         question = f'Just to check: should I ask {step.app} to "{request}"?'
         turn_events.paused("gate", question=question, app=step.app, step=step.id)
         reply = self._with_record_line(state, question)
-        return self._loop._finish("completed", reply, state.records, 1, state.messages)
+        return self._rt.finish("completed", reply, state.records, state.messages)
 
     def _with_record_line(self, state: _Run, question: str) -> str:
-        line = narrator.record_line(state.records, state.trace.surface)
+        line = narrator.record_line(state.records[state.since :], state.trace.surface)
         return f"{line} {question}" if line else question
+
+    def say(self, state: _Run, reply: str) -> AgentRunResult:
+        """Code's own reply for a control step: plain facts, no model call."""
+        return self._rt.finish(
+            "completed", narrator.fit(reply, state.trace.surface), state.records, state.messages
+        )
 
     # --- model calls -----------------------------------------------------------------------
 
     def _planner_chat(self, trace: run_trace.RunTrace) -> compiler.PlannerChat:
-        loop = self._loop
+        rt = self._rt
 
         def chat(
             messages: list[dict[str, Any]], max_tokens: int, response_format: dict[str, Any]
         ) -> ChatResult:
-            return loop._chat(
+            return rt.chat(
                 messages,
-                [],
                 trace,
                 max_tokens=max_tokens,
                 role="compiler",
@@ -821,15 +1022,14 @@ class Interpreter:
         return chat
 
     def _structured_chat(self, state: _Run) -> speaker.StructuredChat:
-        loop = self._loop
+        rt = self._rt
 
         def chat(
             messages: list[dict[str, Any]], max_tokens: int, response_format: dict[str, Any]
         ) -> ChatResult:
-            loop._emit(state.on_activity, _activity("model"))
-            return loop._chat(
+            rt.emit(state.on_activity, Activity(kind="model"))
+            return rt.chat(
                 messages,
-                [],
                 state.trace,
                 max_tokens=max_tokens,
                 role="speaker",
@@ -839,13 +1039,26 @@ class Interpreter:
         return chat
 
     def _spoken_chat(self, state: _Run) -> narrator.Chat:
-        loop = self._loop
+        rt = self._rt
 
         def chat(messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
-            loop._emit(state.on_activity, _activity("model"))
-            return loop._chat(messages, [], state.trace, max_tokens=max_tokens, role="speaker")
+            rt.emit(state.on_activity, Activity(kind="model"))
+            return rt.chat(messages, state.trace, max_tokens=max_tokens, role="speaker")
 
         return chat
+
+
+def conductor_from_settings(provider: ChatProvider, fleet: Fleet) -> Interpreter:
+    """The turn runtime as configured: the completion cap, the tracer and the
+    narrator switch. The one place settings reach a turn."""
+    settings = get_settings()
+    return Interpreter(
+        provider,
+        fleet,
+        max_tokens=settings.conductor_max_tokens,
+        tracer=run_trace.tracer_from_settings(),
+        narrate=settings.conductor_narrator,
+    )
 
 
 def _call_for(step: plans.Step) -> tuple[str, dict[str, Any]]:
@@ -859,9 +1072,6 @@ def _call_for(step: plans.Step) -> tuple[str, dict[str, Any]]:
     if isinstance(step, plans.Recall):
         return memory.RECALL_TOOL, {"query": step.query}
     return f"plan:{step.do}", {}
-
-
-_INTERNAL_ERROR = "internal error: the tool call failed unexpectedly"
 
 
 def _read_group(steps: Sequence[plans.Step], start: int) -> list[plans.Ask | plans.Look]:
@@ -898,18 +1108,50 @@ def _refusal(
     return None
 
 
-def _thinks(plan: plans.Plan) -> bool:
-    return isinstance(plan, plans.StepPlan) and any(
-        isinstance(step, plans.Think) for step in plan.steps
-    )
+def clarifying(raws: Sequence[str]) -> str | None:
+    """Code's question when the planner's tries disagreed on which app the
+    request is for (#75): each try a plan to one app, two different apps.
+    ``None`` when there's no such ambiguity to name."""
+    picks: list[tuple[str, str]] = []
+    for raw in raws:
+        try:
+            plan = plans.parse(raw)
+        except ValueError:
+            continue
+        if not isinstance(plan, plans.StepPlan):
+            continue
+        touching = [step for step in plan.steps if isinstance(step, plans.Ask | plans.Open)]
+        if not touching or len({step.app for step in touching}) != 1:
+            continue
+        step = touching[0]
+        if any(app == step.app for app, _ in picks):
+            continue
+        said = step.request if isinstance(step, plans.Ask) else step.intent
+        picks.append((step.app, " ".join(plans.REF.sub("that", said).split())))
+    if len(picks) < 2:
+        return None
+    (first, said_first), (second, said_second) = picks[:2]
+    if 0 < len(said_first) <= _QUOTED and 0 < len(said_second) <= _QUOTED:
+        return f'Do you mean "{said_first}" in {first}, or "{said_second}" in {second}?'
+    return f"Do you mean that for {first} or for {second}?"
 
 
-def _activity(
-    kind: Literal["model", "tool"], *, tool: str | None = None, ack: str | None = None
-) -> LoopActivity:
-    from app.ai.loop import LoopActivity  # noqa: PLC0415
+# How long a planner's request can be to quote in code's question.
+_QUOTED = 60
 
-    return LoopActivity(kind=kind, iteration=1, tool=tool, ack=ack)
+
+def _not_a_plan(exc: Exception) -> str:
+    return f"not a plan: {str(exc).splitlines()[0][:200]}"
+
+
+def _joined(first: str | None, second: str | None, surface: str | None) -> str | None:
+    """Two replies of one turn (a control step's, then the rest's); on voice
+    the first keeps its first sentence."""
+    if first and surface in narrator.SPOKEN:
+        sentences = narrator.fit(first, surface).split(". ")
+        first = sentences[0] if len(sentences) == 1 else sentences[0] + "."
+    parts = [part.strip() for part in (first, second) if part and part.strip()]
+    return " ".join(parts) or None
 
 
 def _stopped(stop: Stop | None) -> bool:

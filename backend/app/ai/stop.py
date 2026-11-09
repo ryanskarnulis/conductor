@@ -2,8 +2,8 @@
 
 ``POST …/cancel`` asks the run of the conversation's in-flight turn to stop
 (``app/api/turn_activity.py`` holds one fresh :class:`Stop` per turn, so a
-late Stop never cancels the next turn). The loop checks it before every
-provider call and tool dispatch and ends ``cancelled``; a model call or a
+late Stop never cancels the next turn). The interpreter checks it before
+every model call and step and ends ``cancelled``; a model call or a
 delegate call already in flight finishes first.
 
 A delegate call is the slow part of a conductor turn, so the Stop is also
@@ -12,11 +12,11 @@ passed on: the ``ask_<app>`` tool registers the app's own cancel
 :meth:`Stop.pass_on` calls it. The app stops at its own next boundary and
 answers ``cancelled`` with the record of what it did. Passing on is
 best-effort: an app without a cancel route runs its turn to the end, and the
-loop still stops after it. A compiled plan's parallel reads (#72) put several
+turn still stops after it. A compiled plan's parallel reads (#72) put several
 calls in flight at once; a Stop reaches each of them.
 
-The tool reads the run's Stop from a contextvar (:func:`use_stop`) the loop
-binds, so the MCP server, which has no Stop, needs no wiring.
+The tool reads the run's Stop from a contextvar (:func:`use_stop`) the
+interpreter binds, so the MCP server, which has no Stop, needs no wiring.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ class Stop:
     def pass_on(self) -> None:
         """Send the app's cancel to each delegate call in flight, if any.
 
-        Best-effort: a failure is logged, never raised (the loop stops after
+        Best-effort: a failure is logged, never raised (the turn stops after
         the calls regardless).
         """
         with self._lock:

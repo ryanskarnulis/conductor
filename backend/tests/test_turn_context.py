@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
 
 from app.ai import recall, state_block, turn_context
-from app.ai.loop import AgentLoop, ToolCallRecord
+from app.ai.interpreter import Interpreter
+from app.ai.runtime import ToolCallRecord
 from app.ai.recall import EarlierCall, Recall
 from app.ai.state_block import Now
+from app.api import routes_agent
+from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
+from app.fleet.manifests import Fleet, discover_fleet
+from app.main import app
 from app.tools import registry
-from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
-from tests.test_conversations_api import _create_conversation, _use_loop
+from tests.fake_world import write_fixture_fleet
+from tests.scripted_provider import ScriptedProvider, text_turn
 
 THURSDAY = date(2026, 11, 5)
 
@@ -168,28 +175,39 @@ def test_a_recalled_answer_is_labelled_as_of_then() -> None:
     assert "answered then, oldest first; an answer is as of then, not now" in rendered
 
 
-def test_the_route_recalls_an_earlier_conversation(client: TestClient) -> None:
+def _fleet(tmp_path: Path) -> Fleet:
+    return discover_fleet(write_fixture_fleet(tmp_path / "fleet"))
+
+
+def _plan_ask(app_name: str, request: str) -> Any:
+    step = {"id": "s1", "do": "ask", "app": app_name, "request": request, "destructive": False}
+    return text_turn(json.dumps({"steps": [step]}))
+
+
+def _conversation(client: TestClient) -> int:
+    return int(client.post("/api/agent/conversations", json={}).json()["id"])
+
+
+def test_the_route_recalls_an_earlier_conversation(client: TestClient, tmp_path: Path) -> None:
     @registry.tool
     def ask_music(message: str) -> str:
         """Scratch music agent."""
         return "Saved “Odessa” by Caribou to the library."
 
-    _use_loop(
-        ScriptedProvider(
-            [
-                tool_calls_turn(("ask_music", {"message": "grab Odessa by Caribou"})),
-                text_turn("Saved."),
-            ]
-        )
-    )
-    first = _create_conversation(client)
+    fleet = _fleet(tmp_path)
+
+    def use(provider: ScriptedProvider) -> None:
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(provider, fleet)
+
+    use(ScriptedProvider([_plan_ask("music", "grab Odessa by Caribou")]))
+    first = _conversation(client)
     client.post(
         f"/api/agent/conversations/{first}/messages", json={"content": "grab Odessa by Caribou"}
     )
 
-    later = ScriptedProvider([text_turn("Filed.")])
-    _use_loop(later)
-    second = _create_conversation(client)
+    later = ScriptedProvider([text_turn(json.dumps({"answer": "decline"}))])
+    use(later)
+    second = _conversation(client)
     response = client.post(
         f"/api/agent/conversations/{second}/messages",
         json={"content": "put that Caribou song in the house folder", "surface": "voice"},
@@ -256,28 +274,34 @@ def test_a_broken_history_leaves_the_calendar_and_never_the_turn() -> None:
     assert "Today:" in turn_context.build(THURSDAY, Now(), "hi", lambda: unreadable, lambda: [])
 
 
-def test_a_turn_has_one_prompt_prefix_and_the_system_prompt_never_moves() -> None:
+def test_a_turn_has_one_prompt_prefix_and_the_system_prompt_never_moves(
+    tmp_path: Path,
+) -> None:
     @registry.tool
-    def scratch_note(text: str) -> str:
-        """Scratch note."""
-        return f"noted {text}"
+    def ask_tasks(message: str) -> str:
+        """Scratch tasks agent."""
+        return f"noted {message}"
 
     provider = ScriptedProvider(
         [
-            tool_calls_turn(("scratch_note", {"text": "a"})),
-            tool_calls_turn(("scratch_note", {"text": "b"})),
-            text_turn("done"),
-            text_turn("again"),
+            text_turn("not a plan"),  # the compiler's repair rides the same prefix
+            _plan_ask("tasks", "note a and b"),
+            _plan_ask("tasks", "again"),
         ]
     )
-    loop = AgentLoop(provider)
-    loop.run("note two things", context="[State]\nToday: x")
-    loop.run("and again", context="[State]\nToday: y")
+    conductor = Interpreter(provider, _fleet(tmp_path))
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+        conductor.run("note two things", context="[State]\nToday: x")
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+        conductor.run("and again", context="[State]\nToday: y")
 
-    first_turn = provider.requests[:3]
+    first_turn = provider.requests[:2]
     prefixes = {(r["messages"][0]["content"], r["messages"][1]["content"]) for r in first_turn}
     assert len(prefixes) <= 2  # the acceptance bound; in fact it is one
     assert len(prefixes) == 1
+    assert first_turn[0]["messages"][1]["content"].startswith("[State]\nToday: x")
     systems = {r["messages"][0]["content"] for r in provider.requests}
     assert len(systems) == 1  # byte-identical across turns: the cache keeps it
-    assert provider.requests[3]["messages"][1]["content"] == "[State]\nToday: y\n\nand again"
+    assert provider.requests[2]["messages"][1]["content"] == (
+        "[State]\nToday: y\n\nThe person said: and again"
+    )

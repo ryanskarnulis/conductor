@@ -39,3 +39,13 @@ def test_unseeded_blocks_are_counted_not_paired(tmp_path: Path) -> None:
     _block(tmp_path, 1, "a", [True, False], None)
     _block(tmp_path, 1, "b", [True, True], None)
     assert "unpaired" in _report().table(_report().load(tmp_path))[1]
+
+
+def test_plan_eval_rows_count_per_case_unpaired(tmp_path: Path) -> None:
+    # The plan suite (#75) writes one row per sample: a case and its verdict.
+    rows = [{"case": "chess-resign", "group": "golden", "correct": ok} for ok in (True, False)]
+    (tmp_path / "block-1-a.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    (tmp_path / "block-1-b.jsonl").write_text(json.dumps({**rows[0]}) + "\n")
+    (line,) = _report().table(_report().load(tmp_path))[1:]
+    assert line.startswith("chess-resign") and "1/2" in line and "1/1" in line
+    assert "unpaired" in line

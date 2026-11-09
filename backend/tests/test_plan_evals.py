@@ -2,9 +2,10 @@
 
 Spike D1's bench in the repo (``plan_cases.py``): every routing golden as a
 plan, the S1–S16 scenarios, the held-out set, and the long-plan cases. Each
-sample is one compile through the shipped compiler (prompt, schema, validator
-and its one repair) against the real llama-server, with the real workspace
-manifests; nothing runs. A sample passes when the plan is valid and matches one
+sample is one compile as the interpreter does it (prompt, schema, validator,
+its repair, and since #75 one more round when the plan still can't run)
+against the real llama-server, with the real workspace manifests; nothing
+runs. Since #75 (per #59) this suite and the session evals are the eval gate. A sample passes when the plan is valid and matches one
 of the case's shapes.
 
 Gated per group under the vendored Wilson rule (``evalstats.decide``): red
@@ -123,17 +124,25 @@ def _compile(case: Case, fleet: Fleet, prompt: str) -> tuple[compiler.Compiled, 
         finally:
             calls.append(time.monotonic() - started)
 
+    state = case.state or empty_state()
+    checks = plans.Checks(fleet=fleet, confirmable=case.confirmable, context=state)
     try:
         compiled = compiler.compile_turn(
-            chat,
-            system_prompt=prompt,
-            context=case.state or empty_state(),
-            words=case.text,
-            fleet=fleet,
-            checks=plans.Checks(
-                fleet=fleet, confirmable=case.confirmable, context=case.state or empty_state()
-            ),
+            chat, system_prompt=prompt, context=state, words=case.text, fleet=fleet, checks=checks
         )
+        # The interpreter's one more round (#75), as shipped.
+        found = compiled.problems if compiled.plan is None else plans.unrunnable(compiled.plan)
+        if found:
+            compiled = compiler.repair_turn(
+                chat,
+                system_prompt=prompt,
+                context=state,
+                words=case.text,
+                fleet=fleet,
+                checks=checks,
+                previous=compiled,
+                found=found,
+            )
     finally:
         provider.close()
     return compiled, calls[0] if calls else 0.0
@@ -158,6 +167,8 @@ def _sample(case: Case, fleet: Fleet, prompt: str) -> dict[str, Any]:
         "valid": plan is not None,
         "first_valid": first_valid,
         "repaired": compiled.repaired,
+        # Planner calls: 1; 2 after the compiler's repair; 3 after #75's round.
+        "calls": len(compiled.raw),
         "steps": len(plan.steps) if isinstance(plan, plans.StepPlan) else 0,
         "plan": plans.describe(plan) if plan is not None else None,
         "problems": compiled.problems,
@@ -197,6 +208,8 @@ def test_plan_group(group: str, fleet: Fleet) -> None:
         f"[plan-eval] GROUP {group}: {passed}/{runs} ({passed / runs:.0%}, Wilson "
         f"{low:.2f}–{high:.2f}, floor {floor}) valid {sum(r['valid'] for r in rows)}/{runs} "
         f"first-try {sum(r['first_valid'] for r in rows)}/{runs} "
+        f"third-call {sum(r['calls'] >= 3 for r in rows)}/{runs} "
+        f"right-within-two {sum(r['correct'] and r['calls'] <= 2 for r in rows)}/{runs} "
         f"p50 {statistics.median(seconds):.2f}s max steps {max(r['steps'] for r in rows)}"
     )
     assert decide(passed, runs, floor) is not Decision.BELOW_FLOOR, (
