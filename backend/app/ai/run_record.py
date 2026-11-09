@@ -53,6 +53,11 @@ LOOK_PREFIX = "look_"
 LOOK_FELL_BACK = "glance unavailable, asked the app instead: "
 
 
+# The argument of an ask that lists the saved facts code sent with it (#134,
+# ``app.ai.facts.related``): on the record and the ledger, never in a model's view.
+ATTACHED_FACTS = "facts"
+
+
 # A cancel sent to a running job (#76): ``cancel_job_<app>``, by code, never
 # a tool the model is offered.
 JOB_CANCEL_PREFIX = "cancel_job_"
@@ -173,8 +178,15 @@ def _app_done(record: ToolCallRecord) -> list[str]:
     ]
 
 
+def shown(arguments: dict[str, Any]) -> dict[str, Any]:
+    """A call's arguments as a model may read them: without the saved facts
+    code sent along with an ask (#134). They stay on the record and the
+    ledger; out of every model's view, a forgotten fact can't come back."""
+    return {name: value for name, value in arguments.items() if name != ATTACHED_FACTS}
+
+
 def _compact(arguments: dict[str, Any]) -> str:
-    return json.dumps(arguments, separators=(",", ":"), sort_keys=True, default=str)
+    return json.dumps(shown(arguments), separators=(",", ":"), sort_keys=True, default=str)
 
 
 def clip(text: str) -> str:

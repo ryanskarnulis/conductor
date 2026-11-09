@@ -19,6 +19,15 @@ What code does with a request (:func:`parse`):
 - anything else is a question about the list: the facts that share words
   with it, else all of them, newest first.
 
+Saved facts also go with another app's ask (#134, :func:`related`,
+:func:`attach`): when the request clearly shares terms with a fact ("add a
+task for my music sorting day" and "I sort music on Sundays"), code sends the
+fact along after the request, quoted and marked as context, for the app's
+agent to read. The person's words are never rewritten; the app does the
+interpreting. The step's arguments keep which facts went (:data:`ARGUMENT`),
+for the ledger and the live channel; the record lines models read leave them
+out (:func:`app.ai.run_record.shown`), so a forgotten fact never comes back.
+
 The receipts are ordinary v1.1 entries (``done``/``looked_up``/``refused``)
 touching ``fact`` refs titled with the person's words, so the narrator, the
 ledger and the live channel read them like any app's. A fact has no undo
@@ -28,12 +37,13 @@ handle: "forget that" is how it goes. Pure: no session, no I/O.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
-from app.ai.memory import day, stem
+from app.ai.memory import day, stem, terms
+from app.ai.run_record import ATTACHED_FACTS
 
 APP = "memory"
 # The step's tool on the record: an ask, filed like any app's.
@@ -139,6 +149,20 @@ def own_words(request: str, words: str) -> str | None:
         if found:
             return found
     return None
+
+
+def forget_target(asked: str, words: str) -> str:
+    """What to forget, from the person's own words when the planner's target
+    isn't in them (#134: told "forget that", the 12B sometimes wrote its
+    prompt's example, "forget that I sort music on Sundays"). ``asked`` is
+    the planner's target; with no words of theirs (a resumed plan was told
+    "yes"), or words that aren't a forget, it stands."""
+    said = parse(words)
+    if not words.strip() or said.kind != "forget":
+        return asked
+    if asked and {_root(w) for w in words_of(asked)} <= {_root(w) for w in words_of(words)}:
+        return asked
+    return said.text
 
 
 def literal(text: str, words: str) -> str | None:
@@ -258,3 +282,73 @@ def listed(shown: Iterable[Saved], *, total: int) -> tuple[str, list[dict[str, A
     if total > len(shown):
         result += f" And {total - len(shown)} more in the memory list."
     return result, entries
+
+
+# --- saved facts in another app's ask (#134) -----------------------------------------------
+
+# The ask's argument that names the facts sent with it.
+ARGUMENT = ATTACHED_FACTS
+# At most this many facts go with one request, each at most this long.
+MAX_ATTACHED = 2
+MAX_ATTACHED_CHARS = 200
+# The terms a request must share with a fact for the fact to go with it.
+MIN_SHARED = 2
+# How the facts are marked in the message an app receives: context, not a request.
+CONTEXT_LEAD = (
+    "Context from conductor, not part of the request: what the person asked conductor to "
+    "remember, in their own words:"
+)
+# Words that name an app's own things and say nothing about which fact.
+_GENERIC = frozenset({"task", "todo", "reminder", "item", "note"})
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _root(word: str) -> str:
+    """A light verb stem on top of :func:`app.ai.memory.stem`: "sorting" and
+    "sorted" match "sort"."""
+    for suffix in ("ing", "ed"):
+        base = word.removesuffix(suffix)
+        if base != word and len(base) >= 3:
+            if len(base) > 3 and base[-1] == base[-2]:
+                base = base[:-1]  # "running" -> "run"
+            return base
+    return word
+
+
+def _match_terms(text: str) -> set[str]:
+    return {_root(word) for word in terms(text)} - _GENERIC
+
+
+def related(request: str, saved: Sequence[str]) -> list[str]:
+    """The saved facts an app's request clearly points at, best first, at
+    most :data:`MAX_ATTACHED`. Conservative: a fact needs two of its own terms
+    in the request, so one shared word, a stop word or a weekday never pulls
+    one in. A fact the request already says isn't sent again. ``saved`` is
+    newest first; a tie keeps that order."""
+    wanted = _match_terms(request)
+    if len(wanted) < MIN_SHARED:
+        return []
+    scored: list[tuple[int, int, str]] = []
+    for order, fact in enumerate(saved):
+        shared = len(_match_terms(fact) & wanted)
+        if shared < MIN_SHARED or literal(fact, request):
+            continue
+        scored.append((-shared, order, fact))
+    return [fact for _, _, fact in sorted(scored)[:MAX_ATTACHED]]
+
+
+def quotable(fact: str) -> str:
+    """A fact as it is quoted to an app: one line, no double quotes, capped."""
+    text = " ".join(_CONTROL.sub(" ", fact).replace('"', "'").split())
+    if len(text) > MAX_ATTACHED_CHARS:
+        text = text[: MAX_ATTACHED_CHARS - 1].rstrip() + "…"
+    return text
+
+
+def attach(message: str, attached: Sequence[str]) -> str:
+    """The message an app receives: the request as the plan wrote it, then the
+    facts on a line of their own, quoted and marked as context."""
+    quoted = [f'"{text}"' for text in map(quotable, attached[:MAX_ATTACHED]) if text]
+    if not quoted or not message.strip():
+        return message
+    return f"{message}\n\n({CONTEXT_LEAD} {'; '.join(quoted)})"

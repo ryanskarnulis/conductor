@@ -20,6 +20,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.ai import facts
 from app.ai import plan as plans
 from app.ai import recall
 from app.ai.runtime import ToolCallRecord
@@ -38,6 +39,9 @@ class M:
     destructive: bool | None = None
     answer: str | None = None
     target_has: str | None = None
+    # Saved facts code must send with this ask (#134): the request keeps the
+    # words that point at them, and the interpreter attaches them.
+    attaches: tuple[str, ...] = ()
 
     def matches(self, step: BaseModel) -> bool:
         kinds = (self.do,) if isinstance(self.do, str) else self.do
@@ -59,6 +63,10 @@ class M:
             return False
         if self.target_has is not None and self.target_has not in getattr(step, "target", ""):
             return False
+        if self.attaches:
+            request = plans.REF.sub(" ", str(getattr(step, "request", "")))
+            if facts.related(request, self.attaches) != list(self.attaches):
+                return False
         return True
 
 
@@ -470,6 +478,27 @@ CASES: tuple[Case, ...] = (
         (one(M("ask", "memory", ("forget", "sunday"))),),
         "memory",
         state(facts="I sort music on Sundays|focus time is 9 to 11 on weekdays"),
+    ),
+    # A saved fact in another app's ask (#134): the planner passes the words
+    # through and code sends the fact along, so the request must keep the
+    # words that point at it (the session scenario M3 checks the app got it).
+    Case(
+        "memory-used",
+        "add a task for my music sorting day to clean the record player",
+        (
+            one(
+                M(
+                    "ask",
+                    "tasks",
+                    ("record player",),
+                    destructive=False,
+                    attaches=("I sort music on Sundays",),
+                )
+            ),
+            one(M("ask", "tasks", ("record player", "sunday"), destructive=False)),
+        ),
+        "memory",
+        state(facts="I sort music on Sundays"),
     ),
     # --- general knowledge and declines ------------------------------------------------
     Case("knowledge-egg", "how long do I boil an egg?", (none("knowledge"),), "knowledge"),

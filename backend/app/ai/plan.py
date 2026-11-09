@@ -37,6 +37,8 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field, TypeAdapter
 
 from app.ai.facts import APP as MEMORY_APP
+from app.ai.facts import parse as parse_memory
+from app.ai.facts import related, words_of
 from app.ai.memory import terms
 from app.fleet.manifests import Fleet
 
@@ -501,6 +503,121 @@ def recalled_answer(plan: Plan, words: str, context: str) -> list[str]:
                     "as of then, not now, so never answer from it: ask or look at that app again"
                 ]
     return []
+
+
+# A question about conductor itself or what it keeps about the person (#134),
+# which is never general knowledge: "what can you do?", "what did you just do?".
+_ABOUT_YOU = re.compile(
+    r"^\W*(?:(?:so|and|hey|ok|okay)[\s,]+)?(?:what|which)\s+(?:else\s+)?(?:"
+    r"can\s+you\s+(?:do|help)|are\s+you\s+(?:doing|working|up\s+to)|"
+    r"did\s+you\s+(?:just\s+)?do|have\s+you\s+(?:just\s+)?done)\b",
+    re.IGNORECASE,
+)
+_ABOUT_ME = re.compile(
+    r"^\W*(?:what|how\s+much)\s+(?:else\s+)?do\s+you\s+(?:know|remember)\s+about\s+(?:me|myself)\b",
+    re.IGNORECASE,
+)
+
+
+def about_you(plan: Plan, words: str) -> list[str]:
+    """A ``knowledge`` answer to a question about conductor itself ("what can
+    you do?") or what it keeps about the person ("what do you know about
+    me?"): since #81's memory line the 12B files these as general knowledge
+    about half the time. Knowledge doesn't know conductor; the repair points
+    at the answer that does. Only these few phrasings; ``chat`` stays."""
+    if not isinstance(plan, Direct) or plan.answer != "knowledge":
+        return []
+    if _ABOUT_ME.search(words):
+        return [
+            "they asked what you know about them, which isn't general knowledge: ask memory, "
+            'or answer {"answer": "self"}'
+        ]
+    if _ABOUT_YOU.search(words):
+        return [
+            "they asked about you, which isn't general knowledge: answer "
+            '{"answer": "self"} (the narrator answers from State and the app list)'
+        ]
+    return []
+
+
+# "what do you remember about the fence project?" (#134): what was said or
+# done before, unless it is about the person or something they saved.
+_REMEMBER_ABOUT = re.compile(
+    r"\b(?:what|do|did)\s+(?:do\s+|did\s+)?you\s+(?:still\s+)?(?:remember|recall)\s+"
+    r"(?:about\s+|of\s+)?(?P<topic>[^?.!]+)",
+    re.IGNORECASE,
+)
+_ABOUT_THEM = re.compile(r"^(?:me|myself|us|ourselves)\b", re.IGNORECASE)
+_FACTS_HEADER = "Facts the person asked you to remember"
+
+
+def remembered_topic(plan: Plan, words: str, context: str) -> list[str]:
+    """ "What do you remember about the fence project?" planned as anything but
+    a recall (#134: since #81's memory line the 12B asked tasks): unless a fact
+    the person saved is about it (then memory is right), it asks what was said
+    or done before, so the repair asks for a recall. Questions about the
+    person themselves ("… about me?") are memory's and pass."""
+    found = _REMEMBER_ABOUT.search(words)
+    if found is None:
+        return []
+    topic = " ".join(found.group("topic").split()).strip(" ,;:")
+    wanted = words_of(topic)
+    if not wanted or _ABOUT_THEM.match(topic):
+        return []
+    if isinstance(plan, StepPlan) and any(step.do == "recall" for step in plan.steps):
+        return []
+    if any(wanted & words_of(fact) for fact in saved_in(context)):
+        return []
+    return [
+        f'they asked what you remember about "{topic}", and none of the facts they saved is '
+        "about it: that is a question about what was said or done before, so plan a recall "
+        f'step for "{topic}" (other steps may follow it)'
+    ]
+
+
+def looked_up_fact(plan: Plan, words: str, context: str) -> list[str]:
+    """A plan that first looks up a saved fact State already lists, to feed
+    another app's ask ("add a task for my music sorting day": recall or ask
+    memory "when do I sort music?", then tasks) (#134). Code sends that fact
+    with the ask itself (:func:`app.ai.facts.related`), and a recall names no
+    fact to pass on, so the repair drops the lookup and keeps their words."""
+    if not isinstance(plan, StepPlan) or len(plan.steps) < 2:
+        return []
+    first = plan.steps[0]
+    lookup = isinstance(first, Recall) or (
+        isinstance(first, Ask)
+        and first.app == MEMORY_APP
+        and parse_memory(first.request).kind == "list"
+    )
+    then = next((s for s in plan.steps[1:] if isinstance(s, Ask) and s.app != MEMORY_APP), None)
+    if not lookup or then is None:
+        return []
+    saved = related(words, saved_in(context))
+    if not saved:
+        return []
+    return [
+        f'{first.id} looks up "{saved[0]}", which State already lists; code sends that fact '
+        f"with the ask to {then.app} itself, so leave {first.id} out and ask {then.app} in the "
+        "person's own words"
+    ]
+
+
+def saved_in(context: str) -> list[str]:
+    """The saved facts the state block listed (#81), in its order."""
+    found: list[str] = []
+    inside = False
+    for line in context.splitlines():
+        if line.startswith(_FACTS_HEADER):
+            inside = True
+            continue
+        if not inside:
+            continue
+        if not line.startswith('- "'):
+            break
+        text, sep, _ = line[3:].rpartition('" (saved')
+        if sep:
+            found.append(text)
+    return found
 
 
 # The step kinds whose receipt can give a later step a name for ``{sN}``: an

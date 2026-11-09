@@ -10,6 +10,9 @@ it runs, across apps (#72):
   ask to an app that doesn't confirm its own writes pauses first on code's
   question (the backstop gate); ``confirm`` yes runs it. An app's
   ``confirm_required`` pauses the plan the same way, on the app's question.
+  An ask whose words clearly point at a saved fact (#134,
+  :func:`app.ai.facts.related`) carries it in its ``facts`` argument; the
+  tool sends it after the request, quoted and marked as context.
 - ``look`` (#73): a plain GET to the app's glance endpoint (declared in its
   manifest), through :mod:`app.fleet.glance`: no agent loop, no model call, no
   budget charge. The record is a ``looked_up`` receipt built by code
@@ -178,6 +181,9 @@ class _Run:
     memory: MemoryReader | None = None
     # The memory app (#81): what an ask to ``memory`` reaches.
     memory_app: MemoryApp | None = None
+    # The saved facts (#134), newest first: read once, when an app ask needs them.
+    saved_facts: Callable[[], Sequence[str]] | None = None
+    saved: list[str] | None = None
     # The turn's plan, once compiled: what the ledger journals.
     plan: TurnPlan | None = None
     # Where this plan's records start: a control step split off and run first
@@ -229,6 +235,7 @@ class Interpreter:
         control_view: Callable[[], Ledgered] | None = None,
         recall: MemoryReader | None = None,
         memory_app: MemoryApp | None = None,
+        saved_facts: Callable[[], Sequence[str]] | None = None,
     ) -> AgentRunResult:
         """Run one turn. Always returns, except on a failure stop.
 
@@ -245,7 +252,8 @@ class Interpreter:
         about its own recent work, ``control_view`` what the ledger says a
         control step acts on (#74), ``recall`` how a recall step reads
         memory (#80), ``memory_app`` what an ask to the built-in ``memory``
-        app reaches (#81).
+        app reaches (#81), ``saved_facts`` the person's saved facts, newest
+        first, which an app ask whose words point at one carries (#134).
 
         A failure stop (``provider_error``, ``internal_error``) raises
         :class:`AgentRunFailed` with the partial turn and its plan.
@@ -276,6 +284,7 @@ class Interpreter:
             view=control.View(control_view),
             memory=recall,
             memory_app=memory_app,
+            saved_facts=saved_facts,
         )
         started = time.monotonic()
         with (
@@ -639,7 +648,15 @@ class Interpreter:
                 return self._ask_user(state, step)
             group = _read_group(steps, index)
             if len(group) > 1:
-                results = self._dispatch_all(state, [_call_for(s) for s in group])
+                results = self._dispatch_all(
+                    state,
+                    [
+                        (ask_tool_name(s.app), self._ask_arguments(state, s, s.request))
+                        if isinstance(s, plans.Ask)
+                        else _call_for(s)
+                        for s in group
+                    ],
+                )
                 for n, read in enumerate(group):
                     if isinstance(read, plans.Look) and not self._went_well(results[n]):
                         results[n] = self._look_fell_back(state, read, results[n], steps)
@@ -682,7 +699,9 @@ class Interpreter:
                     return self._gate(state, step, filled.text)
                 else:
                     record = self._dispatch(
-                        state, ask_tool_name(step.app), {"message": filled.text}
+                        state,
+                        ask_tool_name(step.app),
+                        self._ask_arguments(state, step, filled.text),
                     )
                 if record is not None and record.app_confirm and record.app_confirm.get("question"):
                     return self._app_asked(state, turn, steps, position + 1, step, values)
@@ -710,6 +729,33 @@ class Interpreter:
             self._keep(state, values, step, record)
             index += 1
         return self._finish(state, turn, [])
+
+    def _ask_arguments(self, state: _Run, step: plans.Ask, message: str) -> dict[str, Any]:
+        """An app ask's arguments: the request as the plan wrote it (refs
+        filled), and the saved facts its words clearly point at (#134), which
+        the ask tool sends after it as quoted context. Matched on the plan's
+        own words, never on a title a ref put in."""
+        arguments: dict[str, Any] = {"message": message}
+        attached = facts.related(plans.REF.sub(" ", step.request), self._saved(state))
+        if attached:
+            arguments[facts.ARGUMENT] = attached
+            logger.info("plan_facts_attached", step=step.id, app=step.app, count=len(attached))
+        return arguments
+
+    @staticmethod
+    def _saved(state: _Run) -> list[str]:
+        """The person's saved facts, newest first, read once a turn; none
+        when memory can't be read (the ask still goes, as the plan wrote it)."""
+        if state.saved is None:
+            state.saved = []
+            if state.saved_facts is not None:
+                try:
+                    state.saved = list(state.saved_facts())
+                except Exception as exc:
+                    logger.warning(
+                        "saved_facts_failed", error=str(exc), error_type=type(exc).__name__
+                    )
+        return state.saved
 
     @staticmethod
     def _keep(

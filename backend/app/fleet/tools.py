@@ -64,6 +64,7 @@ import structlog
 from app.ai import run_record
 from app.ai import trace as run_trace
 from app.ai.confirmation import CONFIRM_TOOL, AppConfirm, PendingConfirm
+from app.ai.facts import attach
 from app.ai.stop import STOPPED_ERROR, current_stop
 from app.fleet.context import DelegationContext, current_delegation_context
 from app.fleet.delegate import (
@@ -189,8 +190,13 @@ def build_delegate_tools(fleet: Fleet, client_factory: ClientFactory) -> list[st
 def _make_ask_tool(app: FleetApp, client_factory: ClientFactory) -> Callable[[str], str]:
     """Build the ``ask_<app>`` callable for one agent-bearing app."""
 
-    def ask_tool(message: str) -> str:
-        return _delegate(app, client_factory, message)
+    def ask_tool(message: str, facts: list[str] | None = None) -> str:
+        # Saved facts code matched to the request (#134) follow it, quoted
+        # and marked as context; a request too long to carry them goes alone.
+        sent = attach(message.strip(), facts or [])
+        return _delegate(
+            app, client_factory, sent if len(sent) <= MAX_DELEGATE_MESSAGE_LENGTH else message
+        )
 
     ask_tool.__name__ = ask_tool_name(app.name)
     ask_tool.__qualname__ = ask_tool.__name__

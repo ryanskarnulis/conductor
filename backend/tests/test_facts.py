@@ -19,8 +19,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.orm import Session
 
-from app.ai import compiler, facts, state_block, turn_context
+from app.ai import compiler, facts, run_record, state_block, turn_context
 from app.ai import plan as plans
+from app.ai import recall as recall_context
+from app.ai.runtime import ToolCallRecord
 from app.ai.state_block import Fact, Now
 from app.config import get_settings
 from app.db.models import (
@@ -91,6 +93,19 @@ def test_a_fact_is_kept_in_the_persons_own_words() -> None:
     assert facts.own_words("remember that", "remember that") is None
     assert facts.literal("sort  MUSIC", "I sort music on Sundays") == "sort music"
     assert facts.same("I sort music.", "i sort  music")
+
+
+def test_what_to_forget_comes_from_the_persons_words() -> None:
+    # #134: told "forget that", the planner sometimes wrote its prompt's example.
+    assert facts.forget_target(SUNDAYS, "forget that") == ""
+    assert facts.forget_target(SUNDAYS, "forget that I sort music on Sundays") == SUNDAYS
+    assert facts.forget_target("sort music", "please forget the Sundays music sorting") == (
+        "sort music"
+    )
+    assert facts.forget_target("my sister is Ana", "forget my sister") == "my sister"
+    # No words of theirs (a resumed plan), or words that aren't a forget: the plan's.
+    assert facts.forget_target(SUNDAYS, "") == SUNDAYS
+    assert facts.forget_target(SUNDAYS, "yes") == SUNDAYS
 
 
 def test_the_receipts_are_v1_1_entries_with_no_undo_handle() -> None:
@@ -301,6 +316,16 @@ def test_forget_names_a_fact_by_its_words_and_never_guesses(
     )
     db_session.expire_all()
     assert [row.text for row in facts_service.live(db_session)] == [SUNDAYS]
+    # "forget that" is the person's: a planner that names some other fact
+    # (its prompt's example) forgets the one said here, never that one.
+    _remember(talk, "remember the spare key is under the blue pot")
+    talk.say(
+        "forget that",
+        plan_turn(steps(ask("memory", f"forget that {SUNDAYS}"))),
+        text_turn("Forgot “the spare key is under the blue pot”."),
+    )
+    db_session.expire_all()
+    assert [row.text for row in facts_service.live(db_session)] == [SUNDAYS]
 
 
 def test_outside_text_never_becomes_a_fact(
@@ -335,6 +360,180 @@ def test_memory_with_no_app_fails_the_step_honestly(fleet: Fleet, world: World) 
     with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
         result = conductor.run("remember x")
     assert result.tool_calls[0].error == "couldn't reach memory: it isn't available here"
+
+
+# --- saved facts in another app's ask (#134) --------------------------------------------------
+
+SORTING_DAY = "add a task for my music sorting day to clean the record player"
+
+
+@pytest.mark.parametrize(
+    ("request_text", "saved", "attached"),
+    [
+        # Real overlap: "music" and "sorting" are two of the fact's own terms.
+        (SORTING_DAY, [SUNDAYS], [SUNDAYS]),
+        ("add a task to buy music stands", [SUNDAYS], []),  # one shared word isn't enough
+        ("add a task for Sunday", [SUNDAYS], []),  # nor a weekday
+        ("what's due today?", [SUNDAYS], []),
+        # Stems and verb forms still match: "dentists"/"dentist", "booked"/"book".
+        (
+            "remind me to book the dentists",
+            ["Dr Okafor is my dentist, booked through the clinic"],
+            ["Dr Okafor is my dentist, booked through the clinic"],
+        ),
+        # A fact the request already says isn't sent again.
+        (f"add a task: {SUNDAYS.lower()}", [SUNDAYS], []),
+        # Best first, at most two; a tie keeps newest first.
+        (
+            "add a task to sort the music by the blue record player on Sundays",
+            ["I sort music on Sundays", "the record player is blue", "I sort music in folders"],
+            ["I sort music on Sundays", "the record player is blue"],
+        ),
+        ("", [SUNDAYS], []),
+    ],
+)  # fmt: skip
+def test_a_fact_goes_with_an_ask_only_on_real_overlap(
+    request_text: str, saved: list[str], attached: list[str]
+) -> None:
+    assert facts.related(request_text, saved) == attached
+
+
+def test_attached_facts_are_quoted_after_the_words_as_context() -> None:
+    sent = facts.attach(SORTING_DAY, [SUNDAYS])
+    # The person's words come first, untouched; the fact follows on its own line.
+    assert sent == f'{SORTING_DAY}\n\n({facts.CONTEXT_LEAD} "{SUNDAYS}")'
+    assert facts.attach(SORTING_DAY, []) == SORTING_DAY
+    assert facts.attach("  ", [SUNDAYS]) == "  "  # nothing asked: nothing to add to
+    odd = facts.attach("x", ['say "hi"\nto Ana', "y" * 500, "third"])
+    assert "say 'hi' to Ana" in odd and "\nto" not in odd.split("\n\n", 1)[1]
+    assert "y" * facts.MAX_ATTACHED_CHARS not in odd and "…" in odd
+    assert "third" not in odd  # at most two
+
+
+def test_the_record_lines_models_read_leave_the_facts_out() -> None:
+    record = ToolCallRecord(
+        tool="ask_tasks",
+        arguments={"message": SORTING_DAY, facts.ARGUMENT: [SUNDAYS]},
+        result="Created task",
+    )
+    assert run_record.shown(record.arguments) == {"message": SORTING_DAY}
+    assert "Sundays" not in run_record.render([record])
+    history: list[dict[str, Any]] = [
+        {"role": "user", "content": SORTING_DAY},
+        {"role": "assistant", "content": "ok", "tool_calls": [record.model_dump()]},
+    ]
+    history += [{"role": "user", "content": "thanks"}, {"role": "assistant", "content": "ok"}]
+    lines = "\n".join(recall_context.Recall.of(history).record)
+    assert SORTING_DAY in lines and "Sundays" not in lines
+    hit = recall_context.EarlierCall(datetime(2026, 11, 3), SORTING_DAY, record)
+    (found,) = recall_context.hits("that record player task again", [hit])
+    assert "Sundays" not in found
+    assert recall_context.hits("that Sundays one again", [hit]) == []  # nor searched
+
+
+def _sorting_day(talk: Talk, request: str = SORTING_DAY) -> dict[str, Any]:  # noqa: F811
+    reply, _ = talk.say(
+        SORTING_DAY,
+        plan_turn(steps(ask("tasks", request))),
+        text_turn("Added “clean the record player” for Sunday."),
+    )
+    return reply
+
+
+def test_an_ask_carries_the_fact_its_words_point_at(
+    talk: Talk,  # noqa: F811
+    world: World,  # noqa: F811
+    db_session: Session,
+) -> None:
+    _remember(talk)
+    talk.new()  # another day
+    reply = _sorting_day(talk)
+    # The app got the person's words, then the fact as quoted context.
+    ((app, sent),) = [(app, sent) for app, sent in world.sent if app == "tasks"]
+    assert sent == facts.attach(SORTING_DAY, [SUNDAYS])
+    # The step's record and the ledger say which facts went.
+    (call,) = reply["tool_calls"]
+    assert call["arguments"] == {"message": SORTING_DAY, facts.ARGUMENT: [SUNDAYS]}
+    db_session.expire_all()
+    step = db_session.execute(select(LedgerStep).where(LedgerStep.app == "tasks")).scalar_one()
+    assert step.arguments[facts.ARGUMENT] == [SUNDAYS]
+    # The app did the interpreting: its task is due on a Sunday, titled with
+    # the person's words and none of the context.
+    ((task),) = [t for t in world.tasks.values() if "record player" in t.title]
+    assert task.due is not None and task.due.weekday() == 6
+    assert "Context" not in task.title and "Sundays" not in task.title
+
+
+def test_an_ask_with_no_fact_to_point_at_goes_as_the_plan_wrote_it(
+    talk: Talk,  # noqa: F811
+    world: World,  # noqa: F811
+) -> None:
+    _remember(talk)
+    reply = _sorting_day(talk, "add a task to clean the record player")
+    assert reply["tool_calls"][0]["arguments"] == {
+        "message": "add a task to clean the record player"
+    }
+    assert world.sent[-1] == ("tasks", "add a task to clean the record player")
+
+
+def test_a_forgotten_fact_goes_with_no_later_ask(
+    talk: Talk,  # noqa: F811
+    world: World,  # noqa: F811
+) -> None:
+    _remember(talk)
+    _sorting_day(talk)
+    talk.say(
+        "forget that I sort music on Sundays",
+        plan_turn(steps(ask("memory", "forget that I sort music on Sundays"))),
+        text_turn(f"Forgot “{SUNDAYS}”."),
+    )
+    reply = _sorting_day(talk)
+    assert facts.ARGUMENT not in reply["tool_calls"][0]["arguments"]
+    assert world.sent[-1] == ("tasks", SORTING_DAY)
+
+
+def test_memory_that_cant_be_read_never_costs_the_ask(fleet: Fleet, world: World) -> None:  # noqa: F811
+    from app.ai.interpreter import Interpreter
+    from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
+    from tests.fake_world import FakeGlances
+    from tests.scripted_provider import ScriptedProvider
+
+    def broken() -> list[str]:
+        raise RuntimeError("db gone")
+
+    provider = ScriptedProvider(
+        [plan_turn(steps(ask("tasks", SORTING_DAY))), text_turn("Added it.")]
+    )
+    conductor = Interpreter(provider, fleet, narrate=True, glance=FakeGlances())
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+        result = conductor.run(SORTING_DAY, saved_facts=broken)
+    assert result.tool_calls[0].arguments == {"message": SORTING_DAY}
+    assert result.tool_calls[0].error is None
+
+
+def test_parallel_reads_carry_their_facts_too(fleet: Fleet, world: World) -> None:  # noqa: F811
+    from app.ai.interpreter import Interpreter
+    from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
+    from tests.fake_world import FakeGlances
+    from tests.scripted_provider import ScriptedProvider
+
+    provider = ScriptedProvider(
+        [
+            plan_turn(
+                steps(
+                    ask("tasks", "what's due on my music sorting day?"),
+                    ask("music", "what songs still need sorting?"),
+                )
+            ),
+            text_turn("Nothing's due; 3 songs wait."),
+        ]
+    )
+    conductor = Interpreter(provider, fleet, narrate=True, glance=FakeGlances())
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+        result = conductor.run("what's due on my sorting day?", saved_facts=lambda: [SUNDAYS])
+    tasks_call, music_call = result.tool_calls
+    assert tasks_call.arguments[facts.ARGUMENT] == [SUNDAYS]
+    assert facts.ARGUMENT not in music_call.arguments  # "sorting" alone isn't the fact
 
 
 # --- the memory list's API ----------------------------------------------------------------

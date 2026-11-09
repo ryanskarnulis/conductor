@@ -174,14 +174,25 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   "Remember …", "what do you know about me?" and "forget that" are asks to
   `memory`, conductor's own app: one `ask` enum value and one planner-prompt
   line, run by code (no agent, model, budget or gate). A fact is cut from the
-  person's own words, never a model's; outside text never becomes one. Its
+  person's own words, never a model's, and so is what to forget (#134);
+  outside text never becomes one. Its
   receipts have no undo handle and no registry entity. Saved facts ride the
   state block (capped) and the speaker's facts. Forgetting soft-deletes the
   fact and `unindex`es the turn it was said in and the one that forgot it
   (`forgotten_at`: off topics, entities, recall, matches and receipt quotes,
   blanked in every replay); the visible transcript keeps the words. The
   memory list (`/api/memory/facts`, a lazy UI chunk) shows each fact's
-  source; its edits and forgets are the person's note turns.
+  source; its edits and forgets are the person's note turns. An app ask
+  whose request shares two terms with a saved fact carries it (#134,
+  `facts.related`, at most two): code sends it after the request, quoted and
+  marked as context, never rewriting the words; the step's `facts` argument
+  records it, and the record lines models read leave it out. Three
+  validator nudges (one repair, then the plan runs as compiled) keep plans
+  on that path: "what do you remember about X?" with no saved fact about X
+  is a `recall` (`plan.remembered_topic`), a lookup of a fact State lists
+  before another app's ask is dropped (`plan.looked_up_fact`), and "what
+  can you do?" or "what do you know about me?" is never `knowledge`
+  (`plan.about_you`).
 - **Data flows as quoted data, never as control** (#72, `app/ai/dataflow.py`).
   Code fills `{sN}` from step N's receipt: its main touched title (job refs
   skipped, up to 3 joined), cleaned and quoted. No title, or more than 3,

@@ -54,6 +54,11 @@ def live(db: Session, *, limit: int = SCANNED) -> list[MemoryFact]:
     )
 
 
+def texts(db: Session) -> list[str]:
+    """Live facts' words, newest first: what an app ask may carry (#134)."""
+    return [row.text for row in live(db)]
+
+
 def get(db: Session, fact_id: int) -> MemoryFact | None:
     return db.execute(
         select(MemoryFact).where(MemoryFact.id == fact_id, MemoryFact.deleted_at.is_(None))
@@ -100,7 +105,8 @@ def handle(
         if intent.kind == "remember":
             return _remember(db, request, words, turn_id)
         if intent.kind == "forget":
-            return _forget(db, intent.text, conversation_id, turn_id)
+            target = facts.forget_target(intent.text, words)
+            return _forget(db, target, conversation_id, turn_id)
         return _list(db, intent.text)
 
 

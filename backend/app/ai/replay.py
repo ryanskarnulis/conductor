@@ -38,7 +38,7 @@ from app.ai.context_capture import read_captures
 from app.ai.interpreter import Interpreter, _Run
 from app.ai.provider import ToolCall
 from app.ai.providers.llamacpp import LlamaCppProvider
-from app.ai.run_record import NOT_RUN_PREFIX
+from app.ai.run_record import NOT_RUN_PREFIX, shown
 from app.ai.runtime import (
     ACTOR,
     INTERNAL_ERROR,
@@ -112,7 +112,9 @@ class _ReplayInterpreter(Interpreter):
         if not self._answers:
             raise ReplayError(f"the trace has no recorded answer for {name}")
         recorded = self._answers.pop(0)
-        if recorded.tool != name or recorded.arguments != arguments:
+        # A replay has no memory list: the saved facts an ask carried (#134)
+        # aren't asked of it, and the recorded call answers with them.
+        if recorded.tool != name or shown(recorded.arguments) != shown(arguments):
             raise ReplayError(
                 f"replay asked for {name}({arguments}); the turn ran "
                 f"{recorded.tool}({recorded.arguments})"

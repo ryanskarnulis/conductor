@@ -931,3 +931,87 @@ S8, S9 and S16 were 5/5 in both):
 - Every scenario ABOVE_FLOOR and STABLE; infra 0/12 both. Claims backed 53/55
   before (two queued) and 55/55 after. M1 and M2 touch no chess manifest, so
   those are sampling.
+
+### Memory line regressions and saved facts in asks (#134, 2026-11-09)
+
+- **Saved facts reach other apps in code.** When an ask's request shares two
+  terms with a saved fact, the interpreter sends that fact after the
+  request, quoted and marked as context (`facts.related`/`facts.attach`).
+  `memory-used` is back. It passes when tasks gets the words that carry the
+  fact, or when the plan writes Sunday itself. Session scenario M3 checks
+  that the tasks app received the fact.
+- **The memory line is unchanged.** Three rewordings were A/B'd, and none
+  held up across the groups:
+  - v1 says facts are in State, code sends them, and the rest is recall.
+  - v2 is a shorter version of that.
+  - v3 says a project or thing is recall.
+
+  Each fixed one case and cost another. At n=10 with no repair, v3 took
+  `ho-recall` to 10/10 but `memory-about-me` fell to 1/10. v2 took
+  `memory-about-me` to 10/10 but `ho-recall` stayed at 0/10. With the
+  repairs on at n=5, v1 and v2 lowered golden (90–93/105 against 96 for
+  the shipped line). v2 also took `refuse-playback` to 1/5.
+- **Three validator nudges.** Each gets one repair. If the repaired plan
+  keeps its choice, it still runs.
+  - `plan.remembered_topic`: "what do you remember about X?" goes to recall
+    when no saved fact is about X.
+  - `plan.looked_up_fact`: drops a recall or memory lookup of a fact State
+    already lists before another app's ask.
+  - `plan.about_you`: sends back a `knowledge` answer to "what can you
+    do?", "what did you just do?" or "what do you know about me?".
+
+Plan evals at n=20 on gemma-4-12b, after #130 and with chess#540's manifest.
+"main" is this branch's compile path with main's behaviour: the shipped line
+and none of the three nudges. It ran in the same window.
+
+| group | floor | main | this change |
+|---|---|---|---|
+| golden | 0.8 | 372/420 | **395/420** |
+| cross | 0.8 | 140/140 | 139/140 |
+| ref | 0.85 | 78/80 | 78/80 |
+| control | 0.8 | 80/100 | 80/100 |
+| memory | 0.8 | 113/140 | **139/140** |
+| knowledge | 0.65 | 60/60 | 58/60 |
+| hard | 0.5 | 20/20 | 20/20 |
+| self | 0.55 | 29/60 | **60/60** |
+| stale | 0.8 | 80/80 | 80/80 |
+| holdout | 0.85 | 165/200 | **190/200** |
+| long | 0.7 | 151/160 | 150/160 |
+
+| case | main | this change |
+|---|---|---|
+| `ho-recall` | 0/20 | 20/20 |
+| `local-capabilities` | 8/20 | 19/20 |
+| `memory-used` | 0/20 by the old criterion, 11/20 by the new one | 20/20 |
+| `memory-about-me` | 2/20 | 19/20 |
+| `status-last` / `status-now` | 0/20 / 9/20 | 20/20 / 20/20 |
+
+- Every group passed its gate, and every plan was valid. Nothing needed the
+  third call.
+- `decline-news` read 18/20 (main 20/20). Its two misses were `knowledge`,
+  and no nudge touches that case.
+- `chess-resign` read 19/20 and `refuse-playback` 19/20 (main 17/20 and
+  16/20). These runs came before #136 widened `refuse-playback` to accept
+  ask music. Rescored on #136's criterion, both counts stay the same,
+  because every miss was `knowledge`.
+
+**M2 and "forget that".** The first session run had M2 at 2/5, a gate
+red. The memory line was unchanged, and these plans touch no nudge or
+attachment. Traces showed what happened: told "forget that", the planner
+wrote the memory line's own example, "forget that I sort music on
+Sundays". It did that 12 times in 20, and memory refused each time. The
+target to forget now comes from the person's own words when the planner's
+target isn't in them, as a fact to remember already does. M2 then read
+20/20, and the planner still wrote the example 12 times in those 20.
+
+Session evals, final code, gate tier at 5. M3 is new and gated:
+
+| scenario | this change |
+|---|---|
+| S1, S2, S2r, S4, S5, S6, S8, S9, S16, M1, M2 | 5/5 each |
+| S7 | 8/10 (first block 3/5, both misses "dentist due"; 5/5 in the first run) |
+| **M3** remember, then another day "add a task for my music sorting day …" | **5/5** (5/5 in the first run too) |
+
+- Frontier: S3, S11, S12, S14 and S15 were 5/5, S10 4/5 (one Stop reply
+  quoted a call line), and S13 0/5 (the brief, as before).
+- Claims were 128/129 backed (the S10 Stop line). No infra misses.

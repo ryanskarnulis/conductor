@@ -228,6 +228,109 @@ def test_an_answer_from_a_recalled_reply_gets_the_repair(fleet: Fleet) -> None:
     assert "that answer is as of then" in sent[1][-1]["content"]
 
 
+def test_what_you_remember_about_a_thing_nothing_saved_names_gets_a_recall(
+    fleet: Fleet,
+) -> None:
+    # #134: since #81's memory line, "what do you remember about the fence
+    # project?" asked tasks; it asks about what was said or done before.
+    from tests.plan_cases import state
+
+    def recall(query: str) -> dict[str, Any]:
+        return {"do": "recall", "query": query}
+
+    fence = "what do you remember about the fence project?"
+    nothing_saved = state()
+    sundays = state(facts="I sort music on Sundays|the fence is cedar, 6 feet")
+    tasks = plans.load(steps(ask("tasks", fence)))
+    memory = plans.load(steps(ask("memory", fence)))
+    (objection,) = plans.remembered_topic(tasks, fence, nothing_saved)
+    assert '"the fence project"' in objection and "plan a recall step" in objection
+    assert plans.remembered_topic(memory, fence, nothing_saved)
+    assert plans.remembered_topic(plans.Direct(answer="self"), fence, nothing_saved)
+    # A recall, alone or first, is what it asks for.
+    assert plans.remembered_topic(plans.load(steps(recall("fence"))), fence, nothing_saved) == []
+    both = steps(recall("fence project"), ask("tasks", "what's on the fence project?"))
+    assert plans.remembered_topic(plans.load(both), fence, nothing_saved) == []
+    # A saved fact about it: memory answers, as #81 meant.
+    assert plans.saved_in(sundays) == ["I sort music on Sundays", "the fence is cedar, 6 feet"]
+    assert plans.remembered_topic(memory, fence, sundays) == []
+    music = "do you remember what day I sort music?"
+    assert plans.remembered_topic(plans.load(steps(ask("memory", music))), music, sundays) == []
+    # About the person themselves, or not a remember question: memory's, untouched.
+    about_me = "what do you remember about me?"
+    assert plans.remembered_topic(memory, about_me, nothing_saved) == []
+    assert plans.remembered_topic(tasks, "remember the fence is cedar", nothing_saved) == []
+    assert plans.remembered_topic(tasks, "what's on the fence project?", nothing_saved) == []
+
+    replies = [json.dumps(steps(ask("tasks", fence))), json.dumps(steps(recall("fence project")))]
+    sent: list[list[dict[str, Any]]] = []
+
+    def chat(messages: list[dict[str, Any]], _max: int, _fmt: dict[str, Any]) -> ChatResult:
+        sent.append(list(messages))
+        return text_turn(replies.pop(0))
+
+    compiled = compiler.compile_turn(
+        chat,
+        system_prompt=compiler.planner_prompt(fleet),
+        context=nothing_saved,
+        words=fence,
+        fleet=fleet,
+        checks=plans.Checks(fleet=fleet, context=nothing_saved),
+    )
+    assert compiled.repaired and plans.describe(compiled.plan) == "recall"  # type: ignore[arg-type]
+    assert "plan a recall step" in sent[1][-1]["content"]
+
+
+def test_looking_up_a_fact_state_lists_before_an_ask_gets_the_repair() -> None:
+    # #134: the fact is in State and code sends it with the ask itself; a
+    # recall names no fact to pass on, so the lookup only loses it.
+    from tests.plan_cases import state
+
+    words = "add a task for my music sorting day to clean the record player"
+    sundays = state(facts="I sort music on Sundays")
+    task = ask("tasks", "add a task to clean the record player on {s1}")
+    by_recall = plans.load(steps({"do": "recall", "query": "when do I sort music?"}, task))
+    by_memory = plans.load(
+        steps(ask("memory", "what do you know about my music sorting day?"), task)
+    )
+    for plan in (by_recall, by_memory):
+        (objection,) = plans.looked_up_fact(plan, words, sundays)
+        assert '"I sort music on Sundays"' in objection and "leave s1 out" in objection
+    # Their words alone are the plan; with nothing saved that matches, or a
+    # remember first, a lookup is the planner's business.
+    assert plans.looked_up_fact(plans.load(steps(ask("tasks", words))), words, sundays) == []
+    assert plans.looked_up_fact(by_recall, words, state()) == []
+    remember = steps(ask("memory", "remember I sort music on Sundays"), ask("tasks", words))
+    assert plans.looked_up_fact(plans.load(remember), words, sundays) == []
+    unrelated = "add a task to clean the record player"
+    assert plans.looked_up_fact(by_recall, unrelated, sundays) == []
+
+
+@pytest.mark.parametrize(
+    ("words", "says"),
+    [
+        ("what can you do?", '{"answer": "self"}'),
+        ("So what else can you help with?", '{"answer": "self"}'),
+        ("what are you working on right now?", '{"answer": "self"}'),
+        ("what did you just do?", '{"answer": "self"}'),
+        ("what do you know about me?", "ask memory"),
+        ("what do you remember about myself", "ask memory"),
+        ("how long do I boil an egg?", None),
+        ("what do you know about the capital of Portugal?", None),
+        ("what am I working on this week?", None),
+        ("what can I do with leftover rice?", None),
+    ],
+)
+def test_a_question_about_you_is_never_general_knowledge(words: str, says: str | None) -> None:
+    # #134: since #81, "what can you do?" was filed as knowledge about half the time.
+    knowledge = plans.Direct(answer="knowledge")
+    found = plans.about_you(knowledge, words)
+    assert (found[0] if found else None) is None if says is None else says in found[0]
+    # Only a knowledge answer is sent back: self, chat and asks pass.
+    for other in ({"answer": "self"}, {"answer": "chat"}, steps(ask("memory", words))):
+        assert plans.about_you(plans.load(other), words) == []
+
+
 def test_the_planner_prompt_lists_the_fleet_and_never_caps_steps(fleet: Fleet) -> None:
     prompt = compiler.planner_prompt(fleet)
     assert "- tasks (ask, look): Manages projects and tasks." in prompt
@@ -645,12 +748,15 @@ def test_a_question_about_itself_filed_as_knowledge_answers_from_the_ledger(
     provider = ScriptedProvider(
         [
             plan_turn({"answer": "knowledge"}),
+            # #134's nudge asks once for self; a planner that keeps knowledge still runs.
+            plan_turn({"answer": "knowledge"}),
             text_turn('{"about_you": true, "reply": "I added \\"water the plants\\"."}'),
         ]
     )
     reply = run_with(provider, "what did you just do?")["content"]
     assert reply == 'I added "water the plants".'  # no general-knowledge label
-    request = provider.requests[1]
+    assert "they asked about you" in provider.requests[1]["messages"][-1]["content"]
+    request = provider.requests[2]
     assert request["response_format"]["json_schema"]["name"] == "answer"
     assert 'You were asked: "add a task to water the plants"' in request["messages"][1]["content"]
 
