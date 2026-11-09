@@ -262,7 +262,7 @@ export function FinishedNote({
 }
 
 /** What you said, quoted exactly. `live` while the words are still arriving. */
-export function Utterance({ text, followUp, label = 'You', live = false }: { text: string; followUp?: string; label?: string; live?: boolean }) {
+export function Utterance({ text, followUp, label = 'You', live = false }: { text: string; followUp?: string; label?: ReactNode; live?: boolean }) {
   return (
     <div className="cd-utterance">
       <span className="cd-label">{label}</span>

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cancelTurn, getConversation, getTurnActivity, listConversations, postMessage } from '../../api/agent'
+import { cancelTurn, getConversation, getTimeline, getTurnActivity, postMessage } from '../../api/agent'
 import { getWorklist } from '../../api/sort'
 import type { AgentMessage, ConversationDetail } from '../../types/agent'
 import { AgentPage } from './AgentPage'
@@ -20,16 +20,14 @@ vi.mock('../memory/memoryApi', () => ({
 
 vi.mock('../../api/agent', () => ({
   cancelTurn: vi.fn(),
-  createConversation: vi.fn(),
-  deleteConversation: vi.fn(),
   getConversation: vi.fn(),
   getTurnActivity: vi.fn(),
-  listConversations: vi.fn(),
+  getTimeline: vi.fn(),
   postMessage: vi.fn(),
   turnEventsUrl: (id: number) => `/api/agent/conversations/${id}/events`,
 }))
 
-const mockList = vi.mocked(listConversations)
+const mockTimeline = vi.mocked(getTimeline)
 const mockGet = vi.mocked(getConversation)
 const mockPost = vi.mocked(postMessage)
 const mockActivity = vi.mocked(getTurnActivity)
@@ -78,6 +76,8 @@ const detail: ConversationDetail = {
   messages: [message({ content: 'what tasks are due today?' }), assistantWithDelegateCalls],
 }
 
+const INCOGNITO_NOTICE = 'Incognito: this turn’s words aren’t kept. Apps still see the request.'
+
 function renderAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -91,14 +91,7 @@ function renderAt(path: string) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockList.mockResolvedValue([
-    {
-      id: 1,
-      title: 'what tasks are due today?',
-      created_at: detail.created_at,
-      updated_at: detail.updated_at,
-    },
-  ])
+  mockTimeline.mockResolvedValue({ ...detail, quiet_gap_seconds: 10_800, incognito_notice: INCOGNITO_NOTICE })
   mockGet.mockResolvedValue(detail)
   mockActivity.mockResolvedValue({
     active: false,
