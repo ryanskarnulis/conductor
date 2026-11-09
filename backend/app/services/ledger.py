@@ -753,14 +753,17 @@ def _journal_step(
 ) -> None:
     kind, app = step_kind(record.tool, record.arguments)
     outcome = run_record.classify(record)
+    # Incognito (#82): the step and its receipts are kept, not its words. A
+    # think keeps its problem: the background job still has to run on it, as
+    # a paused plan keeps its body.
+    keep = not hidden or kind == think.KIND
     step = LedgerStep(
         plan_id=plan.id,
         seq=seq,
         kind=kind,
         app=app,
         tool=record.tool,
-        # Incognito (#82): the step and its receipts are kept, not its words.
-        arguments=incognito.arguments(record.arguments) if hidden else record.arguments,
+        arguments=record.arguments if keep else incognito.arguments(record.arguments),
         outcome=outcome,
         result=incognito.PLACEHOLDER if hidden and record.result is not None else record.result,
         error=record.error,
