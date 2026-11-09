@@ -11,9 +11,10 @@ routing golden.
 **The driver is the seam between the harness and the runtime.** Scenarios
 never touch conductor's code; they talk to a :class:`Driver` — begin a session
 on a world, say something, start a new conversation, Stop, read what arrived
-unprompted. :class:`LoopDriver` drives today's loop through the same HTTP
-route the web UI uses; the compiled-plan runtime (#67, #68) gets its own
-driver over its own routes, and every scenario and check runs on it unchanged.
+unprompted. :class:`LoopDriver` drives conductor (planner → interpreter →
+narrator since #75; the name predates it) through the same HTTP route the
+web UI uses; another runtime gets its own driver, and every scenario and
+check runs on it unchanged.
 
 **Capabilities a runtime lacks fail the sample, they don't skip it.** A
 scenario declares what it ``needs`` beyond saying things — ``"stop"`` (a
@@ -366,7 +367,7 @@ def _run_step(step: Step, driver: Driver, session: Session) -> TurnRecord | None
     raise TypeError(f"unknown step {step!r}")
 
 
-# --- today's loop ---------------------------------------------------------------------
+# --- conductor, over HTTP ---------------------------------------------------------------------
 
 
 class WorldHolder:
@@ -420,7 +421,7 @@ _CANCEL_ROUTE = re.compile(r"^/api/agent/conversations/\{[^}]+\}/(?:cancel|stop)
 
 
 class LoopDriver:
-    """Today's loop, driven through ``POST /api/agent/conversations/{id}/messages``.
+    """Conductor's turns, driven through ``POST /api/agent/conversations/{id}/messages``.
 
     ``client`` is a started ``TestClient`` whose lifespan built the delegate
     tools over ``holder.factory``; ``reset`` is called before every turn
@@ -474,7 +475,7 @@ class LoopDriver:
         self._seen = 0
 
     def say(self, text: str, *, surface: str) -> TurnRecord:
-        # A voice turn reaches the loop as the transcribed text plus its
+        # A voice turn reaches conductor as the transcribed text plus its
         # surface, as the voice client sends it (#64's ``Now``).
         assert self._conversation is not None
         self._reset()

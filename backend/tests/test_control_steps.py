@@ -2,7 +2,7 @@
 
 The model is scripted (``ScriptedProvider``): the compiler's call returns plan
 JSON, the narrator's returns text. The apps are the session evals' fake fleet
-(``fake_world.py``), reached through the real route, loop, interpreter,
+(``fake_world.py``), reached through the real route, interpreter,
 delegate tools and ledger.
 """
 
@@ -18,9 +18,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai import control
+from app.ai import control, interpreter
 from app.ai import plan as plans
-from app.ai.loop import AgentLoop, AgentRunResult, ToolCallRecord
+from app.ai.interpreter import Interpreter
+from app.ai.runtime import AgentRunResult, ToolCallRecord
 from app.ai.plan import Ledgered, Touched, UndoReceipt
 from app.ai.provider import ChatResult
 from app.api import routes_agent
@@ -32,7 +33,7 @@ from app.main import app
 from app.services import conversations as conversations_service
 from app.services import ledger
 from tests.fake_world import World, client_factory, write_fixture_fleet
-from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
+from tests.scripted_provider import ScriptedProvider, text_turn
 
 
 def plan_turn(body: dict[str, Any]) -> ChatResult:
@@ -77,8 +78,8 @@ def run_with(client: TestClient, fleet: Fleet, world: World) -> Generator[Any, N
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
 
     def run(provider: ScriptedProvider, words: str) -> dict[str, Any]:
-        app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-            provider, fleet=fleet, narrate=True
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+            provider, fleet, narrate=True
         )
         response = client.post(
             f"/api/agent/conversations/{conversation}/messages", json={"content": words}
@@ -112,19 +113,19 @@ def _s3(run_with: Any) -> None:
     )
 
 
-# --- the plan: what runs and what falls back ------------------------------------------------
+# --- the plan: what runs ----------------------------------------------------------------
 
 
-def test_a_control_step_runs_alone() -> None:
-    def reason(body: dict[str, Any], **now: Any) -> str | None:
-        return plans.fallback_reason(plans.load(body), **now)
-
+def test_a_control_step_needs_no_repair_alone_or_in_a_longer_plan() -> None:
+    # #75: a control step inside a longer plan is split off and runs first
+    # (tests/test_compiled_plans.py); only a {sN} on it can't run.
     for body in (CANCEL, UNDO, amend("the first ten")):
-        assert reason(body) is None
-        assert reason(body, pending=True) is None
-    assert reason(steps({"do": "undo", "target": "last"}, ask("tasks", "add milk"))) == "kind:undo"
-    # A running job no longer sends cancel/amend to the loop: the jobs runtime
-    # takes them (#76, tests/test_jobs.py).
+        assert plans.unrunnable(plans.load(body)) == []
+    mixed = steps({"do": "undo", "target": "last"}, ask("tasks", "add milk"))
+    assert plans.unrunnable(plans.load(mixed)) == []
+    leaning = steps({"do": "undo", "target": "last"}, ask("tasks", "add {s1} again"))
+    assert "s1 is an undo" in plans.unrunnable(plans.load(leaning))[0]
+    # A running job's cancel/amend are the jobs runtime's (#76, tests/test_jobs.py).
 
 
 def _receipt(ident: int, plan_id: int, title: str, ref: str = "1", **undo: Any) -> UndoReceipt:
@@ -221,7 +222,7 @@ def test_a_download_alone_cant_be_undone_and_no_app_is_asked(run_with: Any, worl
 
 
 def _journal_by_hand(db: Session, conversation_id: int, *records: ToolCallRecord) -> None:
-    """A turn the ledger closed with these calls, as if the loop had run them."""
+    """A turn the ledger closed with these calls, as if a plan had run them."""
     conversation = db.get(Conversation, conversation_id)
     assert conversation is not None
     message = conversations_service.append_user_message(db, conversation, "words")
@@ -230,7 +231,6 @@ def _journal_by_hand(db: Session, conversation_id: int, *records: ToolCallRecord
         reply="ok",
         stop_reason="completed",
         tool_calls=list(records),
-        iterations=1,
         messages=[],
     )
     ledger.close_turn(
@@ -328,16 +328,10 @@ def test_cancel_lapses_the_apps_token_and_says_what_wont_happen(
         'Okay, cancelled: tasks won\'t get a yes to "Trash "groceries"?".'
     )
     assert cancelled["tool_calls"] is None
-    # The token lapsed: a later yes has nothing to answer, and nothing is trashed.
-    late = ScriptedProvider(
-        [
-            plan_turn(YES),
-            plan_turn(YES),
-            tool_calls_turn(("confirm", {"app": "tasks"})),
-            text_turn("Nothing was waiting."),
-        ]
-    )
-    run_with(late, "yes")
+    # The token lapsed: a later yes has nothing to answer (the validator
+    # refuses it every round), code says so, and nothing is trashed.
+    late = ScriptedProvider([plan_turn(YES), plan_turn(YES), plan_turn(YES)])
+    assert run_with(late, "yes")["content"] == interpreter.UNPLANNED
     assert world.writes() == []
     assert ledger.paused_plan(db_session, run_with.conversation) is None
 

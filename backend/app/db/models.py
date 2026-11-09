@@ -62,11 +62,10 @@ class Conversation(Base, TimestampMixin, SoftDeleteMixin):
 class ConversationMessage(Base, TimestampMixin):
     """One user or assistant turn in a master conversation.
 
-    The assistant turn persists the loop's outcome denormalized: ``content``
+    The assistant turn persists the turn's outcome denormalized: ``content``
     is the reply text (null when the run stopped without one), ``tool_calls``
-    is the list of dispatched delegate calls with arguments and result/error
-    (shape: ``app/ai/loop.py::ToolCallRecord``), ``stop_reason`` is the loop's
-    termination cause. This is the display/chat-trajectory store; what each
+    is the list of its steps' calls with arguments and result/error (shape:
+    ``app/ai/runtime.py::ToolCallRecord``), ``stop_reason`` is how it ended. This is the display/chat-trajectory store; what each
     turn did, step by step with the apps' receipts, is the ledger's
     (:class:`LedgerTurn`, #69). No ``deleted_at``: messages are immutable once written
     and share their conversation's soft-delete fate.
@@ -123,8 +122,8 @@ class DelegateThread(Base, TimestampMixin):
 class LedgerTurn(Base, TimestampMixin):
     """One thing the person said or did, and how conductor's turn on it ended.
 
-    ``kind`` is ``message`` (a turn the loop ran) or ``note`` (something done in
-    the UI, ``POST …/notes``: words, no plan). Opened before the loop runs, so a
+    ``kind`` is ``message`` (a turn conductor ran) or ``note`` (something done in
+    the UI, ``POST …/notes``: words, no plan). Opened before the turn runs, so a
     turn in flight is on the record as ``running``; ``stop_reason`` and
     ``ended_at`` are set when it ends.
     """
@@ -143,7 +142,7 @@ class LedgerTurn(Base, TimestampMixin):
     words: Mapped[str]
     surface: Mapped[str | None] = mapped_column(default=None)
     panel: Mapped[str | None] = mapped_column(default=None)
-    # The loop's run id (#62): joins the turn to its logs, trace and captures.
+    # The turn's run id (#62): joins it to its logs, trace and captures.
     run_id: Mapped[str | None] = mapped_column(default=None, index=True)
     status: Mapped[str] = mapped_column(default="running")  # running | ended
     stop_reason: Mapped[str | None] = mapped_column(default=None)
@@ -165,10 +164,10 @@ class LedgerTurn(Base, TimestampMixin):
 class LedgerPlan(Base, TimestampMixin):
     """What a turn set out to do.
 
-    ``source`` is ``loop`` when the plan is whatever the loop's tool calls
-    were, recorded after the fact (``body`` null), or ``compiled`` (#70) with
-    its typed ``body``. A compiled plan the interpreter couldn't run yet is
-    kept with ``acted`` false beside the loop plan that took the turn.
+    ``source`` is ``compiled`` (#70) with its typed ``body`` for every turn
+    since #75. Older rows may say ``loop`` (the retired loop's tool calls,
+    ``body`` null), beside a compiled plan it took over from (``acted``
+    false, ``fell_back``).
     ``answer`` is a direct answer's kind (``knowledge``/``decline``/``self``/
     ``chat``) when a compiled plan has no steps.
     """
@@ -180,9 +179,10 @@ class LedgerPlan(Base, TimestampMixin):
     source: Mapped[str] = mapped_column(default="loop")
     body: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     answer: Mapped[str | None] = mapped_column(default=None)
-    acted: Mapped[bool] = mapped_column(default=True)  # false: the loop took the turn
-    # A compiled plan's fate (#70): ran, answered, paused, fell_back or invalid,
-    # with why (the fallback reason, or where it stopped). A paused plan keeps
+    acted: Mapped[bool] = mapped_column(default=True)  # false: old rows, the loop took it
+    # A compiled plan's fate (#70): ran, answered, paused or invalid (no plan
+    # could run, code answered; #75), with why or where it stopped; also
+    # cancelled/amended/accepted/set_aside, and fell_back on old rows. A paused plan keeps
     # why it waits, the 0-based step it resumes at, and the app it's about.
     status: Mapped[str | None] = mapped_column(default=None)
     note: Mapped[str | None] = mapped_column(default=None)
@@ -195,7 +195,7 @@ class LedgerPlan(Base, TimestampMixin):
 
 
 class LedgerStep(Base, TimestampMixin):
-    """One step of a plan: for the loop, one tool call.
+    """One step of a plan: one call.
 
     ``kind`` is a step kind (``ask``, ``open``, ``confirm``, …; ``local`` for
     conductor's own read-only tools), ``app`` the fleet app it spoke to.

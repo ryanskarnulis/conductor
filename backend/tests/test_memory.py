@@ -19,7 +19,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai import dataflow, memory, narrator, state_block, turn_context
-from app.ai.loop import AgentLoop, ToolCallRecord
+from app.ai.interpreter import Interpreter
+from app.ai.runtime import ToolCallRecord
 from app.ai.memory import Candidate, Found, Hit, Recalled
 from app.ai.recall import EarlierCall
 from app.ai.state_block import Entity, Match, Now
@@ -249,8 +250,8 @@ class Talk:
 
     def say(self, words: str, *turns: Any) -> tuple[dict[str, Any], ScriptedProvider]:
         provider = ScriptedProvider(list(turns))
-        app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-            provider, fleet=self.fleet, narrate=True, glance=FakeGlances()
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+            provider, self.fleet, narrate=True, glance=FakeGlances()
         )
         response = self.client.post(
             f"/api/agent/conversations/{self.conversation}/messages", json={"content": words}
@@ -474,8 +475,8 @@ def test_the_self_report_says_what_was_recalled(talk: Talk, db_session: Session)
 
 def test_recall_with_no_memory_reader_fails_the_step_honestly(fleet: Fleet, world: World) -> None:
     provider = ScriptedProvider([plan_turn(steps(recall("x"))), text_turn("I couldn't look.")])
-    loop = AgentLoop(provider, fleet=fleet, narrate=True, glance=FakeGlances())
+    conductor = Interpreter(provider, fleet, narrate=True, glance=FakeGlances())
     with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
-        result = loop.run("what did we say?")
+        result = conductor.run("what did we say?")
     assert result.stop_reason == "completed"
     assert result.tool_calls[0].error == "couldn't look back: memory isn't available here"

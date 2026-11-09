@@ -3,7 +3,7 @@
 ``configure_logging`` is one-shot; the MCP server points it at stderr, whose
 stdout is the JSON-RPC transport and must never carry a log line.
 :class:`RequestIDMiddleware` binds a fresh request ID for every HTTP request,
-so each conversations-API run's log lines (loop, tools, delegate calls) all
+so each conversations-API run's log lines (interpreter, tools, delegate calls) all
 carry the same ID — the same shape as PCC's.
 """
 

@@ -16,16 +16,15 @@ from contextvars import ContextVar
 from typing import Any
 
 # Which agent identity the current tool call acts as. ``registry.call_tool``
-# always sets this per dispatch (the in-app loop passes ``agent:loop``); the
+# always sets this per dispatch (a turn passes ``agent:loop``); the
 # default is only a fallback for a tool read outside a dispatch.
 current_tool_actor: ContextVar[str] = ContextVar("current_tool_actor", default="agent:loop")
 
 
 # What the app did while answering the current delegate call — the names of the
 # tools *it* ran. Set by the ask tool, read by whoever dispatched it
-# (``app/ai/loop.py``), and deliberately kept off the model's `role: tool`
-# message: the model gets the app's reply, and a UI that needs to know what a
-# turn actually did should not have to parse a paraphrase to find out.
+# (``app/ai/runtime.py``), and kept on the record: a UI that needs to know
+# what a turn actually did should not have to parse a paraphrase to find out.
 #
 # The dispatcher owns the lifetime — it sets ``None`` before each call and
 # resets after — so one call's answer can never be read as the next one's.

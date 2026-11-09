@@ -17,7 +17,7 @@ import httpx
 import pytest
 
 from app.ai import confirmation, state_block
-from app.ai.loop import AgentLoop
+from app.ai.interpreter import Interpreter
 from app.ai.state_block import Now
 from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
 from app.fleet.delegate import (
@@ -30,12 +30,11 @@ from app.fleet.delegate import (
     MessageRead,
 )
 from app.fleet.manifests import AgentSpec, Fleet, FleetApp, _parse_agent
-from app.fleet.tools import build_delegate_tools, render_fleet_section
+from app.fleet.tools import build_delegate_tools
 from app.tools import registry
 from app.tools.registry import ToolError
 from tests.scripted_provider import ScriptedProvider
 from tests.scripted_provider import text_turn as _text
-from tests.scripted_provider import tool_calls_turn as _calls
 
 QUESTION = "Trash Kitchen and its 12 tasks?"
 WHEN = datetime(2026, 11, 6, 9, 0, 0)
@@ -169,7 +168,7 @@ def _confirm(app: str = "tasks") -> str:
     return result
 
 
-# --- the manifest flag and the prompt -------------------------------------------
+# --- the manifest flag -----------------------------------------------------------
 
 
 @pytest.mark.parametrize(("raw", "expected"), [(True, True), ("yes", False), (None, False)])
@@ -178,22 +177,10 @@ def test_only_a_literal_true_declares_confirms(raw: object, expected: bool) -> N
     assert spec is not None and spec.confirms is expected
 
 
-def test_fleet_section_lets_confirming_apps_ask_and_keeps_the_backstop_for_the_rest() -> None:
-    section = render_fleet_section(_fleet())
-    lines = section.splitlines()
-    straight = next(line for line in lines if line.startswith("- ask_tasks ask the person"))
-    assert "without asking first" in straight
-    assert 'confirm(app="tasks")' in straight
-    backstop = next(line for line in lines if "get confirmed FIRST" in line)
-    assert "ask_notes" in backstop and "ask_tasks" not in backstop
-    assert "do NOT call a tool this turn" in backstop
-
-
-def test_without_a_confirming_app_there_is_no_confirm_tool_and_no_straight_through() -> None:
+def test_without_a_confirming_app_there_is_no_confirm_tool() -> None:
     fleet = Fleet(apps=(_app("notes", confirms=False),))
     names = build_delegate_tools(fleet, _factory(FakeClient([])))
     assert "confirm" not in names
-    assert "ask the person themselves" not in render_fleet_section(fleet)
 
 
 # --- the delegate client --------------------------------------------------------
@@ -252,20 +239,28 @@ def test_an_unreadable_confirmation_drops_only_itself() -> None:
 def test_an_armed_call_relays_the_question_and_keeps_the_token(
     context: DelegationContext,
 ) -> None:
-    build_delegate_tools(_fleet(), _factory(FakeClient([_asked()])))
-    provider = ScriptedProvider(
-        [_calls(("ask_tasks", {"message": "wipe the kitchen project"})), _text(QUESTION)]
-    )
+    fleet = _fleet()
+    build_delegate_tools(fleet, _factory(FakeClient([_asked()])))
+    step = {
+        "id": "s1",
+        "do": "ask",
+        "app": "tasks",
+        "request": "wipe the kitchen project",
+        "destructive": True,
+    }
+    provider = ScriptedProvider([_text(json.dumps({"steps": [step]}))])
 
-    run = AgentLoop(provider).run("wipe the kitchen project")
+    run = Interpreter(provider, fleet, narrate=True).run("wipe the kitchen project")
 
     (record,) = run.tool_calls
     assert record.app_confirm is not None
     assert record.app_confirm["token"] == "tok-1"
     assert record.app_confirm["thread_id"] == 7
-    shown = provider.requests[1]["messages"][-1]["content"]
-    assert QUESTION in shown and 'confirm(app="tasks")' in shown
-    assert "tok-1" not in shown  # the token never reaches the model
+    # tasks confirms its own writes: no gate of code's; its question goes out
+    # word for word, with no narrator call, and the token reaches no model.
+    assert run.reply == QUESTION
+    assert len(provider.requests) == 1
+    assert "tok-1" not in json.dumps(provider.requests, default=str)
     # A question asked this run can't be answered this run.
     assert context.pending_confirm is None
 

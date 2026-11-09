@@ -6,12 +6,14 @@ Guidance for Claude Code in this repo.
 
 Conductor is the workspace fleet's master agent: it routes a user's request to
 the right per-app agent over the standardized REST delegate contract
-(`../agent-standard/delegate-api.md`) and holds the conversation. Apps with an
-`agent:` block in their `app.yaml` get an `ask_<app>` tool; apps with an
-`open:` block get an `open_<app>` handoff (the user's words carried as
-`?intent=`). The backend mirrors PCC's reference implementation
-(`../project-command-center/backend/app/`) — read the code as "same as PCC,
-minus deltas". `docs/agent-evals.md` is the routing eval baseline.
+(`../agent-standard/delegate-api.md`) and holds the conversation. Every turn
+is planner → validator → interpreter → narrator (#75; no tool-calling loop).
+Apps with an `agent:` block in their `app.yaml` get an `ask_<app>` tool;
+apps with an `open:` block get an `open_<app>` handoff (the user's words
+carried as `?intent=`); plan steps dispatch through them. The backend mirrors
+PCC's reference implementation (`../project-command-center/backend/app/`) —
+read the code as "same as PCC, minus deltas". `docs/agent-evals.md` is the
+eval baseline.
 
 ## Commands
 
@@ -35,12 +37,15 @@ backend dev `8301`, vite dev `5174`.
   (`gh pr checks --watch`, then `gh pr merge --squash`). Run `./test.sh`
   before pushing. Deploys via `~/deploy/conductor` clean clones; an `app.yaml`
   change regenerates the gateway too.
-- **Eval gate:** any change to the base prompt, vendored personality, the
-  loop, the model, **or any fleet app's `agent:`/`open:`/`glance:` manifest block**
-  runs the routing evals (`CONDUCTOR_AGENT_EVALS=1 pytest
-  tests/test_agent_evals.py -v -s`, llama-swap up) and must not regress
-  `docs/agent-evals.md`. The manifest half is the easy one to forget — the PR
-  that breaks routing usually lands in another repo.
+- **Eval gate** (#59, since #75): any change to the planner prompt, the step
+  kinds, compiler/validator, interpreter, narrator, the model, **or any fleet
+  app's `agent:`/`open:`/`glance:` manifest block** runs the plan-level evals
+  (`CONDUCTOR_PLAN_EVALS=1 pytest tests/test_plan_evals.py -v -s`) and the
+  session evals (`CONDUCTOR_AGENT_EVALS=1 CONDUCTOR_FRONTIER_EVALS=1 pytest
+  tests/test_session_evals.py -v -s`), llama-swap up, both under the Wilson
+  gate, and must not regress `docs/agent-evals.md`. The routing goldens
+  retired at #75. The manifest half is the easy one to forget — the PR that
+  breaks a plan usually lands in another repo.
 
 ## Conventions
 
@@ -64,31 +69,32 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   other apps' delegate APIs, and it never grows an `agent:` block of its own.
 - **Vendored Glitch** (`app/ai/personality-global.md`) is a verbatim copy of
   the canonical `../agent-standard/` file plus one header line — never edit in
-  place; re-copy and run `check-sync.sh`. Prompt composition: conductor base →
-  Glitch → fleet section → date (no app flavor).
-- **Routing hints live in the system prompt** (`render_fleet_section`), not
-  tool docstrings. If routing degrades, tighten manifest `examples` first — a
-  bigger model is the last resort.
+  place; re-copy and run `check-sync.sh`. No prompt reads it since #75: the
+  planner has no persona and the narrator's (`narrator.PERSONA`) is the voice.
+- **Routing hints live in the planner prompt** (`compiler.planner_prompt`,
+  from manifest descriptions and `examples`), not tool docstrings. If plans
+  degrade, tighten manifest `examples` first — a bigger model is the last
+  resort.
 - **Destructive requests: the app that owns the write asks** (#68). An `ask_`
   app with `agent.confirms: true` gets the request straight through; its
   `confirm_required` question goes to the person and the token stays on the
   turn's record (`app_confirm`, never sent to the model). Only a question from
-  the last turn can take a yes (`confirm(app)`, which sends `Confirm-Token` on
-  the asking thread); anything else lapses it. For an `ask_` app without the
-  flag, conductor asks first — operational voice with a worked example
-  (descriptive safety rules don't bind a 12B). `open_` apps confirm their own
-  resets; "resign the game" is a plain handoff.
-- **Delegate calls are budgeted** (3 per app per turn) and every one emits a
-  `delegate_call` structlog event; replies relay as text plus a compact
-  activity note — never raw transcripts into conductor's history.
+  the last turn can take a yes (a `confirm` step, which sends `Confirm-Token`
+  on the asking thread); anything else lapses it. For an `ask_` app without
+  the flag, code's gate asks first (a `destructive` ask pauses on it). `open_`
+  apps confirm their own resets; "resign the game" is a plain handoff.
+- **Delegate calls are budgeted** (3 per app per turn: the validator sends a
+  plan over it back, the tool refuses past it) and every one emits a
+  `delegate_call` structlog event; never raw transcripts into a model's
+  context.
 - **No chat turns are replayed** (#64). Each turn's one user message opens
   with the state block (`app/ai/state_block.py`: calendar, surface, panel,
   running jobs, a pending question, recent entities from the apps' records,
   and matches from earlier conversations, #80) and recall (`app/ai/recall.py`:
   this thread's record, requests and last exchange as data, plus word-matched
   calls from earlier conversations when the registry has no match), then the
-  person's words. System prompt and tool schemas stay byte-identical; the
-  opening is capped (`turn_context.MAX_CHARS`).
+  person's words. The planner prompt stays byte-identical; the opening is
+  capped (`turn_context.MAX_CHARS`).
 - **Delegate v1.1** (#67): each `ask` mints one `Idempotency-Key`; only a
   connection dropped after send is resent, under that key. The app's typed
   record is stored per call (`app_record`, never sent to the model), and a 5xx
@@ -100,21 +106,27 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   undo, a plan's unrun steps and why, quoted outside text, two sentences on
   voice); handoffs and an app's confirm question pass through verbatim.
 - **The ledger** (#69, `app/services/ledger.py`) is the record of what
-  happened: a turn opens with the person's words before the loop runs and
-  closes with its plan, one step per call and the apps' receipts. Every app
+  happened: a turn opens with the person's words before it runs and closes
+  with its plan (a control step split off first is its own plan), one step
+  per call and the apps' receipts. Old rows may hold a `loop` plan or a
+  `fell_back` one; they still read. Every app
   write has a receipt row; an app call with no readable record gets
   conductor's `unknown` receipt, never "nothing changed". Journaling runs in
   savepoints and never costs the turn. The state block's recent entities
   come from it.
-- **Compiled plans** (#70, `CONDUCTOR_COMPILER`): the 12B compiles each turn
+- **Compiled plans are the only path** (#70, #75): the 12B compiles each turn
   to a typed plan under `json_schema` (`app/ai/plan.py`, `compiler.py`), code
-  validates it (one repair, else the loop takes the turn), and the
-  interpreter (`app/ai/interpreter.py`) runs `ask`/`look`/`open`/`ask_user`/
-  `confirm`/`recall` plans across apps, a last `think`, the control steps,
-  and the direct answers (`app/ai/speaker.py`).
-  Plans have no designed length; 12 steps is a runaway ceiling. Every other
-  kind falls back to the loop until its issue lands; the fallen-back plan
-  stays on the ledger. A destructive
+  validates it, and the interpreter (`app/ai/interpreter.py`, on
+  `app/ai/runtime.py`) runs every step kind and the direct answers
+  (`app/ai/speaker.py`). **No guessed action:** a plan still invalid after
+  the compiler's repair, or with a `{sN}` no step can name
+  (`plan.unrunnable`), gets one more round (`compiler.repair_turn`), then
+  code asks which app was meant when the tries disagreed, else says it
+  couldn't put that together; a model outage is a 502, never a question. A
+  control step inside a longer plan runs first as its own plan, then the
+  rest, unless it left a question waiting or the rest depended on it (then
+  not run, and said). Plans have no designed length; 12 steps is a runaway
+  ceiling. A destructive
   ask to an app without `confirms` pauses on code's question; `ask_user` and
   an app's `confirm_required` pause too, and the next turn resumes the same
   plan. The planner prompt and the ten step kinds stay byte-stable: plan-level
@@ -128,7 +140,7 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   no forwarded headers, 2s/5s timeouts, no redirects, no model, no delegate
   budget) and files `look_<app>` with a `looked_up` receipt built by code
   (`app/ai/glance.py`; outside titles cleaned and marked) and no writes. It is
-  not a registry tool, so the loop's schemas don't change. A glance that can't
+  not a registry tool. A glance that can't
   be read asks the same app the person's words, but only for a plain question,
   a plan whose words are the request, an app with an agent and no ask to it
   already in the plan; otherwise the step fails and the plan ends. The failed
@@ -205,8 +217,9 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   `cancel` calls the app's `…/cancel` and says the `done` count it answered;
   `amend` can't change a running job and says so (the contract has none).
 - **`think` is a background job on the local 26B** (#78, `app/ai/think.py`,
-  `app/services/thinker.py`; `CONDUCTOR_THINK` off falls back to the loop).
-  Always the last step: it files a `ledger_jobs` row conductor owns
+  `app/services/thinker.py`; `CONDUCTOR_THINK` off: the think isn't run and
+  code says so). The plan ends at a think (later steps not run, and said):
+  it files a `ledger_jobs` row conductor owns
   (`app = "conductor"`) with what its inputs found, and code replies at once;
   the conversation never waits. The watcher hands it to the thinker:
   gemma-4-26b-a4b, thinking on, `json_schema` on the answer, its own prompt
@@ -223,16 +236,16 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   cut-off or failed call is `interrupted` (a `not_run` receipt)
   and retried after 60 s with no turn, 3 tries, then code's honest "couldn't
   finish". Never claim a proposal that wasn't made.
-- **`max_iterations` is 6** — each iteration can wrap a full subagent loop, so
-  depth stacks.
-- **The loop keeps STANDARD.md §3's safety nets**: `max_tokens` on every
-  call, the stall rule, a 12-call per-run cap, and the full stop vocabulary. A
-  stop short of `completed` replies from the code-kept run record, and a
-  failed run is stored before the route answers 502/500, so a write never
-  vanishes from the thread.
-- **Stop** (#66): `POST …/cancel` ends the turn `cancelled` at its next
-  provider call or dispatch, replying from the record (never narrated); a
-  delegate call in flight gets the app's `…/cancel`, best-effort.
+- **STANDARD.md §3's safety nets, without the loop** (#75): `max_tokens` on
+  every model call, the plan's 12-step ceiling, the per-app delegate budget
+  and the stop vocabulary; depth stays 1 (a step is one app call). The loop's
+  iteration, stall and 12-call caps went with it (#111). A stop short of
+  `completed` replies from the code-kept record, and a failed turn is stored
+  with its plan before the route answers 502/500, so a write never vanishes
+  from the thread.
+- **Stop** (#66): `POST …/cancel` ends the turn `cancelled` at its next model
+  call or step, replying from the record (never narrated); a delegate call
+  in flight gets the app's `…/cancel`, best-effort.
 - **The fleet action proxy** (`/api/fleet/{app}/actions/{path}`) forwards only
   to declared `agent.actions` prefixes: no path escapes, no forwarded browser
   headers, short timeouts (5s/30s), the app's status passes through. It is the

@@ -4,7 +4,7 @@
 agent-standard and import nothing of the app. Conductor's harness classifies
 on the HTTP response alone (a failed turn carries no stop reason), so what is
 pinned here is the route's status for a provider death, the provider's
-error text that ``provider_failure_kind`` reads, and the loop's stop
+error text that ``provider_failure_kind`` reads, and the runtime's stop
 vocabulary against the gate's infra stops (#52).
 """
 
@@ -15,7 +15,7 @@ from typing import get_args
 import httpx
 import pytest
 
-from app.ai.loop import FAILURE_STATUS, _StopReason
+from app.ai.runtime import FAILURE_STATUS, StopReason
 from app.ai.provider import ProviderError
 from app.ai.providers.llamacpp import LlamaCppProvider
 from tests.evalstats import (
@@ -41,12 +41,12 @@ _STANDARD_STOPS = {
 }
 
 
-def test_the_loop_speaks_the_standard_stop_vocabulary() -> None:
-    assert set(get_args(_StopReason)) == _STANDARD_STOPS
+def test_the_runtime_speaks_the_standard_stop_vocabulary() -> None:
+    assert set(get_args(StopReason)) == _STANDARD_STOPS
 
 
-def test_every_infra_stop_is_a_loop_stop_answered_with_an_infra_status() -> None:
-    assert INFRA_STOPS <= set(get_args(_StopReason))
+def test_every_infra_stop_is_a_runtime_stop_answered_with_an_infra_status() -> None:
+    assert INFRA_STOPS <= set(get_args(StopReason))
     for stop in INFRA_STOPS:
         assert FAILURE_STATUS[stop] in INFRA_STATUSES
 
@@ -58,7 +58,7 @@ def test_internal_error_is_not_infrastructure() -> None:
 
 
 def test_the_routes_provider_failure_status_is_an_infra_status() -> None:
-    # The loop's provider_error stop, which routes_agent.post_message answers with.
+    # The runtime's provider_error stop, which routes_agent.post_message answers with.
     assert FAILURE_STATUS["provider_error"] == 502
     assert 502 in INFRA_STATUSES
 

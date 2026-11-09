@@ -38,6 +38,11 @@ def load(out: Path) -> dict[str, dict[str, list[dict[str, Any]]]]:
             if not line.strip():
                 continue
             record = json.loads(line)
+            if "case" in record and "correct" in record:
+                # A plan-eval row (#75): one unseeded sample of one case.
+                sample = {"seed": None, "pass": bool(record["correct"]), "block": block}
+                joined[record["case"]][arm].append(sample)
+                continue
             for sample in record.get("samples", []):
                 joined[record["scenario"]][arm].append({**sample, "block": block})
     return joined

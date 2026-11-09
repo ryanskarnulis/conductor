@@ -28,7 +28,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.ai import confirmation, interpreter, narrator, turn_events
 from app.ai import plan as plans
-from app.ai.loop import AgentLoop, AgentRunResult, ToolCallRecord
+from app.ai.interpreter import Interpreter
+from app.ai.runtime import AgentRunResult, ToolCallRecord
 from app.ai.narrator import JobEnd
 from app.ai.provider import ChatResult, ProviderRequestError
 from app.api import routes_agent, turn_activity
@@ -146,8 +147,8 @@ def run_with(client: TestClient, fleet: Fleet, world: World) -> Generator[Any, N
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
 
     def run(provider: ScriptedProvider, words: str) -> dict[str, Any]:
-        app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-            provider, fleet=fleet, narrate=True
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+            provider, fleet, narrate=True
         )
         response = client.post(
             f"/api/agent/conversations/{conversation}/messages", json={"content": words}
@@ -616,9 +617,7 @@ def _journal_job(
             }
         ],
     )
-    run = AgentRunResult(
-        reply="ok", stop_reason="completed", tool_calls=[record], iterations=1, messages=[]
-    )
+    run = AgentRunResult(reply="ok", stop_reason="completed", tool_calls=[record], messages=[])
     ledger.close_turn(
         db, turn, run, conversations_service.append_assistant_message(db, conversation, run)
     )
@@ -643,9 +642,9 @@ def _cancelling(monkeypatch: pytest.MonkeyPatch, answer: JobRead | Exception) ->
     return fake
 
 
-def test_a_running_job_never_makes_a_control_plan_fall_back() -> None:
+def test_a_control_plan_on_a_running_job_needs_no_repair() -> None:
     for body in (cancel(), amend("ten"), cancel("music:job:31")):
-        assert plans.fallback_reason(plans.load(body), pending=True) is None
+        assert plans.unrunnable(plans.load(body)) == []
 
 
 def test_cancel_stops_the_job_and_says_how_far_it_got(

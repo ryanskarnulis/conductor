@@ -12,7 +12,7 @@ appends one JSONL line with:
 - the prompt the server's chat template rendered from the same bytes
   (llama-swap's ``/upstream/<model>/apply-template``).
 
-Lines are keyed ``(run_id, seq)``: ``run_id`` is the turn id the loop binds in
+Lines are keyed ``(run_id, seq)``: ``run_id`` is the turn id the interpreter binds in
 structlog's context, and ``seq`` counts the turn's calls from 0, so it names
 the same call as the trace record's ``calls[seq]``. A capture plus its trace
 record replays the turn offline (:mod:`app.ai.replay`).
@@ -45,7 +45,7 @@ _SEQ_MEMORY = 256
 
 
 def current_run_id() -> str | None:
-    """The turn id :meth:`AgentLoop.run` bound in structlog's context."""
+    """The turn id :meth:`Interpreter.run` bound in structlog's context."""
     run_id = structlog.contextvars.get_contextvars().get("run_id")
     return None if run_id is None else str(run_id)
 

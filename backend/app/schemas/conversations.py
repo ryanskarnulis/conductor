@@ -44,7 +44,7 @@ class MessageCreate(BaseModel):
 class ToolCallRead(BaseModel):
     """One dispatched tool call as persisted on an assistant message.
 
-    Mirrors ``app/ai/loop.py::ToolCallRecord``; exactly one of ``result`` /
+    Mirrors ``app/ai/runtime.py::ToolCallRecord``; exactly one of ``result`` /
     ``error`` is set.
     """
 
@@ -81,7 +81,7 @@ class ConversationDetail(ConversationRead):
 
 class MessageExchange(BaseModel):
     """What one ``POST …/messages`` produced: the stored user turn and the
-    assistant turn the loop answered it with."""
+    assistant turn conductor answered it with."""
 
     user_message: MessageRead
     assistant_message: MessageRead

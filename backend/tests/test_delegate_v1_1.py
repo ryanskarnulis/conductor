@@ -3,8 +3,8 @@
 Each fake speaks its app's v1.1 wire as merged (PCC#505, music#83): a typed
 ``record`` on every assistant turn, a failure body carrying the partial record
 on a 5xx, and ``Idempotency-Key`` replay (a stored exchange or failure comes
-back, an unfinished one is a 409). They are driven through the real loop and
-the real :class:`DelegateClient`, so what a person would be told is what the
+back, an unfinished one is a 409). They are driven through the real
+interpreter (a one-step plan) and the real :class:`DelegateClient`, so what a person would be told is what the
 tests read.
 """
 
@@ -20,7 +20,8 @@ import pytest
 import structlog
 
 from app.ai import run_record
-from app.ai.loop import AgentLoop, ToolCallRecord
+from app.ai.interpreter import Interpreter
+from app.ai.runtime import ToolCallRecord
 from app.fleet import context as fleet_context
 from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
 from app.fleet.delegate import (
@@ -32,7 +33,7 @@ from app.fleet.delegate import (
 )
 from app.fleet.manifests import AgentSpec, Fleet, FleetApp
 from app.fleet.tools import build_delegate_tools
-from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
+from tests.scripted_provider import ScriptedProvider, text_turn
 
 _TS = "2026-11-05T00:00:00Z"
 
@@ -149,7 +150,7 @@ def delegation(monkeypatch: pytest.MonkeyPatch) -> Iterator[DelegationContext]:
         yield context
 
 
-def _fleet(app: FakeApp) -> None:
+def _fleet(app: FakeApp) -> Fleet:
     fleet = Fleet(
         apps=(
             FleetApp(
@@ -167,17 +168,15 @@ def _fleet(app: FakeApp) -> None:
             client=httpx.Client(transport=httpx.MockTransport(app.handle)),
         ),
     )
+    return fleet
 
 
 def _ask(app: FakeApp, message: str = "do the thing") -> ToolCallRecord:
-    """One turn that asks ``app`` once; the loop's record of that call."""
-    _fleet(app)
-    loop = AgentLoop(
-        ScriptedProvider(
-            [tool_calls_turn((f"ask_{app.name}", {"message": message})), text_turn("ok")]
-        )
-    )
-    [record] = loop.run(message).tool_calls
+    """One turn whose plan asks ``app`` once; the turn's record of that call."""
+    fleet = _fleet(app)
+    step = {"id": "s1", "do": "ask", "app": app.name, "request": message, "destructive": False}
+    conductor = Interpreter(ScriptedProvider([text_turn(json.dumps({"steps": [step]}))]), fleet)
+    [record] = conductor.run(message).tool_calls
     return record
 
 

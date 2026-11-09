@@ -118,7 +118,7 @@ def test_memory_is_one_ask_enum_value_and_one_prompt_line(fleet: Fleet) -> None:
     assert prompt.count("- memory (ask):") == 1 and '"forget that"' in prompt
     plan = plans.load(steps(ask("memory", "remember I sort music on Sundays")))
     assert plans.problems(plan, plans.Checks(fleet=fleet)) == []
-    assert plans.fallback_reason(plan) is None
+    assert plans.unrunnable(plan) == []
     assert plans.ack(plan) is None  # memory answers at once: nothing to wait for
 
 
@@ -323,7 +323,7 @@ def test_outside_text_never_becomes_a_fact(
 
 
 def test_memory_with_no_app_fails_the_step_honestly(fleet: Fleet, world: World) -> None:  # noqa: F811
-    from app.ai.loop import AgentLoop
+    from app.ai.interpreter import Interpreter
     from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
     from tests.fake_world import FakeGlances
     from tests.scripted_provider import ScriptedProvider
@@ -331,9 +331,9 @@ def test_memory_with_no_app_fails_the_step_honestly(fleet: Fleet, world: World) 
     provider = ScriptedProvider(
         [plan_turn(steps(ask("memory", "remember x"))), text_turn("I couldn't.")]
     )
-    loop = AgentLoop(provider, fleet=fleet, narrate=True, glance=FakeGlances())
+    conductor = Interpreter(provider, fleet, narrate=True, glance=FakeGlances())
     with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
-        result = loop.run("remember x")
+        result = conductor.run("remember x")
     assert result.tool_calls[0].error == "couldn't reach memory: it isn't available here"
 
 

@@ -22,9 +22,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.ai import foreground, narrator, think, turn_events
+from app.ai import foreground, interpreter, narrator, think, turn_events
 from app.ai import plan as plans
-from app.ai.loop import AgentLoop
+from app.ai.interpreter import Interpreter
 from app.ai.provider import ChatProvider, ChatResult, ProviderRequestError
 from app.api import routes_agent, turn_activity
 from app.config import get_settings
@@ -115,8 +115,8 @@ def run_with(client: TestClient, fleet: Fleet, world: World) -> Generator[Any, N
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
 
     def run(provider: ScriptedProvider, words: str) -> dict[str, Any]:
-        app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-            provider, fleet=fleet, narrate=True
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+            provider, fleet, narrate=True
         )
         response = client.post(
             f"/api/agent/conversations/{conversation}/messages", json={"content": words}
@@ -221,23 +221,44 @@ def test_a_think_reads_what_its_inputs_found_and_the_reply_says_what_ran(
     assert job is not None and job.given == given
 
 
-def test_a_think_that_isnt_last_falls_back() -> None:
-    plan = plans.StepPlan.model_validate(steps(think_step(), ask("tasks", "add them")))
-    assert plans.fallback_reason(plan) == "think_not_last"
-    assert plans.fallback_reason(plans.StepPlan.model_validate(steps(think_step()))) is None
+def test_a_think_that_isnt_last_ends_the_plan_and_says_what_didnt_run(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    # #75: nothing runs after a think; the steps after it are named as not run.
+    plan = steps(think_step(), ask("tasks", "add them to the garage project"))
+    assert plans.unrunnable(plans.load(plan)) == []
+    reply = run_with(ScriptedProvider([plan_turn(plan)]), WEEK)
+    assert [c["tool"] for c in reply["tool_calls"]] == ["think", "ask_tasks"]
+    assert reply["tool_calls"][1]["error"].startswith("not run: nothing runs after")
+    assert "didn't ask tasks to add them to the garage project" in reply["content"]
+    assert think.THINKING in reply["content"]
+    assert world.writes() == []
+    db_session.expire_all()
+    assert db_session.execute(select(LedgerJob)).scalar_one().app == think.APP
+    compiled = db_session.execute(
+        select(LedgerPlan).where(LedgerPlan.source == "compiled")
+    ).scalar_one()
+    assert compiled.status == "ran"
+    assert [s.outcome for s in compiled.steps] == ["done", "not_run"]
 
 
-def test_with_the_lane_off_a_think_falls_back_to_the_loop(
-    run_with: Any, monkeypatch: pytest.MonkeyPatch, db_session: Session
+def test_with_the_lane_off_a_think_is_not_run_and_said(
+    run_with: Any, world: World, monkeypatch: pytest.MonkeyPatch, db_session: Session
 ) -> None:
     monkeypatch.setattr(get_settings(), "conductor_think", False)
-    run_with(ScriptedProvider([plan_turn(steps(think_step())), text_turn("Here's a plan.")]), WEEK)
+    plan = steps(ask("tasks", "add a task to clear the garage"), think_step(inputs=["s1"]))
+    reply = run_with(ScriptedProvider([plan_turn(plan)]), WEEK)
+    assert interpreter.THINK_OFF in reply["content"]
+    # The steps before the think still ran; the think itself never left conductor.
+    assert [w.kind for w in world.writes()] == ["create"]
+    assert [c["tool"] for c in reply["tool_calls"]] == ["ask_tasks", "think"]
+    assert reply["tool_calls"][1]["error"].startswith("not run: the thinking model")
     db_session.expire_all()
     assert db_session.execute(select(LedgerJob)).first() is None
     compiled = db_session.execute(
         select(LedgerPlan).where(LedgerPlan.source == "compiled")
     ).scalar_one()
-    assert (compiled.status, compiled.note) == ("fell_back", "kind:think")
+    assert compiled.status == "ran" and compiled.note == "think not run: the lane is off"
 
 
 # --- the proposal ----------------------------------------------------------------------------
@@ -696,7 +717,7 @@ def test_a_spoken_proposal_keeps_to_two_sentences() -> None:
 
 
 def test_outside_text_given_to_the_26b_is_marked() -> None:
-    from app.ai.loop import ToolCallRecord
+    from app.ai.runtime import ToolCallRecord
 
     record = ToolCallRecord(
         tool="ask_music",

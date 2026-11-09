@@ -4,7 +4,8 @@ Two runs share every scenario, check and driver (``session_harness.py``,
 ``session_scenarios.py``, ``fake_world.py``, ``receipt_claims.py``):
 
 - **Scripted (CI, no GPU).** Each scenario's golden ``script`` plays the
-  model; the run must PASS — proof the checks are satisfiable, so a live 0/5
+  model (the planner's plans, then the narrator's or speaker's words) through
+  the compiled runtime (#75); the run must PASS — proof the checks are satisfiable, so a live 0/5
   is the model's. Deliberately wrong scripts must FAIL with the right reason —
   proof the checks bite. A scenario whose runtime capability is missing must
   FAIL ``unsupported:``.
@@ -12,8 +13,8 @@ Two runs share every scenario, check and driver (``session_harness.py``,
   ``gate`` tier under the vendored Wilson gate (``evalstats.run_gate``, floor
   0.8, known reds xfail); ``CONDUCTOR_FRONTIER_EVALS=1`` also measures the
   ``frontier`` tier — fixed samples, printed, never asserted. Each sample is a
-  whole session on a fresh world through the real route, loop, prompt and
-  workspace manifests; only the apps are fake. ``CONDUCTOR_EVAL_REPORT=path``
+  whole session on a fresh world through the real route, planner, interpreter,
+  narrator and workspace manifests; only the apps are fake. ``CONDUCTOR_EVAL_REPORT=path``
   appends one JSON line per scenario.
 
     cd backend
@@ -39,7 +40,7 @@ from sqlalchemy.orm import sessionmaker
 
 import app.main as main_module
 from app.ai import interpreter as interpreter_module
-from app.ai.loop import AgentLoop, loop_from_settings
+from app.ai.interpreter import Interpreter, conductor_from_settings
 from app.ai.provider import ChatProvider, ProviderRequestError
 from app.ai.providers.llamacpp import provider_from_settings
 from app.api import rate_limit, routes_agent
@@ -63,24 +64,32 @@ from tests.evalstats import (
 )
 from tests.fake_world import World, write_fixture_fleet
 from tests.receipt_claims import Tally
-from tests.scripted_provider import ScriptedProvider, text_turn, tool_calls_turn
-from tests.session_harness import LoopDriver, Sample, Scenario, WorldHolder, run_sample, sample_line
+from tests.scripted_provider import ScriptedProvider, text_turn
+from tests.session_harness import (
+    LoopDriver,
+    Sample,
+    Say,
+    Scenario,
+    WorldHolder,
+    run_sample,
+    sample_line,
+)
 from tests.session_scenarios import (
     FORGET_GONE,
     REMEMBER_USED,
     S2,
     S3,
-    S4,
     S5,
     S6,
     S9,
-    S10,
     S11,
-    S12,
-    S14,
     S15,
     S16,
     SCENARIOS,
+    YES,
+    answer,
+    ask,
+    plan,
 )
 
 _LIVE = os.environ.get("CONDUCTOR_AGENT_EVALS") == "1"
@@ -164,8 +173,8 @@ def _started(
 
 
 class _ScriptedRun:
-    """A started app whose loop plays a fresh script per sample. ``compiled``
-    runs the compiler and interpreter (#70) with the narrator, as live does."""
+    """A started app whose conductor plays a fresh script per sample: the
+    compiler, interpreter and narrator, as live runs them."""
 
     def __init__(
         self,
@@ -173,19 +182,14 @@ class _ScriptedRun:
         holder: WorldHolder,
         db_session: DbSession,
         session_factory: sessionmaker[DbSession],
-        *,
-        compiled: bool = False,
     ) -> None:
         self.client = client
         self.provider = ScriptedProvider([])
         # A job's note is narrated by the same scripted model, after the turns,
         # and a think's proposal (#78) comes from it too, when the person waits.
         settle = _watching(session_factory, holder, lambda: self.provider, lambda: self.provider)
-        app.dependency_overrides[routes_agent.get_agent_loop] = lambda: AgentLoop(
-            self.provider,
-            fleet_section=getattr(app.state, "fleet_section", None),
-            fleet=getattr(app.state, "fleet", None) if compiled else None,
-            narrate=compiled,
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+            self.provider, app.state.fleet, narrate=True
         )
         self.driver = LoopDriver(
             client,
@@ -217,130 +221,17 @@ def scripted(
         yield _ScriptedRun(client, holder, db_session, session_factory)
 
 
-@pytest.fixture
-def compiled(
-    tmp_path: Path,
-    db_session: DbSession,
-    session_factory: sessionmaker[DbSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> Generator[_ScriptedRun, None, None]:
-    fleet_dir = write_fixture_fleet(tmp_path / "fleet")
-    for client, holder in _started(fleet_dir, db_session, session_factory, monkeypatch):
-        yield _ScriptedRun(client, holder, db_session, session_factory, compiled=True)
-
-
-def _plan(*steps: dict[str, Any]) -> Any:
-    body = {"steps": [{"id": f"s{n}", **step} for n, step in enumerate(steps, start=1)]}
-    return text_turn(json.dumps(body))
-
-
-def _ask_step(app_name: str, request: str) -> dict[str, Any]:
-    return {"do": "ask", "app": app_name, "request": request, "destructive": False}
-
-
-_S3_PLAN = _plan(
-    _ask_step("music", "download the new Caribou album"),
-    _ask_step("tasks", "add a task to sort {s1} this weekend"),
-)
-
-# The compiled runtime's golden model side (#74): plans, then the narrator.
-# S10's Stop lands mid-delegate, so nothing is narrated. S11's undo turn is
-# tasks' own question, passed through; the yes turn is narrated.
-_S4_NOTE = text_turn(
-    "Your playlist is in: 38 of 40 downloaded; “Lost Signal” and “Paper Moons” couldn't be found."
-)
-
-COMPILED_SCRIPTS: dict[str, Callable[[World], list[Any]]] = {
-    # The playlist detaches as a job; the watcher's note comes after (#76).
-    S4.id: lambda w: [
-        _plan(_ask_step("music", "download this playlist https://example.com/playlist?list=PL40")),
-        text_turn("Queued your playlist: 40 tracks. I'll post a note when it's done."),
-        _S4_NOTE,
-    ],
-    S10.id: lambda w: [_plan(_ask_step("music", "sort my whole library"))],
-    # The think detaches with code's reply; the 26B's proposal posts while the
-    # person waits; their yes runs it (#78).
-    S14.id: lambda w: [
-        _plan({"do": "think", "problem": "plan my week around the garage project", "inputs": []}),
-        text_turn(
-            json.dumps(
-                {
-                    "summary": "3 garage tasks, Monday to Friday",
-                    "steps": [
-                        {
-                            "id": "s1",
-                            **_ask_step(
-                                "tasks",
-                                "Add these tasks to the Garage project:\n- buy the steel rack "
-                                "on monday\n- assemble the shelves on wednesday\n- sweep the "
-                                "garage floor on friday",
-                            ),
-                        }
-                    ],
-                }
-            )
-        ),
-        _plan({"do": "confirm", "answer": "yes"}),
-        text_turn(
-            "Added buy the steel rack (Mon), assemble the shelves (Wed) and sweep the garage "
-            "floor (Fri)."
-        ),
-    ],
-    # Memory (#80). S5 on a fresh world: nothing on record, said plainly.
-    S5.id: lambda w: [
-        _plan({"do": "recall", "query": "garage shelves decision"}),
-        text_turn("I have no record of a decision about the garage shelves."),
-    ],
-    # S6: the new conversation's State matches "that Caribou song" to Odessa.
-    S6.id: lambda w: [
-        _plan(_ask_step("music", "grab the song Odessa by Caribou")),
-        text_turn("Saved “Odessa” by Caribou."),
-        _plan(_ask_step("music", "put Odessa by Caribou in the house folder")),
-        text_turn("Filed “Odessa” under house."),
-    ],
-    S15.id: lambda w: [
-        _S3_PLAN,
-        text_turn("Queued “Honey” by Caribou and added “sort Honey” for the weekend."),
-        _plan(
-            _ask_step("music", "download the other album by Caribou"),
-            _ask_step("tasks", "add a task to sort {s1} this weekend"),
-        ),
-        text_turn("Queued “Suddenly” and added “sort Suddenly” for the weekend."),
-    ],
-    # Memory you can see (#81): the fact is in the new conversation's State.
-    REMEMBER_USED.id: lambda w: [
-        _plan(_ask_step("memory", "remember I sort music on Sundays")),
-        text_turn("Got it: “I sort music on Sundays”."),
-        text_turn(json.dumps({"answer": "chat"})),
-        text_turn('{"about_you": true, "reply": "You sort music on Sundays."}'),
-    ],
-    FORGET_GONE.id: lambda w: [
-        _plan(_ask_step("memory", "remember the spare key is under the blue pot")),
-        text_turn("Got it: “the spare key is under the blue pot”."),
-        _plan(_ask_step("memory", "forget that")),
-        text_turn("Forgot “the spare key is under the blue pot”."),
-        _plan({"do": "recall", "query": "spare key"}),
-        text_turn("I have no record of where the spare key is."),
-    ],
-    S11.id: lambda w: [
-        _S3_PLAN,
-        text_turn("Queued “Honey” by Caribou and added “sort Honey” for the weekend."),
-        _plan({"do": "undo", "target": "last"}),
-        _plan({"do": "confirm", "answer": "yes"}),
-        text_turn("Trashed “sort Honey”. The Honey download can't be undone, though."),
-    ],
-}
-
-
 @pytest.mark.parametrize(
-    "scenario",
-    [S4, S5, S6, S10, S11, S14, S15, REMEMBER_USED, FORGET_GONE],
-    ids=lambda s: s.id,
+    "scenario", [s for s in SCENARIOS if s.script is not None], ids=lambda s: s.id
 )
-def test_compiled_golden_script_passes(scenario: Scenario, compiled: _ScriptedRun) -> None:
-    sample = compiled.run(scenario, COMPILED_SCRIPTS[scenario.id](World()))
+def test_golden_script_passes(scenario: Scenario, scripted: _ScriptedRun) -> None:
+    sample = scripted.run(scenario)
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
-    assert compiled.provider._turns == [], "the golden script wasn't fully consumed"
+    assert scripted.provider._turns == [], "the golden script wasn't fully consumed"
+
+
+def test_every_scenario_has_a_golden_script() -> None:
+    assert [s.id for s in SCENARIOS if s.script is None] == []
 
 
 def _is_planner(request: dict[str, Any]) -> bool:
@@ -349,90 +240,85 @@ def _is_planner(request: dict[str, Any]) -> bool:
 
 
 def test_compiled_s6_finds_the_song_in_state_across_conversations(
-    compiled: _ScriptedRun,
+    scripted: _ScriptedRun,
 ) -> None:
     # #80: the entity registry, not the planner, carries "Odessa" across days.
-    sample = compiled.run(S6, COMPILED_SCRIPTS[S6.id](World()))
+    sample = scripted.run(S6)
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
-    planner = [r for r in compiled.provider.requests if _is_planner(r)]
+    planner = [r for r in scripted.provider.requests if _is_planner(r)]
     opening = planner[-1]["messages"][1]["content"]
     assert "Matches for words in the message, from earlier conversations" in opening
     assert '"Odessa" (outside text)' in opening
 
 
 def test_compiled_m1_puts_the_saved_fact_in_state_and_m2_takes_it_out(
-    compiled: _ScriptedRun,
+    scripted: _ScriptedRun,
 ) -> None:
     # #81: remember → the fact is in State another day; forget → it is gone
     # from State and from recall.
-    sample = compiled.run(REMEMBER_USED, COMPILED_SCRIPTS[REMEMBER_USED.id](World()))
+    sample = scripted.run(REMEMBER_USED)
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
-    planner = [r for r in compiled.provider.requests if _is_planner(r)]
+    planner = [r for r in scripted.provider.requests if _is_planner(r)]
     assert '- "I sort music on Sundays" (saved ' in planner[-1]["messages"][1]["content"]
-    sample = compiled.run(FORGET_GONE, COMPILED_SCRIPTS[FORGET_GONE.id](World()))
+    sample = scripted.run(FORGET_GONE)
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
-    planner = [r for r in compiled.provider.requests if _is_planner(r)]
+    planner = [r for r in scripted.provider.requests if _is_planner(r)]
     assert "blue pot" not in planner[-1]["messages"][1]["content"]
     recalled = sample.session.turn("after").tools[0]
     assert recalled["tool"] == "recall" and recalled["app_record"] == []
 
 
-def test_a_memory_reply_claiming_an_app_write_fails(compiled: _ScriptedRun) -> None:
-    script = COMPILED_SCRIPTS[REMEMBER_USED.id](World())
+def test_a_memory_reply_claiming_an_app_write_fails(scripted: _ScriptedRun) -> None:
+    assert REMEMBER_USED.script is not None
+    script = REMEMBER_USED.script(World())
     script[1] = text_turn("Got “I sort music on Sundays”, and queued your Sunday playlist.")
-    sample = compiled.run(REMEMBER_USED, script)
+    sample = scripted.run(REMEMBER_USED, script)
     _fails(sample, "unbacked claim")
 
 
-def test_compiled_s15_sees_no_matches_from_its_own_conversation(compiled: _ScriptedRun) -> None:
+def test_compiled_s15_sees_no_matches_from_its_own_conversation(scripted: _ScriptedRun) -> None:
     # Matches are leads from *other* conversations: S15's second turn points
     # back ("their other album") within one conversation, so its planner input
     # is what it was before #80.
-    sample = compiled.run(S15, COMPILED_SCRIPTS[S15.id](World()))
+    sample = scripted.run(S15)
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
-    planner = [r for r in compiled.provider.requests if _is_planner(r)]
+    planner = [r for r in scripted.provider.requests if _is_planner(r)]
     assert "Matches for words" not in planner[-1]["messages"][1]["content"]
 
 
 def test_compiled_s5_a_guessed_decision_still_gets_codes_no_record(
-    compiled: _ScriptedRun,
+    scripted: _ScriptedRun,
 ) -> None:
-    script = COMPILED_SCRIPTS[S5.id](World())
+    assert S5.script is not None
+    script = S5.script(World())
     script[-1] = text_turn("You picked the wooden shelves.")
-    sample = compiled.run(S5, script)
+    sample = scripted.run(S5, script)
     assert "no record" in (sample.session.last.reply or "")
 
 
 def test_compiled_s11_says_what_cant_be_undone_when_the_narrator_doesnt(
-    compiled: _ScriptedRun,
+    scripted: _ScriptedRun,
 ) -> None:
     # Spike C1b: the narrator never offered what it couldn't undo. Code appends it.
-    script = COMPILED_SCRIPTS[S11.id](World())
+    assert S11.script is not None
+    script = S11.script(World())
     script[-1] = text_turn("Trashed “sort Honey”.")
-    sample = compiled.run(S11, script)
+    sample = scripted.run(S11, script)
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
     assert "can't be undone" in (sample.session.last.reply or "")
 
 
-def _supported_today(scenario: Scenario) -> bool:
-    # Today's loop has no way to read chess.
-    return scenario.id != S12.id
-
-
-@pytest.mark.parametrize(
-    "scenario",
-    [s for s in SCENARIOS if s.script is not None and _supported_today(s)],
-    ids=lambda s: s.id,
-)
-def test_golden_script_passes(scenario: Scenario, scripted: _ScriptedRun) -> None:
-    sample = scripted.run(scenario)
-    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
-    assert scripted.provider._turns == [], "the golden script wasn't fully consumed"
-
-
-@pytest.mark.parametrize("scenario", [S12], ids=lambda s: s.id)
-def test_missing_capability_fails_unsupported(scenario: Scenario, scripted: _ScriptedRun) -> None:
-    sample = scripted.run(scenario)
+def test_a_missing_capability_fails_unsupported(scripted: _ScriptedRun) -> None:
+    # Every scenario runs on the compiled runtime (#75); the harness still
+    # fails a sample whose runtime lacks what it needs, never skips it.
+    lacking = Scenario(
+        "Sx",
+        "needs a tool no fleet app offers",
+        (Say("anything"),),
+        (),
+        needs=frozenset({"tool:ask_nothing"}),
+    )
+    sample = scripted.run(lacking, [])
     assert sample.taken.outcome is Outcome.FAIL
     assert (sample.taken.failure or "").startswith("unsupported:"), sample.taken.failure
 
@@ -442,64 +328,90 @@ def _fails(sample: Sample, reason: str) -> None:
     assert reason in (sample.taken.failure or ""), sample.taken.failure
 
 
-def test_confirming_its_own_question_fails(scripted: _ScriptedRun) -> None:
-    # PCC's gate (#68) means asking can no longer write; the way to act before
-    # the yes is to answer the app's question in the same turn. confirm takes
-    # only a question from an earlier turn, so nothing is trashed, and the
-    # claim that it was is caught.
+def test_claiming_the_wipe_without_asking_fails(scripted: _ScriptedRun) -> None:
+    # The loop could ask and confirm in one turn; a plan can't (confirm comes
+    # first, and only for a question from an earlier turn), and tasks asks its
+    # own question either way. The way left to skip the question is a planner
+    # that answers instead of asking, and a speaker that claims the wipe: no
+    # question went out and nothing was trashed.
     sample = scripted.run(
         S9,
         [
-            tool_calls_turn(("ask_tasks", {"message": "delete the Kitchen project"})),
-            tool_calls_turn(("confirm", {"app": "tasks"})),
-            text_turn("Done: the Kitchen project went to the trash."),
-            text_turn("Already done."),
+            answer("chat"),
+            text_turn(json.dumps({"about_you": True, "reply": "Done: Kitchen is in the trash."})),
+            answer("chat"),
+            text_turn(json.dumps({"about_you": True, "reply": "Already done."})),
         ],
     )
     _fails(sample, "didn't ask before wiping")
 
 
 def test_a_dropped_title_fails_s3(scripted: _ScriptedRun) -> None:
-    # #55: the relay drops the album's real name, so the task can't carry it.
+    # #55: the album's real name never reaches the task. The validator sends
+    # "the new album" back for {s1} (#72), so the plan that loses it here says
+    # "it", which no check can tell from a name.
     sample = scripted.run(
         S3,
         [
-            tool_calls_turn(("ask_music", {"message": "download the new Caribou album"})),
-            tool_calls_turn(
-                ("ask_tasks", {"message": "add a task to sort the new album this weekend"})
+            plan(
+                ask("music", "download the new Caribou album"),
+                ask("tasks", "add a task to sort it this weekend"),
             ),
-            text_turn("Queued Honey and added “sort the new album” for Saturday."),
+            text_turn("Queued “Honey” and added “sort it” for Saturday."),
         ],
     )
     _fails(sample, "no task titled with 'honey'")
 
 
 def test_claiming_a_write_that_did_not_happen_fails(scripted: _ScriptedRun) -> None:
-    sample = scripted.run(S2, [text_turn("Added “water the plants” for tomorrow.")])
-    _fails(sample, "unbacked claim")
-
-
-def test_an_unnamed_write_fails(scripted: _ScriptedRun) -> None:
     sample = scripted.run(
         S2,
         [
-            tool_calls_turn(("ask_tasks", {"message": "add a task to water the plants tomorrow"})),
+            answer("chat"),
+            text_turn(
+                json.dumps({"about_you": True, "reply": "Added “water the plants” for tomorrow."})
+            ),
+        ],
+    )
+    _fails(sample, "unbacked claim")
+
+
+def test_an_unnamed_write_is_named_by_code(scripted: _ScriptedRun) -> None:
+    # Was a wrong script ("Done, it's on your list." fails S2 as unnamed). The
+    # narrator is asked again for a missing title, then code appends it (#65),
+    # so the reply can't leave the write unnamed any more; the check itself
+    # stays covered in test_receipt_claims.py.
+    sample = scripted.run(
+        S2,
+        [
+            plan(ask("tasks", "Add a task to water the plants, due tomorrow")),
+            text_turn("Done, it's on your list."),
             text_turn("Done, it's on your list."),
         ],
     )
-    _fails(sample, "doesn't name what it touched")
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    assert "water the plants" in (sample.session.last.reply or "")
 
 
 def test_a_recap_that_invents_fails(scripted: _ScriptedRun) -> None:
     sample = scripted.run(
         S16,
         [
-            tool_calls_turn(("ask_tasks", {"message": "add a task to water the plants tomorrow"})),
+            plan(ask("tasks", "Add a task to water the plants, due tomorrow")),
             text_turn("Added “water the plants” for tomorrow."),
+            answer("self"),
             text_turn("I added “water the plants” and queued an album for you."),
         ],
     )
     _fails(sample, "unbacked claim")
+
+
+def test_a_yes_to_nothing_waiting_never_writes(scripted: _ScriptedRun) -> None:
+    # S9's second turn alone: a confirm with no question waiting is refused
+    # by the validator (twice), and code says so rather than guess.
+    sample = scripted.run(S9, [YES, YES, YES, YES, YES, YES])
+    assert sample.session.world.receipts == []
+    assert sample.taken.outcome is Outcome.FAIL
 
 
 def test_a_provider_death_is_infra_not_a_miss(scripted: _ScriptedRun) -> None:
@@ -548,7 +460,7 @@ def live(
 ) -> Generator[LoopDriver, None, None]:
     for client, holder in _started(WORKSPACE_ROOT, db_session, session_factory, monkeypatch):
         if _SEED_BASE is not None:
-            app.dependency_overrides[routes_agent.get_agent_loop] = _seeded_loop
+            app.dependency_overrides[routes_agent.get_conductor] = _seeded_conductor
         if not {"ask_tasks", "ask_music", "open_chess"} <= _tool_names():
             pytest.skip(
                 f"fleet discovery registered {sorted(_tool_names())}; is "
@@ -566,14 +478,10 @@ def live(
         )
 
 
-def _seeded_loop() -> Generator[AgentLoop, None, None]:
+def _seeded_conductor() -> Generator[Interpreter, None, None]:
     provider = eval_seed.seeded_provider()
     try:
-        yield loop_from_settings(
-            provider,
-            fleet_section=getattr(app.state, "fleet_section", None),
-            fleet=getattr(app.state, "fleet", None),
-        )
+        yield conductor_from_settings(provider, app.state.fleet)
     finally:
         provider.close()
 

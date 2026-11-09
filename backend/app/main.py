@@ -15,7 +15,7 @@ from app.api import routes_agent, routes_fleet, routes_memory, routes_voice, tur
 from app.config import get_settings
 from app.db.session import SessionLocal
 from app.fleet.manifests import fleet_from_settings
-from app.fleet.tools import build_delegate_tools, default_client_factory, render_fleet_section
+from app.fleet.tools import build_delegate_tools, default_client_factory
 from app.logging_config import RequestIDMiddleware, configure_logging
 from app.services.job_watcher import JobWatcher
 from app.services.thinker import Thinker, think_provider_from_settings
@@ -32,8 +32,8 @@ api_router.include_router(routes_voice.router)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Discover the fleet once per process: register the ``ask_<app>`` tools on
-    the shared registry and stash the prompt's fleet layer for
-    ``routes_agent.get_agent_loop``. The MCP server does the same in its own
+    the shared registry and stash the fleet for ``routes_agent.get_conductor``
+    (and ``routes_fleet``'s proxy). The MCP server does the same in its own
     ``main()`` — two drivers, one registry shape.
 
     Jobs (#76): job events go to the live channel, and the job watcher runs
@@ -41,9 +41,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_logging()
     fleet = fleet_from_settings()
     build_delegate_tools(fleet, default_client_factory())
-    app.state.fleet_section = render_fleet_section(fleet) or None
-    # Kept as well as rendered: `routes_fleet` looks apps up by name to proxy a
-    # page's action, which the prompt layer's rendered text cannot answer.
     app.state.fleet = fleet
     turn_events.set_job_sink(turn_activity.publish_job)
     watcher: JobWatcher | None = None

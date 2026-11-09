@@ -8,7 +8,10 @@ property the fake world can't see (S1's "≤3 s warm", S13's "nothing else
 interrupts") the check says what it reads instead.
 
 ``script`` is each scenario's golden model side for the scripted CI run: the
-provider turns a model that gets it right would produce. CI runs every one
+provider turns a model that gets it right would produce, in the order the
+compiled runtime calls it (#75): the planner's plan JSON, then the narrator's
+or the speaker's words (a handoff, an app's question, a decline, a think's
+reply and a Stop are code's and call no model). CI runs every one
 and asserts it passes — the proof that each check *can* pass, so a 0/5 in the
 live run is the model, not an unsatisfiable check — plus a few deliberately
 wrong scripts asserting the checks catch them (``test_session_evals.py``).
@@ -20,13 +23,14 @@ tier is in ``docs/agent-evals.md``.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import timedelta
 from typing import Any
 
 from tests.fake_world import PLAYLIST_MISSES, World, friday_targets, weekend_targets
 from tests.receipt_claims import refers_to
-from tests.scripted_provider import text_turn, tool_calls_turn
+from tests.scripted_provider import text_turn
 from tests.session_harness import (
     Advance,
     ConfirmIfAsked,
@@ -96,11 +100,40 @@ def _weekend_task_titled(session: Session, needle: str) -> None:
 
 
 def _say(content: str) -> Any:
+    """A narrator's (or the plain speaker's) words."""
     return text_turn(content)
 
 
-def _ask(app: str, message: str) -> Any:
-    return tool_calls_turn((f"ask_{app}", {"message": message}))
+def _spoken(reply: str, *, about_you: bool = False) -> Any:
+    """The speaker's structured answer to a ``knowledge`` or ``chat`` plan."""
+    return text_turn(json.dumps({"about_you": about_you, "reply": reply}))
+
+
+def plan(*steps: dict[str, Any]) -> Any:
+    """The planner's plan: steps numbered s1, s2, ... in order."""
+    body = {"steps": [{"id": f"s{n}", **step} for n, step in enumerate(steps, start=1)]}
+    return text_turn(json.dumps(body))
+
+
+def answer(kind: str) -> Any:
+    """The planner's direct answer: knowledge, decline, self or chat."""
+    return text_turn(json.dumps({"answer": kind}))
+
+
+def ask(app: str, request: str, *, destructive: bool = False) -> dict[str, Any]:
+    return {"do": "ask", "app": app, "request": request, "destructive": destructive}
+
+
+def look(app: str) -> dict[str, Any]:
+    return {"do": "look", "app": app}
+
+
+def _ask(app: str, request: str, *, destructive: bool = False) -> Any:
+    """A one-step plan asking ``app``."""
+    return plan(ask(app, request, destructive=destructive))
+
+
+YES = plan({"do": "confirm", "answer": "yes"})
 
 
 # --- S1 what's due today ----------------------------------------------------------------
@@ -124,8 +157,8 @@ S1 = Scenario(
     (_s1,),
     tier="gate",
     script=lambda w: [
-        _ask("tasks", "what's due today?"),
-        _say("Two things today: groceries and call mom."),
+        plan(look("tasks")),
+        _say("Two things due today: “Buy groceries” and “Call mom”."),
     ],
 )
 
@@ -198,11 +231,16 @@ def _s3(session: Session) -> None:
 _S3_TEXT = "download the new Caribou album and add a task to sort it this weekend"
 
 
+S3_PLAN = plan(
+    ask("music", "download the new Caribou album"),
+    ask("tasks", "add a task to sort {s1} this weekend"),
+)
+
+
 def _s3_script(w: World) -> list[Any]:
     return [
-        _ask("music", "download the new Caribou album"),
-        _ask("tasks", "add a task called “sort Honey by Caribou” due this weekend"),
-        _say("Queued Caribou's new album, Honey, and added “sort Honey by Caribou” for Saturday."),
+        S3_PLAN,
+        _say("Queued “Honey” by Caribou and added “sort Honey” for the weekend."),
     ]
 
 
@@ -241,7 +279,7 @@ S4 = Scenario(
     tier="gate",
     script=lambda w: [
         _ask("music", "download this playlist https://example.com/playlist?list=PL40"),
-        _say("Queued the playlist: 40 tracks. I'll tell you when it lands."),
+        _say("Queued your playlist: 40 tracks. I'll post a note when it's done."),
         # The job's note (#76), narrated from the app's final report.
         _say(
             "Your playlist is in: 38 of 40 downloaded; “Lost Signal” and “Paper Moons” "
@@ -277,8 +315,8 @@ S5 = Scenario(
     (_s5,),
     tier="gate",
     script=lambda w: [
-        _ask("tasks", "find anything about the garage shelves"),
-        _say("Per the note on your garage shelves task: steel rack, not wood."),
+        plan({"do": "recall", "query": "garage shelves decision"}),
+        _say("I have no record of a decision about the garage shelves."),
     ],
 )
 
@@ -309,7 +347,8 @@ S6 = Scenario(
     tier="gate",
     script=lambda w: [
         _ask("music", "grab the song Odessa by Caribou"),
-        _say("Saved “Odessa” by Caribou to the library."),
+        _say("Saved “Odessa” by Caribou."),
+        # The new conversation's State matches "that Caribou song" to Odessa (#80).
         _ask("music", "put Odessa by Caribou in the house folder"),
         _say("Filed “Odessa” under house."),
     ],
@@ -368,8 +407,9 @@ S8 = Scenario(
     (_s8,),
     tier="gate",
     script=lambda w: [
-        _say("I can't check the weather — none of my apps do that."),
-        _say("About 7 minutes for a jammy egg, 10 for hard-boiled."),
+        answer("decline"),
+        answer("knowledge"),
+        _spoken("About 7 minutes for a jammy egg, 10 for hard-boiled."),
     ],
 )
 
@@ -396,9 +436,8 @@ S9 = Scenario(
     (_s9,),
     tier="gate",
     script=lambda w: [
-        _ask("tasks", "delete the Kitchen project"),
-        _say("Trash Kitchen and its 3 tasks?"),
-        tool_calls_turn(("confirm", {"app": "tasks"})),
+        _ask("tasks", "delete the Kitchen project", destructive=True),
+        YES,
         _say("Done: the Kitchen project and its 3 tasks went to the trash."),
     ],
 )
@@ -424,7 +463,7 @@ S10 = Scenario(
     (StopAfter("sort my whole library", app="music", writes=2),),
     (_s10,),
     needs=frozenset({"stop"}),
-    # The Stop lands mid-delegate, so the loop ends there: no model turn after.
+    # The Stop lands mid-delegate, so the turn ends there: no narrator after.
     script=lambda w: [_ask("music", "sort my whole library")],
 )
 
@@ -452,12 +491,12 @@ S11 = Scenario(
     "after S3, 'undo that': the task is trashed, and it says the download can't be undone",
     (Say(_S3_TEXT), Say("undo that", label="undo"), ConfirmIfAsked("yes")),
     (_s11,),
+    # The undo is tasks' own question, passed through; the yes is narrated (#74).
     script=lambda w: [
         *_s3_script(w),
-        _ask("tasks", "delete the task “sort Honey by Caribou”"),
-        _say("Trash “sort Honey by Caribou”?"),
-        tool_calls_turn(("confirm", {"app": "tasks"})),
-        _say("Trashed “sort Honey by Caribou”. The Honey download can't be undone, though."),
+        plan({"do": "undo", "target": "last"}),
+        YES,
+        _say("Trashed “sort Honey”. The Honey download can't be undone, though."),
     ],
 )
 
@@ -479,7 +518,11 @@ S12 = Scenario(
     "let's play chess (opens); later 'how did my last game go?' read back without opening",
     (Say("let's play chess", label="open"), Say("how did my last game go?", label="read")),
     (_s12,),
-    needs=frozenset({"tool:ask_chess"}),
+    script=lambda w: [
+        plan({"do": "open", "app": "chess", "intent": "let's play chess"}),
+        plan(look("chess")),
+        _say("You won your last game."),
+    ],
 )
 
 
@@ -506,11 +549,8 @@ S13 = Scenario(
     (Say("anything I should know?"),),
     (_s13,),
     script=lambda w: [
-        tool_calls_turn(
-            ("ask_tasks", {"message": "what's overdue?"}),
-            ("ask_music", {"message": "what songs still need sorting?"}),
-        ),
-        _say("3 tasks are overdue (passport, water bill, library books) and 5 songs need sorting."),
+        plan(look("tasks"), look("music")),
+        _say("3 tasks are overdue and 5 songs need sorting."),
     ],
 )
 
@@ -540,7 +580,7 @@ S14 = Scenario(
     "S14",
     "plan my week around the garage project: a concrete plan, confirmed before writing",
     # A think (#78) answers at once and posts its proposal later: the person
-    # waits for it before saying yes. Today's loop asks in the turn.
+    # waits for it before saying yes.
     (
         Say("plan my week around the garage project", label="propose"),
         Settle(),
@@ -548,13 +588,27 @@ S14 = Scenario(
     ),
     (_s14,),
     script=lambda w: [
-        _ask("tasks", "what's in the garage project?"),
-        _say("Plan: steel rack Monday, assemble Wednesday, sweep Friday. Shall I add these?"),
-        _ask(
-            "tasks",
-            "Add these tasks to the Garage project:\n- buy the steel rack on monday\n"
-            "- assemble the shelves on wednesday\n- sweep the garage floor on friday",
+        plan({"do": "think", "problem": "plan my week around the garage project", "inputs": []}),
+        # The 26B's proposal, when the person waits (the watcher's thinker).
+        text_turn(
+            json.dumps(
+                {
+                    "summary": "3 garage tasks, Monday to Friday",
+                    "steps": [
+                        {
+                            "id": "s1",
+                            **ask(
+                                "tasks",
+                                "Add these tasks to the Garage project:\n- buy the steel rack "
+                                "on monday\n- assemble the shelves on wednesday\n- sweep the "
+                                "garage floor on friday",
+                            ),
+                        }
+                    ],
+                }
+            )
         ),
+        YES,
         _say(
             "Added buy the steel rack (Mon), assemble the shelves (Wed) and sweep the garage "
             "floor (Fri)."
@@ -579,9 +633,11 @@ S15 = Scenario(
     (_s15,),
     script=lambda w: [
         *_s3_script(w),
-        _ask("music", "download Caribou's other album, Suddenly"),
-        _ask("tasks", "add a task called “sort Suddenly by Caribou” due this weekend"),
-        _say("Queued Suddenly too, and added “sort Suddenly by Caribou” for Saturday."),
+        plan(
+            ask("music", "download the other album by Caribou"),
+            ask("tasks", "add a task to sort {s1} this weekend"),
+        ),
+        _say("Queued “Suddenly” and added “sort Suddenly” for the weekend."),
     ],
 )
 
@@ -608,6 +664,7 @@ S16 = Scenario(
     script=lambda w: [
         _ask("tasks", "Add a task to water the plants, due tomorrow"),
         _say("Added “water the plants” for tomorrow."),
+        answer("self"),
         _say("I asked your task app to add “water the plants”, due tomorrow — that's all."),
     ],
 )
@@ -648,6 +705,13 @@ REMEMBER_USED = Scenario(
     ),
     (_remember_used,),
     tier="gate",
+    # Memory you can see: the fact is in the new conversation's State.
+    script=lambda w: [
+        _ask("memory", "remember I sort music on Sundays"),
+        _say("Got it: “I sort music on Sundays”."),
+        answer("chat"),
+        _spoken("You sort music on Sundays.", about_you=True),
+    ],
 )
 
 
@@ -671,6 +735,14 @@ FORGET_GONE = Scenario(
     ),
     (_forget_gone,),
     tier="gate",
+    script=lambda w: [
+        _ask("memory", "remember the spare key is under the blue pot"),
+        _say("Got it: “the spare key is under the blue pot”."),
+        _ask("memory", "forget that"),
+        _say("Forgot “the spare key is under the blue pot”."),
+        plan({"do": "recall", "query": "spare key"}),
+        _say("I have no record of where the spare key is."),
+    ],
 )
 
 

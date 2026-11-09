@@ -53,7 +53,7 @@ def build(
     facts: Callable[[], Sequence[state_block.Fact]] | None = None,
 ) -> str:
     """The context that opens the turn (without the person's words, which the
-    loop adds last). ``history`` is this conversation's stored turns;
+    compiler adds last). ``history`` is this conversation's stored turns;
     ``earlier`` other conversations' delegate calls, newest first;
     ``entities`` the ledger's recent entities (#69), newest first — when it is
     absent, answers ``None`` or fails, the state block reads them from

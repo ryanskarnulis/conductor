@@ -2,7 +2,7 @@
 
 The only write path for ``conversations`` / ``conversation_messages`` (routes
 are the callers today). Messages are immutable once appended; soft delete is
-conversation-level only. The loop itself lives in ``app/ai/loop.py`` — this
+conversation-level only. The turn itself lives in ``app/ai/interpreter.py`` — this
 module persists what it consumed and produced.
 
 Delta from PCC's module: no ``activity_events`` rows — conductor's audit trail
@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai import confirmation, facts, narrator
-from app.ai.loop import AgentRunResult, ToolCallRecord
+from app.ai.runtime import AgentRunResult, ToolCallRecord
 from app.ai.recall import EarlierCall
 from app.db.models import (
     Conversation,
@@ -211,7 +211,7 @@ def append_user_message(
 def append_assistant_message(
     db: Session, conversation: Conversation, run: AgentRunResult
 ) -> ConversationMessage:
-    """Store the loop's outcome as one assistant turn."""
+    """Store the turn's outcome as one assistant turn."""
     message = ConversationMessage(
         conversation_id=conversation.id,
         role=ConversationRole.assistant,

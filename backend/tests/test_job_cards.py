@@ -155,7 +155,7 @@ def card(
     def no_model() -> Any:
         raise AssertionError("a card's cancel never calls the model")
 
-    app.dependency_overrides[routes_agent.get_agent_loop] = no_model
+    app.dependency_overrides[routes_agent.get_conductor] = no_model
     app.dependency_overrides[routes_agent.get_job_fleet] = lambda: fleet
     state: dict[str, Any] = {"canceller": jobs.cancel}
     app.dependency_overrides[routes_agent.get_job_canceller] = lambda: state["canceller"]

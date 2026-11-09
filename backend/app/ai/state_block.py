@@ -40,7 +40,7 @@ from datetime import date, timedelta
 from typing import Any, Literal
 
 from app.ai import confirmation
-from app.ai.loop import ToolCallRecord
+from app.ai.runtime import ToolCallRecord
 
 Surface = Literal["desktop", "phone", "voice", "room_speaker"]
 

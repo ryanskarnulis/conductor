@@ -11,19 +11,19 @@ turns what the person said into one of three shapes:
   plan asked (offered only while one is paused on ``ask_user``).
 
 Plans have no designed length. :data:`MAX_STEPS` is a ceiling against a
-runaway, the same as the loop's per-run call cap.
+runaway.
 
 Code owns what happens next. :func:`problems` is the validator: refs, order,
-targets, policy and budgets; a plan with problems gets one repair, then the
-turn falls back to the loop. :func:`fallback_reason` says whether the
-interpreter can run a valid plan yet: it runs ``ask``/``open``/``ask_user``/
-``confirm`` plans across apps, with ``{sN}`` data flow between them (#72),
-``look`` (#73: a plain read of an app's glance, offered only for apps whose
-manifest declares one), the control steps ``cancel``/``amend``/``undo`` on
-their own (#74; on a running job through the jobs runtime, #76), ``recall``
-over the ledger (#80, :mod:`app.services.memory`), ``think`` as the last
-step (#78: a background job whose proposal waits for a yes), and the direct
-answers. :func:`reads_only` says which asks may run in parallel.
+targets, policy and budgets; a plan with problems gets a repair.
+:func:`unrunnable` names what the interpreter can't run in a valid plan: a
+``{sN}`` on a step that gives no name. Every step kind runs (#75): ``ask``/
+``open``/``ask_user``/``confirm`` across apps, with ``{sN}`` data flow
+between them (#72), ``look`` (#73: a plain read of an app's glance, offered
+only for apps whose manifest declares one), the control steps ``cancel``/
+``amend``/``undo`` (#74; on a running job through the jobs runtime, #76),
+``recall`` over the ledger (#80, :mod:`app.services.memory`), ``think`` (#78:
+a background job whose proposal waits for a yes), and the direct answers.
+:func:`reads_only` says which asks may run in parallel.
 Pure: no I/O.
 """
 
@@ -48,12 +48,9 @@ StepKind = Literal[
     "ask", "look", "open", "ask_user", "recall", "cancel", "amend", "confirm", "undo", "think"
 ]
 
-# What the interpreter runs; the rest fall back to the loop.
-RUNNABLE_KINDS: frozenset[str] = frozenset(
-    {"ask", "look", "open", "ask_user", "confirm", "recall", "think"}
-)
 # Control steps (#74): they act on what's waiting or on what just ran, so each
-# runs as a plan of its own (:mod:`app.ai.control`).
+# runs as a plan of its own (:mod:`app.ai.control`); one inside a longer plan
+# is split off and runs first (#75).
 CONTROL_KINDS: frozenset[str] = frozenset({"cancel", "amend", "undo"})
 
 # ``{sN}`` (or ``{sN.field}``): what step N touched, filled in by code (#72).
@@ -433,48 +430,31 @@ def _lost_refs(steps: list[Step]) -> list[str]:
     return found
 
 
-def fallback_reason(
-    plan: Plan,
-    *,
-    confirm_app: str | None = None,
-    pending: bool = False,
-) -> str | None:
-    """Why the interpreter can't run this valid plan yet, or ``None`` if it can.
+# The step kinds whose receipt can give a later step a name for ``{sN}``: an
+# ``ask`` (its receipt's title), the ``ask_user`` (the person's answer) and a
+# ``recall`` (the one entity it resolved, #80). A ``look`` is several things,
+# not a name (#73).
+NAMERS: frozenset[str] = frozenset({"ask", "ask_user", "recall"})
 
-    Cross-app plans run (#72): writes in order, one at a time. A ``look`` runs
-    (#73) but gives nothing to ``{sN}``: a glance is several things, not a
-    name, so a ref to one falls back. ``{sN}`` runs
-    when step N can give a name: an ``ask`` (its receipt's title), the
-    ``ask_user`` (the person's answer) or a ``recall`` (the one entity it
-    resolved, #80). ``confirm_app`` is the app a
-    ``confirm`` step answers, when it's an app's question; kept for the
-    callers, it no longer changes the answer.
 
-    A control step (#74) runs when it is the whole plan. ``cancel`` and
-    ``amend`` act on what's ``pending`` (a paused plan or an app's question),
-    or on a running job (#76, :mod:`app.ai.job_control`); ``pending`` is kept
-    for the callers and no longer changes the answer.
-    """
-    del confirm_app, pending
+def unrunnable(plan: Plan) -> list[str]:
+    """What the interpreter can't run in this valid plan, in words the
+    planner can repair from (#75): a ``{sN}`` on a step that gives no name.
+    Empty when every step can run."""
     if not isinstance(plan, StepPlan):
-        return None
-    control = next((step for step in plan.steps if step.do in CONTROL_KINDS), None)
-    if control is not None:
-        if len(plan.steps) > 1:
-            return f"kind:{control.do}"
-        return None
-    namers: set[str] = set()
-    for index, step in enumerate(plan.steps):
-        if step.do not in RUNNABLE_KINDS:
-            return f"kind:{step.do}"
-        if step.do == "think" and index != len(plan.steps) - 1:
-            # A think comes back later as a proposal (#78): nothing can follow it.
-            return "think_not_last"
-        if set(REF.findall(step_text(step))) - namers:
-            return "data_flow"
-        if isinstance(step, Ask | AskUser | Recall):
-            namers.add(step.id)
-    return None
+        return []
+    kinds = {step.id: step.do for step in plan.steps}
+    found: list[str] = []
+    for step in plan.steps:
+        for ref in dict.fromkeys(REF.findall(step_text(step))):
+            kind = kinds.get(ref)
+            if kind is not None and kind not in NAMERS:
+                a = "an" if kind[0] in "aeiou" else "a"
+                found.append(
+                    f"{step.id} uses {{{ref}}}, but {ref} is {a} {kind} and gives no name to "
+                    "pass on; write the name State gives, or ask the app that knows it"
+                )
+    return found
 
 
 def has_control(plan: Plan) -> bool:
@@ -541,7 +521,9 @@ def step_text(step: BaseModel) -> str:
 
 # ``proposal``: a think's proposal (#78), posted as its job's note; a yes runs it.
 PauseReason = Literal["ask_user", "gate", "app_confirm", "proposal"]
-PlanStatus = Literal["ran", "answered", "paused", "fell_back", "invalid"]
+# ``invalid``: no plan code could run, even after the repairs; code answered
+# (#75). Old rows may also say ``fell_back`` (the loop took the turn).
+PlanStatus = Literal["ran", "answered", "paused", "invalid"]
 
 
 class TurnPlan(BaseModel):
@@ -549,9 +531,10 @@ class TurnPlan(BaseModel):
 
     body: dict[str, Any] | None = None
     status: PlanStatus
-    # Why it fell back or was invalid, or where it stopped.
+    # Why it was invalid, or where it stopped.
     note: str | None = None
-    # Whether this plan is what acted (``False``: the loop took the turn).
+    # Whether this plan is what acted. Always since #75; ``False`` only on old
+    # rows, where the loop took the turn.
     acted: bool = True
     # A paused plan: why, the 0-based index of the step it resumes at, and
     # the app a gate or confirm is about.
@@ -565,6 +548,10 @@ class TurnPlan(BaseModel):
     # a think's proposal (#78) is ``accepted`` by a yes or ``set_aside``.
     ends: int | None = None
     ends_as: Literal["cancelled", "amended", "accepted", "set_aside"] | None = None
+    # A control step split off this plan (#75): it ran first, as a plan of its
+    # own, and the turn's first ``first_steps`` records are its steps.
+    first: TurnPlan | None = None
+    first_steps: int = 0
 
 
 @dataclass(frozen=True)

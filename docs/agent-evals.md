@@ -1,59 +1,55 @@
-# Routing eval harness
+# Agent eval harness
 
-`backend/tests/test_agent_evals.py` — golden utterance→route scenarios against
-the **real** model (gemma-4-12b behind llama-swap) and the **real** workspace
-manifests. This was Phase 3's go/no-go gate (verdict: GO). Full measurement
-narratives are in this file's git history.
+Conductor's live evals run the **real** model (gemma-4-12b behind llama-swap)
+against the **real** workspace manifests. Since #75 (2026-11-08) every turn
+goes planner → validator → interpreter → narrator, and the eval gate is two
+suites under the vendored Wilson gate (#59):
 
-## What it is
+- **Plan-level evals** (`tests/test_plan_evals.py`, below): does the 12B
+  compile the right plan? Every routing golden re-labelled as a plan, the
+  S1–S16 scenarios, a held-out set and long plans, per group.
+- **Session evals** (`tests/test_session_evals.py`, below): whole multi-turn
+  sessions over a fake fleet, checked on the end state and the replies.
 
-Each golden drives one utterance through the same seam the web UI uses, with
-the real provider, the real layered prompt (fleet section rendered from the
-real sibling `app.yaml`s), and the real loop. Only the network hop is stubbed
-(canned delegate replies), so the routing decision is entirely the model's.
-Assertions are behavioral (temp 1.0): **route** goldens pin "exactly this
-app's tool, no other" (handoffs also pin the `intent` carried the user's
-words); **refuse** goldens pin "no app acted on"; **confirm** goldens pin a
-question with no tool call on destructive `ask_` requests; **local** goldens
-allow `list_agents` only.
-
-## Running it
-
-```bash
-cd backend
-CONDUCTOR_AGENT_EVALS=1 .venv/bin/pytest tests/test_agent_evals.py -v -s
-```
-
-Opt-in; needs llama-swap up (cold load ~100 s). Overrides: `LLAMACPP_BASE_URL`,
-`LLAMACPP_MODEL`, `CONDUCTOR_EVAL_FLEET_DIR`, `CONDUCTOR_EVAL_RUNS` (block
-size, default 5), `CONDUCTOR_EVAL_MAX_RUNS` (default 20),
-`CONDUCTOR_EVAL_INFRA_RETRIES` (default 3), `CONDUCTOR_EVAL_INFRA_BUDGET`
-(default 12). The suite skips itself unless
-discovery finds both `ask_tasks` and `open_chess`.
+The single-utterance routing goldens (`tests/test_agent_evals.py`) **retired
+at #75** with the loop they measured. Their runs stay below as history; the
+cases live on as plans (`refuse-playback`, `music-save` and `chess-resign`
+included). Full measurement narratives are in this file's git history.
 
 ## The gating rule
 
-This suite gates every change to the base prompt, the vendored personality,
-the model, the loop, **and any fleet app's `agent:`/`open:` descriptions and
-examples — wherever that PR lands.** A sibling app widening its manifest is a
-change to this suite's inputs (that is exactly how `refuse-playback` went red
-without anyone noticing). If routing degrades, tighten manifest `examples`
-first; a bigger model is the last resort.
+Any change to the planner prompt, the step kinds, the compiler or validator,
+the interpreter or narrator, the model, **or any fleet app's
+`agent:`/`open:`/`glance:` manifest block — wherever that PR lands** — runs
+both suites and must not regress them:
 
-**No golden may go statistically below its floor** (0.8, the agent standard's
-sampled gate, `STANDARD.md` §6). Each golden is sampled in blocks of 5, a fresh
-conversation per sample, and judged by the vendored `backend/tests/evalstats.py`
-(spec `test_evalstats.py`, conductor's drift guards `test_evalstats_app.py`; re-copy
-from `../agent-standard/`, never edit): a one-sided 95% Wilson upper bound below
-the floor is red, a rate at the floor green, anything between buys another
-block up to 20. At n=5: 0–2 red, 3 escalates, 4–5 green. An `UNDECIDED` count at
-the cap passes, flagged. A known red is `xfail`, not gated.
+```bash
+cd backend
+export CONDUCTOR_EVAL_FLEET_DIR=~/Documents/workspace   # from a worktree
+CONDUCTOR_PLAN_EVALS=1 .venv/bin/pytest tests/test_plan_evals.py -v -s
+CONDUCTOR_AGENT_EVALS=1 CONDUCTOR_FRONTIER_EVALS=1 \
+    .venv/bin/pytest tests/test_session_evals.py -v -s
+```
+
+A sibling app widening its manifest changes these suites' inputs (that is
+how `refuse-playback` went red without anyone noticing). If plans degrade,
+tighten manifest `examples` first; a bigger model is the last resort.
+
+**Nothing may go statistically below its floor** (`STANDARD.md` §6), judged by
+the vendored `backend/tests/evalstats.py` (spec `test_evalstats.py`,
+conductor's drift guards `test_evalstats_app.py`; re-copy from
+`../agent-standard/`, never edit): a one-sided 95% Wilson upper bound below
+the floor is red, a rate at the floor green. Plan groups have their own
+floors; session scenarios in the `gate` tier are held to 0.8, sampled in
+blocks of 5 up to 20; the `frontier` tier is measured, never asserted. A
+known red is `xfail`, not gated. `scripts/eval_campaign.sh --suite plan|session`
+runs a paired A/B.
 
 ## Infrastructure is retried, not scored
 
 A provider death (llama-swap evicting or reloading the model mid-suite: a 502
 `llama-server request failed: timed out`, a refused connection, or a 5xx while
-it swaps) never decided a route, so it is not scored. The harness throws the
+it swaps) never decided anything, so it is not scored. The harness throws the
 sample away and re-takes it on a fresh conversation, up to
 `CONDUCTOR_EVAL_INFRA_RETRIES` per scenario and `CONDUCTOR_EVAL_INFRA_BUDGET`
 across the suite (`InfraBudget` in the vendored `evalstats.py`). A timed-out
@@ -74,7 +70,12 @@ Reading a run:
 
 Any other red is a routing answer.
 
-## Known reds (xfail, not gated)
+## History: the routing goldens (retired at #75, 2026-11-08)
+
+What follows ran `tests/test_agent_evals.py` against the old loop, which
+#75 deleted. Kept as history; none of it gates anything now.
+
+### Known reds (xfail, not gated)
 
 Under the sampled gate (2026-10-28) two goldens read below the floor on main;
 both are `xfail` in `KNOWN_REDS` until fixed:
@@ -87,7 +88,7 @@ both are `xfail` in `KNOWN_REDS` until fixed:
 The rest of the suite: 19/21 ABOVE_FLOOR at 5/5, infra 2/12 (two llama-swap
 timeouts on `chess-reset`, re-taken, never scored), 684 s.
 
-## Routing run, 2026-11-08 — `chess-status` reads `look(chess)` (#118)
+### Routing run, 2026-11-08 — `chess-status` reads `look(chess)` (#118)
 
 Since #73 a glance answers "how is our chess game going?" (chess#536's
 point), so `chess-status` now expects `look_chess`, the record the
@@ -117,7 +118,7 @@ The reds besides `chess-analysis` are not from this change: `tasks-week` and
 `chess-resign` read below the floor on this run. Both are explained, and
 `tasks-week` fixed, in the next section (#122).
 
-## The `tasks-week` and `chess-resign` reds (#122, 2026-11-08)
+### The `tasks-week` and `chess-resign` reds (#122, 2026-11-08)
 
 Two causes, bisected with the live goldens (gemma-4-12b, 5 samples) over the
 merges since the last recorded baseline:
@@ -201,7 +202,7 @@ question in a new conversation gets the planner trusting a recalled
 answered call over asking the app again. The planner prompt is unchanged
 here; it wants its own change, gated by the plan evals.
 
-## Open regression — `refuse-playback` red since music #9
+### Open regression — `refuse-playback` red since music #9
 
 "play some jazz music" routes to `ask_music` instead of refusing,
 deterministic 0/3, bisected to music #9's manifest line *"queues a whole album
@@ -212,7 +213,7 @@ runs — the negation suppresses music routing generally. Options, none taken
 (music's own agent refuses truthfully one hop later); or leave red until music
 Phase 6 makes the route correct.
 
-## Baseline — 2026-08-22, gemma-4-12b, 18/18 (3 consecutive runs)
+### Baseline — 2026-08-22, gemma-4-12b, 18/18 (3 consecutive runs)
 
 | scenario | kind | expected |
 |---|---|---|
@@ -250,14 +251,16 @@ count for a batch). Paths are never pinned. The scenarios are in
 `session_scenarios.py`; the driver seam in `session_harness.py` is what a
 later runtime plugs into.
 
-- **Scripted (CI).** Each scenario's golden script plays the model and must
+- **Scripted (CI).** Each scenario's golden script plays the model (plans, then
+  the narrator's words; since #75 the compiled runtime only) and must
   pass, so every check is shown to be satisfiable. Deliberately wrong scripts
   (acting before the yes, a dropped album title, a claimed write that didn't
-  happen, an unnamed write, an invented recap) must fail for the right reason.
+  happen, an invented recap) must fail for the right reason; an unnamed write
+  is now named by code, so its script passes.
 - **Live (opt-in).** `CONDUCTOR_AGENT_EVALS=1` runs the `gate` tier under the
-  same Wilson gate as routing. `CONDUCTOR_FRONTIER_EVALS=1` also measures the
+  vendored Wilson gate. `CONDUCTOR_FRONTIER_EVALS=1` also measures the
   `frontier` tier: 5 samples per scenario, never asserted. Every sample is a
-  fresh world and a fresh conversation through the real route, loop, prompt
+  fresh world and a fresh conversation through the real route, interpreter, prompt
   and workspace manifests.
 
 ```bash
@@ -271,8 +274,8 @@ From a worktree, set `CONDUCTOR_EVAL_FLEET_DIR=~/Documents/workspace`.
 `CONDUCTOR_EVAL_REPORT=<path>` appends a JSON line per scenario. The run
 closes with `[session] claims backed=b/n`, the claim tally #65 is judged on.
 
-A scenario that needs a capability the runtime lacks (`stop`, `tool:ask_chess`)
-fails `unsupported:` instead of skipping, so it reads 0 for a named reason and
+A scenario that needs a capability the runtime lacks fails `unsupported:`
+instead of skipping, so it reads 0 for a named reason and
 starts measuring on its own once the capability lands.
 
 ### Baseline: today's loop, 2026-11-05, gemma-4-12b
@@ -359,7 +362,8 @@ Gate tier, 5-sample blocks; S5 also at 20.
 ## Plan-level evals (#70)
 
 `backend/tests/test_plan_evals.py` measures the compiler alone. Each sample is
-one compile through the shipped prompt, schema, validator and repair, against
+one compile as the interpreter does it: the shipped prompt, schema, validator,
+its repair and (since #75) one more round when the plan still can't run, against
 the real llama-server and the workspace manifests. Nothing runs. A sample
 passes when the plan is valid and matches one of the case's shapes
 (`plan_cases.py`).
@@ -379,9 +383,9 @@ CONDUCTOR_PLAN_EVALS=1 CONDUCTOR_EVAL_FLEET_DIR=~/Documents/workspace \
     .venv/bin/pytest tests/test_plan_evals.py -v -s
 ```
 
-Any change to the planner prompt, the step kinds, the validator or a fleet
-app's manifest runs this suite, as well as the session evals with the
-compiler on.
+Since #75 this suite and the session evals are the eval gate (above): any
+change to the planner prompt, the step kinds, the validator or a fleet app's
+manifest runs both.
 
 ### Baseline: 2026-11-06, gemma-4-12b, 5 samples per case
 
@@ -697,6 +701,53 @@ Then `ref` and `memory` at n=20, against main's n=20 (#122's investigation):
   differences are sampling. `memory-caribou`'s misses are `look:music`
   (7/20), and `ref-ambiguous` asks tasks instead of asking the person
   (15/20). Both are planner-side follow-ups.
+
+### The loop retired (#75, 2026-11-08)
+
+Every turn is a plan now: no loop fallback. What used to fall back gets one
+more repair round, then code's question or "I couldn't put that together";
+a control step in a longer plan is split off and runs first; a think ends
+the plan. The planner prompt, schema and validator are unchanged. Plan-level
+evals now compile as the interpreter does (the extra round included) and
+print `third-call` and `right-within-two` beside the old columns.
+gemma-4-12b, shared GPU, n=5.
+
+| group | floor | #80 | this change |
+|---|---|---|---|
+| golden | 0.8 | 94/105 | 90/105 |
+| cross | 0.8 | 35/35 | 35/35 |
+| ref | 0.85 | 15/20 | 17/20 |
+| control | 0.8 | 22/25 | 20/25 |
+| memory | 0.8 | 7/10 | 8/10 |
+| knowledge | 0.65 | 15/15 | 14/15 |
+| hard | 0.5 | 5/5 | 4/5 |
+| self | 0.55 | 10/15 | 8/15 |
+| holdout | 0.85 | 47/50 | 49/50 |
+| long | 0.7 | 38/40 | 38/40 |
+
+- Every group passed its gate; every plan was valid, and no sample needed the
+  third call (`right-within-two` equals the score). The moves are sampling:
+  the planner's input is byte-identical.
+- `chess-resign` 1/5 (4 asks to music; chess#540 pending), `chess-analysis`
+  0/5 (the glance), `refuse-playback` 2/5, `music-save` 5/5.
+
+Session evals, gate tier at 5 samples, frontier at 5:
+
+| scenario | #80 | this change |
+|---|---|---|
+| S1, S2, S2r, S5, S7, S8, S9, S16 | 5/5 | 5/5 each |
+| S4 | 5/5 | 4/5 (the narrator called the playlist a created "job") |
+| S6 (gate) | 19/20 | 4/5 (asked music without the title once) |
+| S3, S10 | 5/5 | 5/5 |
+| S11 | 4/5 | 5/5 |
+| **S12** | 0 (`unsupported`: needed `ask_chess`) | **5/5**: it needs no `ask_chess` now; open and look run it |
+| S13 | 0 | 0/5 (the brief leaves out the songs to sort) |
+| S14 | 6/10 (#78) | 2/5: the 12B planned a think 2 of 5 times; both passed |
+| S15 | 14/20 | 2/5, then 5/10: every plan was `ask:music \| ask:tasks`, and the misses dropped `{s1}` (#127) |
+
+- None of the new paths fired live (no extra round, no split, no think cut);
+  the misses are the planner's and the narrator's, as before.
+- Claims were 108/109 backed (S4's "job").
 
 ### Memory you can see (#81, 2026-11-08)
 
