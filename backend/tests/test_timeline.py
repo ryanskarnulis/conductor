@@ -243,6 +243,16 @@ def test_earlier_calls_reach_the_timeline_before_its_gap_only(timeline: Timeline
     assert call.asked == ODESSA
 
 
+def test_the_apps_threads_follow_the_window(timeline: Timeline, world: World) -> None:  # noqa: F811
+    _grab(timeline)
+    _grab(timeline)
+    timeline.later()
+    _grab(timeline)
+    first, again, later = world.threads["music"]
+    assert first == again  # one thread within the window
+    assert later != first  # a fresh one after the quiet gap, as a new conversation had
+
+
 def test_a_waiting_plan_lapses_over_a_quiet_gap(timeline: Timeline) -> None:
     timeline.say(
         "which song?",

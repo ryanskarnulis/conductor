@@ -616,7 +616,9 @@ def _post_message(
     db.commit()
 
     context = DelegationContext(
-        master_conversation_id=str(conversation_id),
+        # The apps' own threads follow the window: after a quiet gap each app
+        # starts a fresh one, as it did for a new conversation (#82).
+        master_conversation_id=conversations_service.thread_key(db, conversation.id, since),
         thread_store=thread_store,
         calls_per_turn_per_app=get_settings().conductor_delegate_calls_per_turn_per_app,
         # Only a question the person saw last turn can take a yes (#68).

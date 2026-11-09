@@ -157,6 +157,26 @@ def window_since(
     return None
 
 
+def thread_key(db: Session, conversation_id: int, since: datetime | None) -> str:
+    """The key the apps' subagent threads are kept under for this window
+    (#82): the conversation's id while no gap has passed (``since`` none),
+    else the id and the window's first message, so after a quiet gap each
+    app starts a fresh thread, as it did for a new conversation. Call it
+    once the turn's own message is stored: an empty window starts with it."""
+    if since is None:
+        return str(conversation_id)
+    first = db.execute(
+        select(ConversationMessage.id)
+        .where(
+            ConversationMessage.conversation_id == conversation_id,
+            ConversationMessage.created_at >= since,
+        )
+        .order_by(ConversationMessage.id)
+        .limit(1)
+    ).scalar_one_or_none()
+    return str(conversation_id) if first is None else f"{conversation_id}:{first}"
+
+
 def _aware(value: datetime) -> datetime:
     """SQLite hands back naive datetimes; conductor writes UTC."""
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
