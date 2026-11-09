@@ -20,6 +20,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.ai import incognito
 from app.config import get_settings
 
 __all__ = ["configure_logging", "RequestIDMiddleware"]
@@ -36,6 +37,8 @@ def configure_logging(stream: TextIO | None = None) -> None:
 
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
+        # An incognito turn's words never reach a log line (#82).
+        incognito.redact_log,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),

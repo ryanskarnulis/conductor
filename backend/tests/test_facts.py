@@ -223,10 +223,8 @@ def test_a_question_lists_the_facts_with_where_each_came_from(
     )
     (call,) = reply["tool_calls"]
     assert call["app_record"][0]["touched"][0]["title"] == SUNDAYS
-    assert (
-        "you said it" in call["result"]
-        and "in “remember I sort music on Sundays”" in (call["result"])
-    )
+    # Said on the timeline (#82): a day, and no thread to name.
+    assert "you said it" in call["result"] and "in “" not in call["result"]
     # Code holds the reply to the receipt: the fact is named, quoted.
     assert f"“{SUNDAYS}”" in reply["content"]
 
@@ -550,7 +548,7 @@ def test_the_list_shows_each_fact_and_where_it_came_from(
     assert fact["text"] == SUNDAYS
     source = fact["source"]
     assert source["words"] == f"remember {SUNDAYS}" and source["kind"] == "message"
-    assert source["thread"] == {"id": talk.conversation, "title": f"remember {SUNDAYS}"}
+    assert source["thread"] is None  # the timeline names no thread (#82)
     assert source["said_at"].endswith(("Z", "+00:00"))
 
 

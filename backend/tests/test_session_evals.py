@@ -52,7 +52,7 @@ from app.services.job_watcher import JobWatcher
 from app.services.thinker import Thinker, think_provider_from_settings
 from app.tools import registry
 from tests import eval_seed
-from tests.eval_db import database_wiper
+from tests.eval_db import database_ager, database_wiper
 from tests.evalstats import (
     Decision,
     GateAborted,
@@ -197,6 +197,7 @@ class _ScriptedRun:
             tool_names=_tool_names,
             reset=rate_limit._reset,
             fresh_db=database_wiper(db_session),
+            pass_time=database_ager(db_session),
             settle=settle,
         )
 
@@ -473,6 +474,7 @@ def live(
             tool_names=_tool_names,
             reset=rate_limit._reset,
             fresh_db=database_wiper(db_session),
+            pass_time=database_ager(db_session),
             # A think (#78) runs on the real 26B, unseeded, when S14 waits.
             settle=_watching(session_factory, holder, provider, think_provider_from_settings),
         )

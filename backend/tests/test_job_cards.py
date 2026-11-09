@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.api import routes_agent, turn_activity
 from app.api.turn_activity import Heartbeat, TurnEvent
-from app.db.models import LedgerStep, LedgerTurn
+from app.db.models import Conversation, LedgerStep, LedgerTurn
 from app.fleet.jobs import JobError, JobGone, JobRead
 from app.fleet.manifests import Fleet
 from app.main import app
@@ -271,16 +271,19 @@ def test_a_card_cancel_for_an_unknown_job_or_another_conversations_job_is_404(
     run_with: Any,
     db_session: Session,
 ) -> None:
-    _journal_job(db_session, run_with.conversation, "31", "Library sort", 112, 400)
-    other = int(client.post("/api/agent/conversations", json={}).json()["id"])
+    # A job an old conversation started (#82) is not the timeline's to touch.
+    old = Conversation(title="old", kind="legacy")
+    db_session.add(old)
+    db_session.commit()
+    _journal_job(db_session, old.id, "31", "Library sort", 112, 400)
     before = len(_thread(client, run_with.conversation))
-    for conversation, ref in ((run_with.conversation, "999"), (other, "31")):
+    for conversation, ref in ((run_with.conversation, "999"), (run_with.conversation, "31")):
         response = card(conversation, ref)
         assert response.status_code == 404, response.text
+    assert card(old.id, "31").status_code == 404
     assert card(run_with.conversation, "31", app_name="chess").status_code == 404
     assert card(999, "31").status_code == 404
     assert len(_thread(client, run_with.conversation)) == before
-    assert _thread(client, other) == []
 
 
 def test_a_card_cancel_that_cant_reach_the_app_records_nothing(

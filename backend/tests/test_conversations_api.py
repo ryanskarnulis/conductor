@@ -20,6 +20,7 @@ from app.ai.interpreter import Interpreter
 from app.ai.provider import ChatResult, ProviderRequestError
 from app.api import routes_agent, turn_activity
 from app.config import get_settings
+from app.db.models import Conversation
 from app.fleet import context as fleet_context
 from app.fleet.context import current_delegation_context
 from app.fleet.delegate import DelegateClient
@@ -66,22 +67,43 @@ def _create_conversation(client: TestClient, title: str | None = None) -> int:
     return int(response.json()["id"])
 
 
-def test_conversation_crud_and_recency_order(client: TestClient) -> None:
+def test_there_is_one_timeline_and_it_is_never_deleted(client: TestClient) -> None:
+    # #82: nothing lists until the timeline is first used; then it is the list.
+    assert client.get("/api/agent/conversations").json() == []
     first = _create_conversation(client, title="errands")
     second = _create_conversation(client)
+    timeline = client.get("/api/agent/timeline").json()
+    assert first == second == timeline["id"]
+    assert timeline["title"] == "Timeline" and timeline["messages"] == []
+    assert timeline["quiet_gap_seconds"] == 3 * 60 * 60
+    assert "Apps still see the request" in timeline["incognito_notice"]
 
     listed = client.get("/api/agent/conversations").json()
-    assert [item["id"] for item in listed] == [second, first]
-    assert listed[1]["title"] == "errands"
-    assert listed[0]["title"] is None
+    assert [item["id"] for item in listed] == [first]
 
     detail = client.get(f"/api/agent/conversations/{first}").json()
     assert detail["id"] == first
     assert detail["messages"] == []
 
-    assert client.delete(f"/api/agent/conversations/{first}").status_code == 204
-    assert client.get(f"/api/agent/conversations/{first}").status_code == 404
-    assert [item["id"] for item in client.get("/api/agent/conversations").json()] == [second]
+    # Deleting goes away: "forget that" (#81) is how something is taken out.
+    assert client.delete(f"/api/agent/conversations/{first}").status_code == 409
+    assert client.get(f"/api/agent/conversations/{first}").status_code == 200
+
+
+def test_old_conversations_are_gone_from_the_api(client: TestClient, db_session: Session) -> None:
+    """#58 (c): conversations from before the timeline are reachable only
+    through recall, never listed, read, written to or deleted."""
+    old = Conversation(title="weekend plans", kind="legacy")
+    db_session.add(old)
+    db_session.commit()
+    assert client.get("/api/agent/conversations").json() == []
+    assert client.get(f"/api/agent/conversations/{old.id}").status_code == 404
+    assert client.delete(f"/api/agent/conversations/{old.id}").status_code == 404
+    _use(ScriptedProvider([_DECLINE]))
+    sent = client.post(f"/api/agent/conversations/{old.id}/messages", json={"content": "hi"})
+    assert sent.status_code == 404
+    # The timeline starts clean beside it.
+    assert client.get("/api/agent/timeline").json()["id"] != old.id
 
 
 def test_missing_conversation_is_404_everywhere(client: TestClient) -> None:
@@ -128,10 +150,9 @@ def test_post_message_runs_the_turn_and_persists_exchange(client: TestClient) ->
         }
     ]
 
-    # The exchange is persisted, and the untitled conversation took its title
-    # from the first user message.
+    # The exchange is persisted on the timeline, which keeps its name.
     detail = client.get(f"/api/agent/conversations/{conversation_id}").json()
-    assert detail["title"] == "look up chess"
+    assert detail["title"] == "Timeline"
     assert [message["role"] for message in detail["messages"]] == ["user", "assistant"]
 
 

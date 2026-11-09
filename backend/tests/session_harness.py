@@ -74,9 +74,9 @@ class Driver(Protocol):
         fresh conversation."""
 
     def new_conversation(self) -> None:
-        """A later session (another day, another surface): a new conversation
-        over the same world. Whatever the runtime remembers across it is its
-        memory."""
+        """A later session (another day, another surface) over the same
+        world: since the timeline (#82), the same conversation after a quiet
+        gap. Whatever the runtime remembers across it is its memory."""
 
     def say(self, text: str, *, surface: str) -> TurnRecord:
         """One person turn through the runtime's real entry point."""
@@ -116,7 +116,7 @@ class ConfirmIfAsked:
 
 @dataclass(frozen=True)
 class NewConversation:
-    pass
+    """Another day: the timeline after a quiet gap (#82), not a new thread."""
 
 
 @dataclass(frozen=True)
@@ -431,7 +431,8 @@ class LoopDriver:
     "new conversation" must not find another world's conversations (#64's
     cross-conversation recall reads them). ``settle`` runs before the
     unprompted messages are read: time has passed, so the job watcher looks
-    at every running job now (#76).
+    at every running job now (#76). ``pass_time`` is "another day" on the
+    one timeline (#82): the record moves back past the quiet gap.
     """
 
     def __init__(
@@ -443,6 +444,7 @@ class LoopDriver:
         reset: Callable[[], None] = lambda: None,
         fresh_db: Callable[[], None] = lambda: None,
         settle: Callable[[], None] = lambda: None,
+        pass_time: Callable[[], None] = lambda: None,
     ) -> None:
         self._client = client
         self._holder = holder
@@ -450,6 +452,7 @@ class LoopDriver:
         self._reset = reset
         self._fresh_db = fresh_db
         self._settle = settle
+        self._pass_time = pass_time
         self._conversation: int | None = None
         self._seen: int = 0
         # The OpenAPI paths, not ``app.routes``: included routers nest there.
@@ -466,13 +469,14 @@ class LoopDriver:
     def begin(self, world: World) -> None:
         self._fresh_db()
         self._holder.bind(world)
-        self.new_conversation()
+        timeline = self._client.get("/api/agent/timeline")
+        assert timeline.status_code == 200, timeline.text
+        self._conversation = timeline.json()["id"]
+        self._seen = 0
 
     def new_conversation(self) -> None:
-        created = self._client.post("/api/agent/conversations", json={})
-        assert created.status_code == 201, created.text
-        self._conversation = created.json()["id"]
-        self._seen = 0
+        # One timeline (#82): another day is a quiet gap, not a new thread.
+        self._pass_time()
 
     def say(self, text: str, *, surface: str) -> TurnRecord:
         # A voice turn reaches conductor as the transcribed text plus its

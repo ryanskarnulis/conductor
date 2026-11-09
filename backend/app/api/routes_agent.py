@@ -1,4 +1,10 @@
-"""Agent chat API: conversations, history, and the message → turn round trip.
+"""Agent chat API: the timeline, its history, and the message → turn round trip.
+
+There is one timeline (#82, ``GET /agent/timeline``): every surface writes to
+it, ``POST /agent/conversations`` answers it (there is no new conversation)
+and it can't be deleted ("forget that" is how something goes, #81). Legacy
+conversations are gone from the API; recall still reads them. A message may
+be ``incognito``: its words and reply are never written (:mod:`app.ai.incognito`).
 
 ``POST /agent/conversations/{id}/messages`` is the one model-calling endpoint:
 it stores the user turn, binds the delegation context (DB-backed thread store,
@@ -25,7 +31,7 @@ from collections.abc import AsyncIterator, Generator, Sequence
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 from fastapi.sse import EventSourceResponse, format_sse_event
 from sqlalchemy.orm import Session, sessionmaker
@@ -34,6 +40,7 @@ from app import clock
 from app.ai import (
     confirmation,
     foreground,
+    incognito,
     job_control,
     narrator,
     think,
@@ -49,7 +56,7 @@ from app.ai.state_block import Now
 from app.api import turn_activity
 from app.api.rate_limit import rate_limit
 from app.config import get_settings
-from app.db.models import Conversation
+from app.db.models import Conversation, ConversationMessage
 from app.db.session import SessionLocal, get_db
 from app.fleet.context import DelegationContext, ThreadStore, use_delegation_context
 from app.fleet import jobs as fleet_jobs
@@ -67,12 +74,16 @@ from app.schemas.conversations import (
     MessageExchange,
     MessageRead,
     RunCancelRead,
+    TimelineDetail,
+    TimelineHit,
+    ToolCallRead,
     TurnActivityRead,
 )
 from app.services import conversations as conversations_service
 from app.services import facts as facts_service
 from app.services import ledger
 from app.services import memory as memory_service
+from app.services import timeline as timeline_service
 
 logger = structlog.get_logger(__name__)
 
@@ -133,22 +144,63 @@ def get_job_fleet(request: Request) -> Fleet:
     return fleet
 
 
-def _stored_turns(db: Session, conversation_id: int) -> list[dict[str, Any]]:
-    """The turns before this one; a failed read is no history, never no turn."""
+def _stored_turns(db: Session, conversation_id: int, since: Any) -> list[dict[str, Any]]:
+    """The turns before this one since the quiet gap; a failed read is no
+    history, never no turn."""
     try:
-        return conversations_service.stored_turns(db, conversation_id)
+        return conversations_service.stored_turns(db, conversation_id, since=since)
     except Exception as exc:
         logger.warning("stored_turns_failed", error=str(exc), error_type=type(exc).__name__)
         return []
 
 
-def _paused_plan(db: Session, conversation_id: int) -> PausedPlan | None:
+def _window(db: Session, conversation_id: int) -> Any:
+    """Where this turn's "this conversation" starts (#82); a failed read is
+    the whole conversation, as before the timeline."""
+    try:
+        return conversations_service.window_since(db, conversation_id)
+    except Exception as exc:
+        logger.warning("window_failed", error=str(exc), error_type=type(exc).__name__)
+        return None
+
+
+def _paused_plan(db: Session, conversation_id: int, since: Any) -> PausedPlan | None:
     """Last turn's compiled plan waiting on the person; a failed read is none."""
     try:
-        return ledger.paused_plan(db, conversation_id)
+        return ledger.paused_plan(db, conversation_id, since=since)
     except Exception as exc:
         logger.warning("paused_plan_failed", error=str(exc), error_type=type(exc).__name__)
         return None
+
+
+def _messages(db: Session, conversation: Conversation) -> list[MessageRead]:
+    """A conversation's messages as the page reads them, each tagged with its
+    turn's surface and incognito (#82): the timeline's newest."""
+    rows = conversations_service.list_messages(
+        db, conversation.id, newest=conversations_service.TIMELINE_MESSAGES
+    )
+    tags = timeline_service.message_tags(db, (row.id for row in rows))
+    return [_read(row, tags.get(row.id)) for row in rows]
+
+
+def _read(message: ConversationMessage, tag: timeline_service.Tag | None) -> MessageRead:
+    read = MessageRead.model_validate(message)
+    if tag is not None:
+        read.surface, read.incognito = tag.surface, tag.incognito
+    return read
+
+
+def _live(
+    message: ConversationMessage, *, surface: str | None, content: str | None, calls: Any
+) -> MessageRead:
+    """An incognito turn's message as this response carries it: the words and
+    reply the person is reading now, which were never written (#82)."""
+    read = MessageRead.model_validate(message)
+    read.surface, read.incognito = surface, True
+    read.content = content
+    if calls is not None:
+        read.tool_calls = [ToolCallRead.model_validate(record.model_dump()) for record in calls]
+    return read
 
 
 def _get_or_404(db: Session, conversation_id: int) -> Conversation:
@@ -160,16 +212,61 @@ def _get_or_404(db: Session, conversation_id: int) -> Conversation:
 
 @router.get("/conversations", response_model=list[ConversationRead])
 def list_conversations(db: Session = Depends(get_db)) -> Sequence[Conversation]:
+    """The timeline, once it exists (#82); legacy conversations never list."""
     return conversations_service.list_conversations(db)
 
 
 @router.post("/conversations", response_model=ConversationRead, status_code=status.HTTP_201_CREATED)
 def create_conversation(data: ConversationCreate, db: Session = Depends(get_db)) -> Conversation:
+    """There is no new conversation (#82): the timeline, created on first use."""
     conversation = conversations_service.create_conversation(db, title=data.title)
     db.commit()
     db.refresh(conversation)
-    logger.info("conversation_created", conversation_id=conversation.id)
     return conversation
+
+
+@router.get("/timeline", response_model=TimelineDetail)
+def get_timeline(db: Session = Depends(get_db)) -> TimelineDetail:
+    """The one timeline every surface writes to (#82), created clean on first
+    use, with its newest messages, each tagged with its surface."""
+    conversation = conversations_service.timeline(db)
+    db.commit()
+    db.refresh(conversation)
+    return TimelineDetail(
+        **ConversationRead.model_validate(conversation).model_dump(),
+        messages=_messages(db, conversation),
+        quiet_gap_seconds=int(conversations_service.QUIET_GAP.total_seconds()),
+        incognito_notice=incognito.NOTICE,
+    )
+
+
+@router.get("/timeline/search", response_model=list[TimelineHit])
+def search_timeline(
+    q: str = Query(
+        min_length=timeline_service.MIN_QUERY_CHARS, max_length=timeline_service.MAX_QUERY_CHARS
+    ),
+    db: Session = Depends(get_db),
+) -> list[TimelineHit]:
+    """The timeline's turns whose words, replies or receipt titles match ``q``,
+    newest first. **No model runs.** Incognito and forgotten turns are never hits."""
+    conversation = conversations_service.timeline(db)
+    db.commit()
+    hits = timeline_service.search(db, conversation.id, q.strip())
+    logger.info("timeline_search", hits=len(hits))
+    return [
+        TimelineHit(
+            turn_id=hit.turn_id,
+            message_id=hit.message_id,
+            at=hit.at,
+            surface=hit.surface,
+            kind=hit.kind,
+            said=hit.said,
+            reply=hit.reply,
+            titles=hit.titles,
+            matched=hit.matched,  # type: ignore[arg-type]
+        )
+        for hit in hits
+    ]
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationDetail)
@@ -177,10 +274,7 @@ def get_conversation(conversation_id: int, db: Session = Depends(get_db)) -> Con
     conversation = _get_or_404(db, conversation_id)
     return ConversationDetail(
         **ConversationRead.model_validate(conversation).model_dump(),
-        messages=[
-            MessageRead.model_validate(message)
-            for message in conversations_service.list_messages(db, conversation.id)
-        ],
+        messages=_messages(db, conversation),
     )
 
 
@@ -192,6 +286,12 @@ def delete_conversation(
     thread_cleanup: SubagentThreadCleanup | None = Depends(get_thread_cleanup),
 ) -> None:
     conversation = _get_or_404(db, conversation_id)
+    if conversations_service.is_timeline(conversation):
+        # The timeline is never deleted (#82): "forget that" (#81) is how a turn goes.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="the timeline can't be deleted; say “forget that” to take something out",
+        )
     conversations_service.soft_delete_conversation(db, conversation)
     db.commit()
     logger.info("conversation_deleted", conversation_id=conversation_id)
@@ -435,12 +535,16 @@ def post_note(
     the one thing a truthful transcript cannot do.
     """
     conversation = _get_or_404(db, conversation_id)
-    note = conversations_service.append_user_message(db, conversation, data.content)
-    ledger.note_turn(db, conversation, note)
+    note = conversations_service.append_user_message(
+        db, conversation, data.content, hidden=data.incognito
+    )
+    ledger.note_turn(db, conversation, note, surface=data.surface, hidden=data.incognito)
     db.commit()
     db.refresh(note)
     logger.info("agent_note", conversation_id=conversation_id, message_id=note.id)
-    return note
+    if data.incognito:
+        return _live(note, surface=data.surface, content=data.content, calls=None)
+    return _read(note, timeline_service.Tag(data.surface, False))
 
 
 @router.post(
@@ -470,22 +574,45 @@ def post_message(
     store keyed by this conversation, the per-turn per-app call budget, and
     the ``agent:loop`` audit driver. The ledger (#69) opens the turn with the
     user message and closes it with the assistant turn, in the same commits.
+
+    An ``incognito`` turn (#82) runs the same, but its words and reply are
+    never written, its log lines carry none, and neither the trace nor the
+    capture records it; this response carries the reply the person reads now.
     """
+    with incognito.turn(data.incognito):
+        return _post_message(conversation_id, data, db, conductor, thread_store)
+
+
+def _post_message(
+    conversation_id: int,
+    data: MessageCreate,
+    db: Session,
+    conductor: Interpreter,
+    thread_store: ThreadStore,
+) -> MessageExchange:
     conversation = _get_or_404(db, conversation_id)
-    turns = _stored_turns(db, conversation.id)
+    hidden = data.incognito
+    # "This conversation" is the timeline since its quiet gap (#82); older
+    # turns reach the planner only as cross-day recall, labelled by day.
+    since = _window(db, conversation.id)
+    turns = _stored_turns(db, conversation.id, since)
     turn_opening = turn_context.build(
         clock.local_today(),
         Now(surface=data.surface, panel=data.panel),
         data.content,
         history=lambda: turns,
-        earlier=lambda: conversations_service.earlier_calls(db, conversation.id),
-        entities=lambda: ledger.recent_entities(db, conversation.id),
+        earlier=lambda: conversations_service.earlier_calls(db, conversation.id, since=since),
+        entities=lambda: ledger.recent_entities(db, conversation.id, since=since),
         jobs=lambda: ledger.running_job_lines(db, conversation.id),
-        matches=lambda: memory_service.matches(db, data.content, conversation.id),
+        matches=lambda: memory_service.matches(db, data.content, conversation.id, since=since),
         facts=lambda: facts_service.for_state(db, data.content),
     )
-    user_message = conversations_service.append_user_message(db, conversation, data.content)
-    turn = ledger.open_turn(db, conversation, user_message, surface=data.surface, panel=data.panel)
+    user_message = conversations_service.append_user_message(
+        db, conversation, data.content, hidden=hidden
+    )
+    turn = ledger.open_turn(
+        db, conversation, user_message, surface=data.surface, panel=data.panel, hidden=hidden
+    )
     db.commit()
 
     context = DelegationContext(
@@ -522,11 +649,14 @@ def post_message(
                     on_activity=report,
                     conversation_id=str(conversation_id),
                     stop=stop,
-                    paused=_paused_plan(db, conversation.id),
+                    paused=_paused_plan(db, conversation.id, since),
                     self_facts=lambda: "\n\n".join(
-                        (ledger.self_report(db, conversation.id), facts_service.self_lines(db))
+                        (
+                            ledger.self_report(db, conversation.id, since=since),
+                            facts_service.self_lines(db),
+                        )
                     ),
-                    control_view=lambda: ledger.control_view(db, conversation.id),
+                    control_view=lambda: ledger.control_view(db, conversation.id, since=since),
                     recall=lambda query: memory_service.recall(db, query),
                     memory_app=lambda request, words: facts_service.handle(
                         db,
@@ -534,8 +664,11 @@ def post_message(
                         words,
                         conversation_id=conversation.id,
                         turn_id=turn.id if turn is not None else None,
+                        hidden=hidden,
+                        since=since,
                     ),
-                    saved_facts=lambda: facts_service.texts(db),
+                    # Incognito: no saved fact rides an app's ask (#134's attach).
+                    saved_facts=None if hidden else lambda: facts_service.texts(db),
                 )
         except AgentRunFailed as exc:
             logger.error(
@@ -550,7 +683,7 @@ def post_message(
                 # Something ran: keep the record. A failure before any call leaves
                 # the user turn alone, as before.
                 failed_message = conversations_service.append_assistant_message(
-                    db, conversation, exc.result
+                    db, conversation, exc.result, hidden=hidden
                 )
             # The ledger keeps the turn either way: its words, how it ended, what ran.
             ledger.close_turn(db, turn, exc.result, failed_message)
@@ -561,14 +694,27 @@ def post_message(
             )
             raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
 
-        assistant_message = conversations_service.append_assistant_message(db, conversation, run)
+        assistant_message = conversations_service.append_assistant_message(
+            db, conversation, run, hidden=hidden
+        )
         ledger.close_turn(db, turn, run, assistant_message)
         db.commit()
         ended.update(stop_reason=run.stop_reason, message_id=assistant_message.id)
     finally:
         foreground.left()
         turn_activity.end(conversation_id, stop, **ended)
+    if hidden:
+        # The person reads the reply now; it was never written (#82).
+        return MessageExchange(
+            user_message=_live(
+                user_message, surface=data.surface, content=data.content, calls=None
+            ),
+            assistant_message=_live(
+                assistant_message, surface=data.surface, content=run.reply, calls=run.tool_calls
+            ),
+        )
+    tag = timeline_service.Tag(data.surface, False)
     return MessageExchange(
-        user_message=MessageRead.model_validate(user_message),
-        assistant_message=MessageRead.model_validate(assistant_message),
+        user_message=_read(user_message, tag),
+        assistant_message=_read(assistant_message, tag),
     )

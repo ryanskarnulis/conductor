@@ -145,6 +145,11 @@ def _touched(db: Session, turn_ids: Sequence[int]) -> dict[int, list[_Touched]]:
 
 
 def _index(db: Session, turn: LedgerTurn) -> None:
+    if turn.incognito:
+        # Incognito (#82): indexed as nothing, so it is never indexed again,
+        # joins no topic and lends no words to the entities it touched.
+        turn.terms = []
+        return
     touched = _touched(db, [turn.id]).get(turn.id, [])
     # A job's note turn has code's words ("music job 20 finished"), not the person's.
     said = memory.terms(turn.words) if turn.kind != "job" else set()
@@ -370,11 +375,17 @@ def _topics_in_scope(db: Session, wanted: set[str]) -> set[int]:
 
 
 def matches(
-    db: Session, words: str, conversation_id: int, *, limit: int = MAX_MATCHES
+    db: Session,
+    words: str,
+    conversation_id: int,
+    *,
+    limit: int = MAX_MATCHES,
+    since: datetime | None = None,
 ) -> list[Match]:
     """Leads for a reference to something from another conversation ("that
-    Caribou song"), only when the words point back at something. This
-    conversation's own entities are its recent entities, not matches."""
+    Caribou song"), or from the timeline before its quiet gap (``since``,
+    #82), only when the words point back at something. This window's own
+    entities are its recent entities, not matches."""
     if not points_back(words):
         return []
     wanted = memory.terms(words)
@@ -401,7 +412,10 @@ def matches(
     found: list[Match] = []
     for _, entity in scored[:MATCHES_LOOKED_AT]:
         last = _last_turn(db, entity.id)
-        if last is None or last.conversation_id == conversation_id:
+        if last is None or (
+            last.conversation_id == conversation_id
+            and (since is None or _aware(last.created_at) >= _aware(since))
+        ):
             continue
         found.append(
             Match(
@@ -427,6 +441,7 @@ def _last_turn(db: Session, entity_id: int) -> LedgerTurn | None:
         .where(
             LedgerTouch.entity_id == entity_id,
             LedgerTurn.forgotten_at.is_(None),
+            LedgerTurn.incognito.is_(False),
             LedgerPlan.acted.is_(True),
             LedgerReceipt.outcome.in_(_SEEN),
             Conversation.deleted_at.is_(None),
