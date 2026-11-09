@@ -749,6 +749,74 @@ Session evals, gate tier at 5 samples, frontier at 5:
   the misses are the planner's and the narrator's, as before.
 - Claims were 108/109 backed (S4's "job").
 
+### Recall trust, mixed asks, option entities (#127, #120, 2026-11-08)
+
+- **Recall trust (#127.1).** Recall's record and cross-conversation hits say
+  "as of then". A `knowledge`/`chat` answer to a question an app already
+  answered gets a validator repair (`plan.recalled_answer`), which tells the
+  planner to ask or look again. The new `stale` group (4 cases, floor 0.8)
+  reproduces #122's leak. Same-thread "what's due today?" over its earlier
+  answer read 0/20 on main. With this change it reads 20/20, and every pass
+  was the repair: the first compile still answered `knowledge` all 20 times.
+  The worked examples for this rule were A/B'd and dropped. One paragraph
+  took `stale` to 10/10, but `chess-resign` and `refuse-playback` fell to
+  0/10. A narrower example didn't bind (2/10).
+- **Plan reds (#127.2).** The planner prompt got two clauses. In `ask_user`:
+  "When State names two or more that fit their words, ask_user first, never
+  an ask that picks one." In `recall`: "("when did I last...", "what did we
+  decide..."). Never a look for these: a glance only shows now." An
+  `ask_user` worked example also fixed `ref-ambiguous`, but it made
+  `confirm-delete-task` search and then ask (18/20 invalid), so it was
+  dropped. The validator now splits an ask that carries a second app's work
+  ("… and add a task", "remind me") into one step per app.
+- **#120.** `ask_user` options resolve in code (`app/ai/options.py`). Neither
+  the prompt nor the schema changed for this.
+
+Plan evals, n=20, gemma-4-12b, shared GPU. Main is `75ea878` with the same
+cases:
+
+| group | floor | main | this change |
+|---|---|---|---|
+| golden | 0.8 | 384/420 | 375/420 |
+| cross | 0.8 | 140/140 | 140/140 |
+| ref | 0.85 | 64/80 (`ref-ambiguous` 4/20) | **77/80** (20/20) |
+| control | 0.8 | 81/100 | 84/100 |
+| memory | 0.8 | 29/40 (`memory-caribou` 9/20) | **40/40** (20/20) |
+| knowledge | 0.65 | 57/60 | 56/60 |
+| hard | 0.5 | 13/20 | 14/20 |
+| self | 0.55 | 34/60 | 41/60 |
+| holdout | 0.85 | 184/200 | 186/200 |
+| long | 0.7 | 152/160 | 151/160 |
+| stale | 0.8 | 60/80 (same-thread 0/20) | **80/80** |
+
+- Every group passed its gate. Every plan was valid, and nothing needed the
+  third call.
+- Golden's drop is `chess-resign`, which read 11/20 on main and 2/20 here.
+  In a paired re-run in the same window it read 5/20 on main's prompt and
+  4/20 on this one. Main read it anywhere from 5/20 to 15/20 today, so this
+  is sampling; chess#540 is the fix.
+- `knowledge-egg` read 16/20 in both runs here (4 `answer:self`), against
+  20/20 twice for main's prompt. That's small but looks real.
+- `s6-that-song` read 17/20 (main 20/20). In 3 asks music was told "that
+  Caribou song" instead of Odessa.
+
+Sessions run on the same code. S15 is paired at n=20:
+
+| scenario | main | this change |
+|---|---|---|
+| S15 (frontier) | 12/20 | 15/20 |
+
+- Main's S15 misses: turn 2 ran nothing (4), music only (2), and Honey was
+  queued again (1).
+- This change's S15 misses: Honey queued again (3), turn 2 ran nothing (1),
+  and a task named "the other album" (1).
+- Neither side showed the mixed music ask in these 40 samples.
+
+Gate tier at 5: S1, S2, S2r, S5, S6, S7, S8, S9 and S16 were 5/5 each. S4
+was 4/5 (playlist never queued, as in #75's run). Frontier at 5: S3, S10,
+S11, S12 and S15 were 5/5, S14 4/5, and S13 0/5 (the brief, as before).
+Claims were 110/110 backed.
+
 ### Memory you can see (#81, 2026-11-08)
 
 "Remember …", "what do you know about me?" and "forget that" are asks to

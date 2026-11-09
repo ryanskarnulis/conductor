@@ -187,6 +187,47 @@ def test_one_repair_then_no_plan(fleet: Fleet) -> None:
     assert compiled.plan is None and compiled.problems == ["open must be the last step"]
 
 
+def test_an_answer_from_a_recalled_reply_gets_the_repair(fleet: Fleet) -> None:
+    # #127 (#122's leak): the same question again, its earlier answer in recall.
+    from tests.plan_cases import CASES
+
+    stale = {case.id: case for case in CASES if case.group == "stale"}
+    knowledge = plans.Direct(answer="knowledge")
+    for case_id in ("stale-due-same-thread", "stale-week-recalled"):
+        case = stale[case_id]
+        (objection,) = plans.recalled_answer(knowledge, case.text, case.state)
+        assert objection.startswith(f'they asked "{case.text}" before and an app answered it')
+        assert objection.endswith("ask or look at that app again")
+        assert plans.recalled_answer(plans.Direct(answer="chat"), case.text, case.state)
+        # A plan that reads the app, a self answer, or a different question: no objection.
+        read = steps(ask("tasks", case.text))
+        assert plans.recalled_answer(plans.load(read), case.text, case.state) == []
+        assert plans.recalled_answer(plans.Direct(answer="self"), case.text, case.state) == []
+        assert plans.recalled_answer(knowledge, "how long do I boil an egg?", case.state) == []
+    # Words in the last exchange alone (no app call) are no recalled answer.
+    said = 'The person said: "what\'s due today?"\nWhat you said then: "Nothing."'
+    assert plans.recalled_answer(knowledge, "what's due today?", said) == []
+
+    replies = [json.dumps({"answer": "knowledge"}), json.dumps(steps(ask("tasks", "what's due?")))]
+    sent: list[list[dict[str, Any]]] = []
+
+    def chat(messages: list[dict[str, Any]], _max: int, _fmt: dict[str, Any]) -> ChatResult:
+        sent.append(list(messages))
+        return text_turn(replies.pop(0))
+
+    case = stale["stale-due-same-thread"]
+    compiled = compiler.compile_turn(
+        chat,
+        system_prompt=compiler.planner_prompt(fleet),
+        context=case.state,
+        words=case.text,
+        fleet=fleet,
+        checks=plans.Checks(fleet=fleet, context=case.state),
+    )
+    assert compiled.repaired and isinstance(compiled.plan, plans.StepPlan)
+    assert "that answer is as of then" in sent[1][-1]["content"]
+
+
 def test_the_planner_prompt_lists_the_fleet_and_never_caps_steps(fleet: Fleet) -> None:
     prompt = compiler.planner_prompt(fleet)
     assert "- tasks (ask, look): Manages projects and tasks." in prompt
@@ -914,6 +955,32 @@ def test_a_lost_ref_gets_the_repair(fleet: Fleet) -> None:
     )
     assert _problems(three, fleet) == []
     assert _problems(named, fleet) == []  # a name the person said is no lost ref
+
+
+def test_an_ask_carrying_another_apps_work_gets_the_split_repair(fleet: Fleet) -> None:
+    # S15's miss (#127): one ask to music with the task in it.
+    for mixed in (
+        "download Caribou's other album, Suddenly, and add a task to sort it this weekend",
+        "grab Odessa by Caribou and make another task to put it on the playlist",
+        "download the new Bonobo album and remind me Sunday to listen to it",
+    ):
+        (objection,) = _problems(steps(ask("music", mixed)), fleet)
+        assert objection.startswith('s1 asks music to "'), objection
+        assert "which is work for tasks: music can't do it. Split it" in objection
+        assert objection.endswith("writing {s1} for what music finds")
+    split = steps(
+        ask("music", "download Caribou's other album, Suddenly"),
+        ask("tasks", "add a task to sort {s1} this weekend"),
+    )
+    assert _problems(split, fleet) == []
+    # Naming another app's things in passing is no second app's work.
+    for fine in (
+        "add a task to download some music",
+        "remind me to sort my music on Sunday",
+        "make a task to listen to the new album",
+    ):
+        assert _problems(steps(ask("tasks", fine)), fleet) == [], fine
+    assert _problems(steps(ask("music", "what's in the task queue for downloads?")), fleet) == []
 
 
 def test_a_chat_answer_sees_the_facts_and_the_structured_about_you_check(run_with: Any) -> None:

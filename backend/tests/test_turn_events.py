@@ -476,7 +476,9 @@ def test_a_gated_plan_streams_its_pause_and_a_yes_resumes_from_the_gated_step(
     _, events = turn(yes, "yes")
     plan = next(event.data for event in events if event.kind == "plan")
     resumed = [event for event in events if event.kind == "resumed"]
-    assert [event.data for event in resumed] == [{"reason": "gate", "step": "s1", "answer": None}]
+    assert [event.data for event in resumed] == [
+        {"reason": "gate", "step": "s1", "answer": None, "untrusted": False, "entity": None}
+    ]
     kinds = [event.kind for event in events if event.kind != "activity"]
     assert kinds.index("resumed") < kinds.index("plan")  # said before the plan runs again
     # The paused plan, from the gated step: what this turn runs.
@@ -499,9 +501,56 @@ def test_an_answer_to_ask_user_resumes_the_same_plan_and_says_what_s1_becomes(
     _, events = turn(answer, "the appointment one")
     resumed = next(event.data for event in events if event.kind == "resumed")
     # The step it waited on, and the answer as `{s1}` will read (no braces).
-    assert resumed == {"reason": "ask_user", "step": "s1", "answer": "the (appointment) one"}
+    assert resumed == {
+        "reason": "ask_user",
+        "step": "s1",
+        "answer": "the (appointment) one",
+        "untrusted": False,
+        "entity": None,
+    }
     plan = next(event.data for event in events if event.kind == "plan")
     assert plan["start"] == 1  # the question was asked last turn
+
+
+def test_the_pick_fills_s1_as_the_entity_state_named_and_resumed_carries_it(
+    turn: Any, world: World
+) -> None:
+    # Two dentist tasks on record in this conversation (#120).
+    added = _plan_turn(_ask("tasks", "add a task to call the dentist about the bill"))
+    turn(ScriptedProvider([added, text_turn("Added.")]), "add a task to call the dentist")
+    read = _plan_turn(_ask("tasks", "what dentist tasks do I have?"))
+    turn(ScriptedProvider([read, text_turn("Two.")]), "what dentist tasks do I have?")
+    created = max(world.live_tasks(), key=lambda task: task.id)
+    assert "dentist" in created.title
+
+    question = {
+        "do": "ask_user",
+        "question": "Which dentist task?",
+        "options": ["dentist appointment", created.title],
+    }
+    first = _plan_turn(question, _ask("tasks", "push {s1} to friday"))
+    turn(ScriptedProvider([first]), "push the dentist thing to friday")
+
+    answer = ScriptedProvider([_plan_turn_resume("the first one"), text_turn("Moved.")])
+    reply, events = turn(answer, "the first one")
+    resumed = next(event.data for event in events if event.kind == "resumed")
+    assert resumed == {
+        "reason": "ask_user",
+        "step": "s1",
+        "answer": "“dentist appointment”",
+        "untrusted": False,
+        "entity": {
+            "app": "tasks",
+            "kind": "task",
+            "ref": "3",
+            "title": "dentist appointment",
+            "untrusted": False,
+        },
+    }
+    (call,) = reply["tool_calls"]
+    assert call["arguments"] == {"message": "push “dentist appointment” to friday"}
+    moved = [w for w in world.writes() if w.kind == "update"]
+    assert [w.ref for w in moved] == ["task:3"]
 
 
 def test_the_yes_to_an_apps_own_question_resumes_too(turn: Any) -> None:
@@ -511,7 +560,9 @@ def test_the_yes_to_an_apps_own_question_resumes_too(turn: Any) -> None:
     yes = ScriptedProvider([_plan_turn({"do": "confirm", "answer": "yes"}), text_turn("Done.")])
     _, events = turn(yes, "yes")
     resumed = [e.data for e in events if e.kind == "resumed"]
-    assert resumed == [{"reason": "app_confirm", "step": None, "answer": None}]
+    assert resumed == [
+        {"reason": "app_confirm", "step": None, "answer": None, "untrusted": False, "entity": None}
+    ]
 
 
 def test_the_turn_ends_on_the_stream_only_after_the_ledger_committed_it(

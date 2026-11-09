@@ -99,11 +99,13 @@ words as the intent. Anything to do with a game (playing, moving, analyzing, \
 resetting or resigning it) is an open; "the game" always means chess. An open \
 is always the last step.
 - ask_user: ask the person one short question when a wrong guess would act on \
-the wrong thing; list the candidates State names as options. When State \
-doesn't name the candidates, ask the app instead: it knows its own names. It \
-comes first; later steps can use the answer as {s1}, and the plan waits for it.
+the wrong thing; list the candidates State names as options. When State names \
+two or more that fit their words, ask_user first, never an ask that picks one. \
+When State doesn't name the candidates, ask the app instead: it knows its own \
+names. It comes first; later steps can use the answer as {s1}, and the plan waits for it.
 - recall: search earlier conversations and results, when the question is about \
-what was said or done before.
+what was said or done before ("when did I last...", "what did we decide..."). \
+Never a look for these: a glance only shows now.
 - cancel: stop a running job or a pending plan listed under State. target: its ref.
 - amend: change a running job (never a new ask for a job already running) or \
 a pending plan listed under State. target: its ref; change: what to change.
@@ -208,7 +210,9 @@ def compile_turn(
             found = [f"not a plan: {str(exc).splitlines()[0][:200]}"]
             plan = None
         if plan is not None:
-            found = plans.problems(plan, checks)
+            found = plans.problems(plan, checks) + plans.recalled_answer(
+                plan, words, checks.context
+            )
         compiled.problems = found
         if plan is not None and not found:
             compiled.plan = plan
@@ -285,7 +289,9 @@ def repair_turn(
     except ValueError as exc:
         previous.problems = [f"not a plan: {str(exc).splitlines()[0][:200]}"]
         return previous
-    problems = plans.problems(plan, checks) or plans.unrunnable(plan)
+    problems = (
+        plans.problems(plan, checks) + plans.recalled_answer(plan, words, checks.context)
+    ) or plans.unrunnable(plan)
     previous.problems = problems
     if not problems:
         previous.plan = plan

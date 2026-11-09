@@ -161,7 +161,11 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   answers (a tie names nothing), with its trust. Nothing found is said, never
   guessed (code appends it). The state block's matches are registry leads
   from other conversations, only when the words point back; outside titles
-  stay quoted labels.
+  stay quoted labels. Everything recalled is labelled "as of then" (#127),
+  and a `knowledge`/`chat` answer to a question an app answered before gets
+  the validator's repair (`plan.recalled_answer`: ask or look again; plan
+  cases `stale-*`). The prompt's worked examples for this were measured and
+  dropped: they pulled unrelated goldens into asks.
 - **Memory you can see** (#81, `app/ai/facts.py`, `app/services/facts.py`).
   "Remember …", "what do you know about me?" and "forget that" are asks to
   `memory`, conductor's own app: one `ask` enum value and one planner-prompt
@@ -180,11 +184,18 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   means the step doesn't run and the plan ends, with the reason on the
   record. Never guess a name or splice in an app's reply text. The validator
   repairs a lost ref: a bare `s1`, a step re-describing what an earlier ask
-  will find, or an ask pointing at State ("their other album"). The plan is
+  will find, or an ask pointing at State ("their other album"); and it
+  splits an ask carrying a second app's work ("… and add a task", #127) into
+  two steps. The plan is
   fixed before any step runs, so a title can't steer control flow. An
   `untrusted` title goes only into a non-destructive ask to an app with
   `confirms`, never into a destructive ask, an app without `confirms`, or an
-  `open` intent. Only trusted values survive a pause. Adjacent reads to
+  `open` intent. Only trusted values survive a pause. An `ask_user`'s options
+  resolve in code to the one entity State named for each (#120,
+  `app/ai/options.py`, kept on the paused body; the schema is unchanged): the
+  person's pick (by name, distinct words or place) fills `{s1}` with that
+  entity's title and trust. An option no entity names stays a title; an
+  answer that picks none goes in as said. Adjacent reads to
   different apps (`plan.reads_only`) run at once in threads with the turn's
   context. Everything else runs in order, one call in flight. The budget and
   thread store are locked, and Stop cancels every call in flight.
@@ -261,7 +272,7 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   SSE for the turn in flight: a snapshot on connect (so a reconnect loses
   nothing), then beats, `plan`, `step_started`, `receipt`, `paused`,
   `resumed` (a turn picking up a paused plan: why, the step, an `ask_user`
-  answer as `{s1}` reads it) and `turn_ended`, plus `job` events (progress,
+  answer as `{s1}` reads it, with its trust and picked entity) and `turn_ended`, plus `job` events (progress,
   then the end with its note's id) that keep the stream open past
   `turn_ended` while a job runs. Step events go through one seam
   (`app/ai/turn_events.py`); a receipt is the step as the ledger journals it (`ledger.live_step`) and
