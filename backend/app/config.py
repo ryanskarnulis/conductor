@@ -1,6 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The workspace root — the parent of the conductor repo — computed from this
@@ -21,6 +23,20 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "development"
+
+    # The household's timezone (#130), an IANA name: every "today", calendar
+    # and recalled day is in it (app/clock.py); storage stays UTC. Env only;
+    # an unknown name fails startup.
+    conductor_timezone: str = "America/Denver"
+
+    @field_validator("conductor_timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"CONDUCTOR_TIMEZONE {value!r} is not an IANA timezone") from exc
+        return value
 
     # SQLite file for conversations + the delegate-thread map, relative to
     # backend/ (where dev commands run). Docker overrides with an absolute

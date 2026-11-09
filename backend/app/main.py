@@ -63,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(
         "startup",
         env=get_settings().app_env,
+        timezone=get_settings().conductor_timezone,
         agents=[fleet_app.name for fleet_app in fleet.agent_apps()],
     )
     try:
