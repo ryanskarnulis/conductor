@@ -44,6 +44,7 @@ class ScriptedProvider:
         enable_thinking: bool = False,
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
+        role: str | None = None,
     ) -> ChatResult:
         self.requests.append(
             {

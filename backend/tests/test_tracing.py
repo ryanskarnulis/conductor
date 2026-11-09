@@ -8,6 +8,7 @@ captured byte for byte, and the pair replays offline.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -21,7 +22,7 @@ from app.ai import compiler
 from app.ai import trace as run_trace
 from app.ai.context_capture import JsonlContextCapture, read_captures
 from app.ai.interpreter import Interpreter
-from app.ai.provider import ProviderRequestError
+from app.ai.provider import ProviderRequestError, Sampling
 from app.ai.providers.llamacpp import LlamaCppProvider
 from app.ai.replay import ReplayError, replay
 from app.ai.runtime import AgentRunFailed
@@ -48,14 +49,15 @@ _PLAN = {
 }
 
 
-def _completion(content: str) -> str:
+def _completion(content: str, *, timings: dict[str, Any] | None = None) -> str:
     message: dict[str, Any] = {"role": "assistant", "content": content}
-    return json.dumps(
-        {
-            "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 900, "completion_tokens": 20, "total_tokens": 920},
-        }
-    )
+    body: dict[str, Any] = {
+        "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 900, "completion_tokens": 20, "total_tokens": 920},
+    }
+    if timings is not None:
+        body["timings"] = timings
+    return json.dumps(body)
 
 
 def _model(turns: list[str]) -> Callable[[httpx.Request], httpx.Response]:
@@ -249,6 +251,115 @@ def test_a_bound_run_id_is_reused(delegation: DelegationContext) -> None:
     with structlog.contextvars.bound_contextvars(run_id="abc123"):
         result = Interpreter(ScriptedProvider([text_turn(_DECLINE)]), _fleet()).run("hello")
     assert result.run_id == "abc123"
+
+
+# --- the prompt cache and per-role sampling (#152, #150) -------------------------------
+
+_CACHED = {"cache_n": 800, "prompt_n": 100, "prompt_ms": 42.5}
+
+
+def _provider_over(turns: list[str], seen: list[dict[str, Any]], **kw: Any) -> LlamaCppProvider:
+    model = _model(turns)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if not request.url.path.endswith("/apply-template"):
+            seen.append(json.loads(request.content))
+        return model(request)
+
+    return LlamaCppProvider(
+        _LLM, "gemma-4-12b", client=httpx.Client(transport=httpx.MockTransport(handle)), **kw
+    )
+
+
+def test_a_trace_records_each_calls_cache_hit_and_prefill_time(
+    tmp_path: Path, delegation: DelegationContext
+) -> None:
+    path = tmp_path / "trace.jsonl"
+    provider = _provider_over(
+        [
+            _completion(json.dumps(_PLAN), timings=_CACHED),
+            _completion("Pay rent is on your list."),  # a server that sent no timings
+        ],
+        [],
+    )
+    Interpreter(
+        provider, _tasks_fleet(_TasksApp()), tracer=run_trace.JsonlTracer(path), narrate=True
+    ).run("add a task to pay rent", conversation_id="7")
+
+    [record] = _records(path)
+    planner, narrator = record["calls"]
+    assert (planner["cached_tokens"], planner["prefill_ms"]) == (800, 42.5)
+    # Unknown stays null: never a zero that reads as a miss.
+    assert (narrator["cached_tokens"], narrator["prefill_ms"]) == (None, None)
+    assert narrator["prompt_tokens"] == 900
+    assert record["cached_tokens"] == 800
+
+
+def test_each_role_samples_as_its_own_profile_by_default(
+    tmp_path: Path, delegation: DelegationContext
+) -> None:
+    seen: list[dict[str, Any]] = []
+    provider = _provider_over(
+        [_completion(json.dumps(_PLAN)), _completion("Pay rent is on your list.")], seen
+    )
+    Interpreter(provider, _tasks_fleet(_TasksApp()), narrate=True).run(
+        "add a task to pay rent", conversation_id="7"
+    )
+    assert len(seen) == 2
+    assert {(r["temperature"], r["top_p"], r["top_k"]) for r in seen} == {(1.0, 0.95, 64)}
+
+
+def test_the_compiler_samples_as_the_planner_and_the_narrator_as_itself(
+    tmp_path: Path, delegation: DelegationContext
+) -> None:
+    seen: list[dict[str, Any]] = []
+    provider = _provider_over(
+        [_completion(json.dumps(_PLAN)), _completion("Pay rent is on your list.")],
+        seen,
+        role_sampling={"planner": Sampling(temperature=0.0, top_p=0.95, top_k=64)},
+    )
+    Interpreter(provider, _tasks_fleet(_TasksApp()), narrate=True).run(
+        "add a task to pay rent", conversation_id="7"
+    )
+    assert [r["temperature"] for r in seen] == [0.0, 1.0]
+
+
+def _read_trace() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "read_trace", Path(__file__).parents[1] / "scripts" / "read_trace.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_read_trace_shows_the_cache_and_still_reads_an_older_record(
+    tmp_path: Path, delegation: DelegationContext, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "trace.jsonl"
+    provider = _provider_over([_completion(json.dumps(_PLAN), timings=_CACHED)], [])
+    Interpreter(provider, _tasks_fleet(_TasksApp()), tracer=run_trace.JsonlTracer(path)).run(
+        "add a task to pay rent", conversation_id="7"
+    )
+    [record] = _records(path)
+    # The same turn as an older tracer wrote it: no cache fields at all.
+    for key in ("cached_tokens",):
+        record.pop(key)
+    for call in record["calls"]:
+        call.pop("cached_tokens"), call.pop("prefill_ms")
+    old = tmp_path / "old.jsonl"
+    old.write_text(json.dumps(record) + "\n")
+
+    reader = _read_trace()
+    assert reader.main([str(path)]) == 0
+    shown = capsys.readouterr().out
+    assert "prompt=900 cached=800 prefill=42 ms" in shown
+    assert "(800 cached, 89%)" in shown
+
+    assert reader.main([str(old)]) == 0
+    older = capsys.readouterr().out
+    assert "prompt=900" in older and "cached" not in older and "prefill" not in older
 
 
 # --- context capture ------------------------------------------------------------------

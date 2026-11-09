@@ -16,7 +16,9 @@ and `AgentRunResult.run_id` all carry it. The record also holds:
 - the conversation, the utterance, the opening it was handed (`context`:
   state block and recall) and the compiled `plan`;
 - `calls[]`: role (`compiler`/`narrator`/`speaker`; `planner` on old records), status (`ok`/`truncated`/`bad_args`/`failed`), ms,
-  tokens, finish reason;
+  tokens, finish reason, and (#152) `cached_tokens` (prompt tokens the
+  server's cache served) and `prefill_ms` (time reading the rest), each `null`
+  when the server didn't say; a turn's `cached_tokens` is their sum;
 - `surface` and `narration` (#65): how the reply was made (`path`: narrated,
   respoken, appended, handoff, confirm, fallback, `speaker:*` and `code:*`
   for replies code built), what code

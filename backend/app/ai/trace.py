@@ -7,7 +7,8 @@ record holding:
 
 - the turn id (``run_id``), the conversation, the utterance, the opening
   (state block and recall) and the compiled plan;
-- one entry per model call (status, wall clock, tokens, finish reason);
+- one entry per model call (status, wall clock, tokens, finish reason, and
+  the prompt cache's hit and prefill time, #152);
 - every tool call with its arguments and answer;
 - one **hop** per delegate call: its ``hop_id`` (sent to the app as
   ``X-Agent-Hop``, beside the turn as ``X-Agent-Turn``), the app, the
@@ -85,6 +86,10 @@ class ModelCall:
     ms: int = 0
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    # The prompt cache (#152): prompt tokens llama-server reused rather than
+    # read, and the ms it spent reading the rest. ``None``: it didn't say.
+    cached_tokens: int | None = None
+    prefill_ms: float | None = None
     finish_reason: str | None = None
     tool_calls: int = 0
     failure: str = ""
@@ -93,6 +98,8 @@ class ModelCall:
         if usage is not None:
             self.prompt_tokens = usage.prompt_tokens
             self.completion_tokens = usage.completion_tokens
+            self.cached_tokens = usage.cached_tokens
+            self.prefill_ms = usage.prefill_ms
 
     def as_trace(self, seq: int) -> dict[str, Any]:
         return {"seq": seq, **asdict(self)}
@@ -170,6 +177,7 @@ class RunTrace:
             "hops": [asdict(hop) for hop in self.hops],
             "model_calls": len(calls),
             "prompt_tokens": sum(call.prompt_tokens or 0 for call in calls),
+            "cached_tokens": sum(call.cached_tokens or 0 for call in calls),
             "completion_tokens": sum(call.completion_tokens or 0 for call in calls),
             "model_ms": sum(call.ms for call in calls),
             "total_ms": total_ms,

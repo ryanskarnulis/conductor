@@ -34,7 +34,13 @@ from pydantic import BaseModel, ValidationError
 from app.ai import confirmation, incognito, narrator, run_record
 from app.ai import trace as run_trace
 from app.ai.plan import TurnPlan
-from app.ai.provider import ChatProvider, ChatResult, ToolCall, ToolCallArgumentsError
+from app.ai.provider import (
+    ChatProvider,
+    ChatResult,
+    SamplingRole,
+    ToolCall,
+    ToolCallArgumentsError,
+)
 from app.fleet.context import NoDelegationContextError, current_delegation_context
 from app.tools import registry, runtime
 from app.tools.registry import ToolError, UnknownToolError
@@ -75,6 +81,15 @@ DEFAULT_MAX_TOKENS = 2048
 
 # ``finish_reason`` of a call the ``max_tokens`` cap cut off.
 _FINISH_LENGTH = "length"
+
+# The sampling profile each traced role's calls use (#150): the compiler is
+# the planner; the retired ``planner`` call role reads as one too.
+_SAMPLED_AS: dict[run_trace.CallRole, SamplingRole] = {
+    "planner": "planner",
+    "compiler": "planner",
+    "narrator": "narrator",
+    "speaker": "speaker",
+}
 
 INTERNAL_ERROR = "internal error: the tool call failed unexpectedly"
 
@@ -185,15 +200,19 @@ class Runtime:
         """One metered model call: its status, time and tokens go on the trace."""
         call = run_trace.ModelCall(role=role)
         started = time.monotonic()
+        sampled_as = _SAMPLED_AS[role]
         try:
             if response_format is not None:
                 result = self.provider.chat(
                     messages,
                     max_tokens=max_tokens or self.max_tokens,
                     response_format=response_format,
+                    role=sampled_as,
                 )
             else:
-                result = self.provider.chat(messages, max_tokens=max_tokens or self.max_tokens)
+                result = self.provider.chat(
+                    messages, max_tokens=max_tokens or self.max_tokens, role=sampled_as
+                )
         except ToolCallArgumentsError as exc:
             call.status, call.failure = "bad_args", type(exc).__name__
             raise

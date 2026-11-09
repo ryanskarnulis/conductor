@@ -91,6 +91,17 @@ class Settings(BaseSettings):
     # (model-profile's turn cap). A plan's length has its own ceiling
     # (app/ai/plan.py, 12 steps); turns have no iteration or call caps (#75).
     conductor_max_tokens: int = 2048
+    # The planner's sampling temperature (#150). Unset: the model profile's 1.0,
+    # as every role has. Only the A/B (docs/agent-evals.md) sets it.
+    conductor_planner_temperature: float | None = None
+
+    @field_validator("conductor_planner_temperature")
+    @classmethod
+    def _sane_temperature(cls, value: float | None) -> float | None:
+        if value is not None and not 0.0 <= value <= 2.0:
+            raise ValueError("CONDUCTOR_PLANNER_TEMPERATURE must be between 0 and 2")
+        return value
+
     # A completed turn's reply is the narrator's (#65, app/ai/narrator.py).
     # Off replies with the code-built record: an A/B switch for the evals.
     conductor_narrator: bool = True

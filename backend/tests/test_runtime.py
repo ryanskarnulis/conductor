@@ -74,6 +74,7 @@ class _Capped:
         enable_thinking: bool = False,
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
+        role: str | None = None,
     ) -> ChatResult:
         assert not tools, "conductor offers a model no tools (#75)"
         self.max_tokens.append(max_tokens)
