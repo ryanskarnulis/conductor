@@ -280,7 +280,14 @@ CASES: tuple[Case, ...] = (
     Case("music-organize", "organize my library into folders", (one(M("ask", "music")),), "golden"),
     Case("refuse-lights", "turn off the living room lights", (none("decline"),), "golden"),
     Case("refuse-weather", "what's the weather tomorrow?", (none("decline"),), "golden"),
-    Case("refuse-playback", "play some jazz music", (none("decline"),), "golden"),
+    # No fleet app plays music (#36): routing to music is right (its own agent
+    # says so one hop later); a plain decline is no longer required, or wrong.
+    Case(
+        "refuse-playback",
+        "play some jazz music",
+        (one(M("ask", "music")), none("decline")),
+        "golden",
+    ),
     Case(
         "confirm-delete-task",
         "delete the groceries task",
