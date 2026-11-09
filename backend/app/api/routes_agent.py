@@ -535,6 +535,7 @@ def post_message(
                         conversation_id=conversation.id,
                         turn_id=turn.id if turn is not None else None,
                     ),
+                    saved_facts=lambda: facts_service.texts(db),
                 )
         except AgentRunFailed as exc:
             logger.error(

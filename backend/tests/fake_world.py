@@ -42,6 +42,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from app.ai.facts import CONTEXT_LEAD
 from app.fleet.delegate import (
     ConfirmRequired,
     DelegateConfirmRefused,
@@ -150,6 +151,26 @@ _DATE_PHRASE = re.compile(
     + "|".join(m[:3] for m in _MONTHS)
     + r")[a-z]*\.? \d{1,2})\b"
 )
+
+
+# --- conductor's context after a request (#134) ---------------------------------
+
+_CONTEXT_MARK = f"\n\n({CONTEXT_LEAD} "
+_PLURAL_DAY = re.compile(r"\b(" + "|".join(_WEEKDAYS) + r")s\b")
+
+
+def split_context(message: str) -> tuple[str, str]:
+    """The request and the saved facts conductor sent after it, which an
+    app's agent reads as context, never as part of what to do."""
+    request, mark, context = message.partition(_CONTEXT_MARK)
+    return (request, context.rstrip(")")) if mark else (message, "")
+
+
+def _context_day(context: str, today: date) -> date | None:
+    """A weekday the context names as a habit ("on Sundays"): the next one."""
+    found = _PLURAL_DAY.search(context.lower())
+    return upcoming(today, _WEEKDAYS.index(found.group(1))) if found else None
+
 
 # --- fuzzy matching -------------------------------------------------------------
 
@@ -288,6 +309,8 @@ class World:
         self.receipts: list[Receipt] = []
         self.reads: list[tuple[str, str, int]] = []  # (app, what, turn)
         self.threads: dict[str, list[int]] = {}  # app → conversation id per send
+        # Every message an app received, as sent: (app, message), in order.
+        self.sent: list[tuple[str, str]] = []
         self.cancel_requested: dict[str, bool] = {}
         self.on_write: Callable[[Receipt], None] | None = None
         self.tasks: dict[int, Task] = {}
@@ -647,6 +670,7 @@ class TasksApp:
             if armed is None or armed[0] != confirm_token:
                 raise DelegateConfirmRefused("409: confirm token unknown", kind="unknown")
             return armed[1]()
+        message, context = split_context(message)
         text = message.lower()
         lines = [line.strip(" -*\t") for line in message.splitlines() if line.strip(" -*\t")]
         if len(lines) > 1 and all(re.search(_LIST_MOVE_WORDS, line.lower()) for line in lines):
@@ -656,7 +680,7 @@ class TasksApp:
             r"\W*(?:please\s+|can you\s+|could you\s+)?(?:add|create|make|remind me)\b", text
         ) or re.search(r"^\s*(?:[-*]|\d+[.)])\s", message, flags=re.M)
         if leads_with_create:
-            return self._create(thread, message)
+            return self._create(thread, message, context)
         if re.search(r"\b(undo|revert|take (?:that|it) back)\b", text):
             return self._undo(thread)
         if re.search(r"\b(delete|trash|remove|wipe|bin|get rid of)\b", text):
@@ -668,7 +692,7 @@ class TasksApp:
         if re.search(r"\b(add|create|make|new task|remind me)\b", text) and not (
             re.search(r"\?\s*$", text) or text.startswith(("what", "which", "how", "is ", "are "))
         ):
-            return self._create(thread, message)
+            return self._create(thread, message, context)
         return self._read(message)
 
     # reads
@@ -717,7 +741,7 @@ class TasksApp:
 
     # writes
 
-    def _create(self, thread: int, message: str) -> AppReply:
+    def _create(self, thread: int, message: str, context: str = "") -> AppReply:
         items = [
             line.strip(" -*\t")
             for line in message.splitlines()
@@ -730,7 +754,9 @@ class TasksApp:
             title = self._title(item)
             if not title:
                 continue
-            due = parse_date(item, self.world.today)
+            # A request with no date of its own takes the day conductor's
+            # context names ("I sort music on Sundays"), as an agent would.
+            due = parse_date(item, self.world.today) or _context_day(context, self.world.today)
             task = Task(max(self.world.tasks) + 1, title, project or "Inbox", due)
             self.world.tasks[task.id] = task
             self.world.record(
@@ -904,6 +930,7 @@ class MusicApp:
         self.world = world
 
     def handle(self, thread: int, message: str) -> AppReply:
+        message, _ = split_context(message)
         text = message.lower()
         if re.search(r"\b(how are|status|progress|how's|how is)\b.*\bdownload", text):
             return self._status()
@@ -1105,6 +1132,7 @@ class FakeDelegateClient:
         self, conversation_id: int, message: str, *, confirm_token: str | None = None
     ) -> MessageExchange:
         self._world.threads.setdefault(self._app_name, []).append(conversation_id)
+        self._world.sent.append((self._app_name, message))
         before = len(self._world.receipts)
         if self._app is None:
             reply = AppReply("Done — nothing else to report.")

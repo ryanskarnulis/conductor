@@ -1,4 +1,4 @@
-"""Session scenarios: S1–S16 (#56, ``docs/revamp-research-2026-11.md`` §1.1), M1–M2 (#81).
+"""Session scenarios: S1–S16 (#56, ``docs/revamp-research-2026-11.md`` §1.1), M1–M3 (#81, #134).
 
 Each is the person's side of a conversation plus checks on what came of it.
 Checks read the end state and the replies, never the path: which tools ran in
@@ -746,6 +746,43 @@ FORGET_GONE = Scenario(
 )
 
 
+# A saved fact in another app's ask (#134): code sends it along, the app reads it.
+_SORTING_DAY = "add a task for my music sorting day to clean the record player"
+
+
+def _fact_reaches_the_app(session: Session) -> None:
+    saved = _memory(session, "create", "remember")
+    used = session.turn("used")
+    sent = [message for app, message in session.world.sent if app == "tasks"]
+    assert sent, "tasks was never asked"
+    assert any(saved.title in message for message in sent), (
+        f"tasks never got the fact {saved.title!r}: {sent[-1]!r}"
+    )
+    made = [r for r in session.writes(used) if r.app == "tasks" and r.kind == "create"]
+    assert any("record player" in r.title.lower() for r in made), (
+        f"no record player task (made: {[r.title for r in made] or 'none'})"
+    )
+    only_writes(session, {("create", "record player"), ("create", "sunday")})
+
+
+FACT_IN_ASK = Scenario(
+    "M3",
+    "remember a fact; another day an ask to tasks that needs it carries it to the app",
+    (
+        Say("remember I sort music on Sundays", label="remember"),
+        NewConversation(),
+        Say(_SORTING_DAY, label="used"),
+    ),
+    (_fact_reaches_the_app,),
+    script=lambda w: [
+        _ask("memory", "remember I sort music on Sundays"),
+        _say("Got it: “I sort music on Sundays”."),
+        _ask("tasks", _SORTING_DAY),
+        _say("Added “my music sorting day to clean the record player” for Sunday."),
+    ],
+)
+
+
 SCENARIOS: tuple[Scenario, ...] = (
     S1,
     S2,
@@ -766,4 +803,5 @@ SCENARIOS: tuple[Scenario, ...] = (
     S16,
     REMEMBER_USED,
     FORGET_GONE,
+    FACT_IN_ASK,
 )

@@ -243,7 +243,12 @@ def _searchable(call: EarlierCall) -> str:
         for ref in entry.get("touched") or []
     )
     return " ".join(
-        [call.asked, json.dumps(call.record.arguments), call.record.result or "", titles]
+        [
+            call.asked,
+            json.dumps(run_record.shown(call.record.arguments)),
+            call.record.result or "",
+            titles,
+        ]
     )
 
 
@@ -305,4 +310,6 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _compact(arguments: dict[str, Any]) -> str:
-    return json.dumps(arguments, separators=(",", ":"), sort_keys=True, default=str)
+    return json.dumps(
+        run_record.shown(arguments), separators=(",", ":"), sort_keys=True, default=str
+    )
