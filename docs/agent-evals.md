@@ -157,7 +157,7 @@ regression.
 +  description: "Opens the chess board in the browser and starts a session with the chess agent. Use this for anything to do with playing, watching, resetting, resigning or otherwise changing a chess game ('the game' always means this one) — you do not play chess yourself, you hand the user to the board."
 ```
 
-`chess-resign` is `xfail` in `KNOWN_REDS` until that lands.
+Landed as chess#540 (see the last section).
 
 Same run, the draft manifest read from a scratch fleet dir ("after"; before is
 the real manifests, both with the wiped database):
@@ -211,7 +211,7 @@ in music's description) fixed it 3/3 but broke `music-save` in 2 of 3 full
 runs — the negation suppresses music routing generally. Options, none taken
 (tracked in #36): narrow the negative until both hold; retire the golden
 (music's own agent refuses truthfully one hop later); or leave red until music
-Phase 6 makes the route correct.
+Phase 6 makes the route correct. Retired in the end (last section).
 
 ### Baseline — 2026-08-22, gemma-4-12b, 18/18 (3 consecutive runs)
 
@@ -728,7 +728,7 @@ gemma-4-12b, shared GPU, n=5.
 - Every group passed its gate; every plan was valid, and no sample needed the
   third call (`right-within-two` equals the score). The moves are sampling:
   the planner's input is byte-identical.
-- `chess-resign` 1/5 (4 asks to music; chess#540 pending), `chess-analysis`
+- `chess-resign` 1/5 (4 asks to music; fixed by chess#540), `chess-analysis`
   0/5 (the glance), `refuse-playback` 2/5, `music-save` 5/5.
 
 Session evals, gate tier at 5 samples, frontier at 5:
@@ -794,7 +794,7 @@ cases:
 - Golden's drop is `chess-resign`, which read 11/20 on main and 2/20 here.
   In a paired re-run in the same window it read 5/20 on main's prompt and
   4/20 on this one. Main read it anywhere from 5/20 to 15/20 today, so this
-  is sampling; chess#540 is the fix.
+  is sampling; chess#540 fixed it.
 - `knowledge-egg` read 16/20 in both runs here (4 `answer:self`), against
   20/20 twice for main's prompt. That's small but looks real.
 - `s6-that-song` read 17/20 (main 20/20). In 3 asks music was told "that
@@ -866,6 +866,72 @@ Plan-level evals, the shipped line, against main the same day:
   through, as the prompt tells it to. That case was dropped; it's a planner
   follow-up.
 
+### chess#540 lands; `refuse-playback` retired as a decline (#36, 2026-11-08)
+
+**chess#540.** Chess's `open.description` now says "resetting, resigning or
+otherwise changing a chess game ('the game' always means this one)", the draft
+from #122 as written. `chess-resign` at n=20, three paired runs, real
+manifests against a scratch fleet dir with the changed chess:
+
+| run | before | after |
+|---|---|---|
+| 1 | 1/20 | 20/20 |
+| 2 | 2/20 | 15/20 |
+| 3 | 3/20 | 19/20 |
+
+6/60 before, 54/60 after. The misses on both sides are asks to music. So the
+change takes the golden from about 10% to about 90% but not to 100%; #122's
+20/20 was the top of that range.
+
+**#36.** No fleet app plays music, and music's own agent answers truthfully
+one hop later, so routing "play some jazz music" to `ask music` is right.
+`refuse-playback` no longer requires a decline: it accepts `ask music` or a
+plain decline. #56's spike D1 saw the 12B ask music 5/5, but the shipped
+prompt doesn't: at n=20 it asked music 1/20 in both arms, declined most of
+the time and answered `knowledge` (which neither shape accepts) the rest.
+Under the new shapes it reads 13, 18, 17/20 before and 17, 20, 18/20 after.
+Requiring `ask music` alone would have made the case a standing 1/20 red.
+
+Plan evals, n=5, gemma-4-12b, shared GPU, before against after (the first
+run; `refuse-playback` counted under the new shapes in both):
+
+| group | floor | before | after |
+|---|---|---|---|
+| golden | 0.8 | 93/105 | 93/105 |
+| cross | 0.8 | 35/35 | 35/35 |
+| ref | 0.85 | 19/20 | 20/20 |
+| control | 0.8 | 20/25 | 20/25 |
+| memory | 0.8 | 28/30 | 30/30 |
+| knowledge | 0.65 | 15/15 | 15/15 |
+| hard | 0.5 | 5/5 | 5/5 |
+| self | 0.55 | 7/15 | 11/15 |
+| holdout | 0.85 | 41/50 | 42/50 |
+| long | 0.7 | 39/40 | 40/40 |
+| stale | 0.8 | 20/20 | 20/20 |
+
+- Every group passed its gate. `holdout` reads under its nominal floor on both
+  sides (82%, 84%) but not with evidence (Wilson upper bounds 0.89, 0.91).
+  `self` moved 7/15 to 11/15, which is sampling.
+- Golden at n=20, three pairs: 369, 373, 373/420 before and 387, 378, 382/420
+  after. The gain is `chess-resign` and `refuse-playback`.
+- **Watch `local-capabilities`.** It answers `knowledge` instead of listing the
+  apps, and read 15, 12, 10/20 before against 10, 7, 11/20 after (37/60 vs
+  28/60, not significant: the spread inside one arm is as wide as the gap).
+  Nothing in the new clause concerns it, and #81 already moved it from 4/5 to
+  0/5 on main. It was not gated or fixed here.
+
+Session evals, gate tier at 5, before and after (S1, S2, S2r, S4, S5, S6, S7,
+S8, S9 and S16 were 5/5 in both):
+
+| scenario | before | after |
+|---|---|---|
+| M1 | 8/10 (a first block of 3/5) | 5/5 |
+| M2 | 5/5 | 4/5 |
+
+- Every scenario ABOVE_FLOOR and STABLE; infra 0/12 both. Claims backed 53/55
+  before (two queued) and 55/55 after. M1 and M2 touch no chess manifest, so
+  those are sampling.
+
 ### Memory line regressions and saved facts in asks (#134, 2026-11-09)
 
 - **Saved facts reach other apps in code.** When an ask's request shares two
@@ -925,7 +991,9 @@ and none of the three nudges. It ran in the same window.
 - `decline-news` read 18/20 (main 20/20). Its two misses were `knowledge`,
   and no nudge touches that case.
 - `chess-resign` read 19/20 and `refuse-playback` 19/20 (main 17/20 and
-  16/20).
+  16/20). These runs came before #136 widened `refuse-playback` to accept
+  ask music. Rescored on #136's criterion, both counts stay the same,
+  because every miss was `knowledge`.
 
 **M2 and "forget that".** The first session run had M2 at 2/5, a gate
 red. The memory line was unchanged, and these plans touch no nudge or
