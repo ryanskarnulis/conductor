@@ -105,7 +105,8 @@ def handle(
         if intent.kind == "remember":
             return _remember(db, request, words, turn_id)
         if intent.kind == "forget":
-            return _forget(db, intent.text, conversation_id, turn_id)
+            target = facts.forget_target(intent.text, words)
+            return _forget(db, target, conversation_id, turn_id)
         return _list(db, intent.text)
 
 

@@ -95,6 +95,19 @@ def test_a_fact_is_kept_in_the_persons_own_words() -> None:
     assert facts.same("I sort music.", "i sort  music")
 
 
+def test_what_to_forget_comes_from_the_persons_words() -> None:
+    # #134: told "forget that", the planner sometimes wrote its prompt's example.
+    assert facts.forget_target(SUNDAYS, "forget that") == ""
+    assert facts.forget_target(SUNDAYS, "forget that I sort music on Sundays") == SUNDAYS
+    assert facts.forget_target("sort music", "please forget the Sundays music sorting") == (
+        "sort music"
+    )
+    assert facts.forget_target("my sister is Ana", "forget my sister") == "my sister"
+    # No words of theirs (a resumed plan), or words that aren't a forget: the plan's.
+    assert facts.forget_target(SUNDAYS, "") == SUNDAYS
+    assert facts.forget_target(SUNDAYS, "yes") == SUNDAYS
+
+
 def test_the_receipts_are_v1_1_entries_with_no_undo_handle() -> None:
     saved = facts.Saved(4, SUNDAYS, datetime(2026, 11, 3), "", 9)
     result, (entry,) = facts.remembered(saved, already=False)
@@ -300,6 +313,16 @@ def test_forget_names_a_fact_by_its_words_and_never_guesses(
         "forget that I water the plants",
         plan_turn(steps(ask("memory", "forget that I water the plants"))),
         text_turn("Forgot “I water the plants on Sundays”."),
+    )
+    db_session.expire_all()
+    assert [row.text for row in facts_service.live(db_session)] == [SUNDAYS]
+    # "forget that" is the person's: a planner that names some other fact
+    # (its prompt's example) forgets the one said here, never that one.
+    _remember(talk, "remember the spare key is under the blue pot")
+    talk.say(
+        "forget that",
+        plan_turn(steps(ask("memory", f"forget that {SUNDAYS}"))),
+        text_turn("Forgot “the spare key is under the blue pot”."),
     )
     db_session.expire_all()
     assert [row.text for row in facts_service.live(db_session)] == [SUNDAYS]

@@ -151,6 +151,20 @@ def own_words(request: str, words: str) -> str | None:
     return None
 
 
+def forget_target(asked: str, words: str) -> str:
+    """What to forget, from the person's own words when the planner's target
+    isn't in them (#134: told "forget that", the 12B sometimes wrote its
+    prompt's example, "forget that I sort music on Sundays"). ``asked`` is
+    the planner's target; with no words of theirs (a resumed plan was told
+    "yes"), or words that aren't a forget, it stands."""
+    said = parse(words)
+    if not words.strip() or said.kind != "forget":
+        return asked
+    if asked and {_root(w) for w in words_of(asked)} <= {_root(w) for w in words_of(words)}:
+        return asked
+    return said.text
+
+
 def literal(text: str, words: str) -> str | None:
     """``text`` as it appears in ``words`` (case, punctuation and spacing
     aside), cut from ``words`` so the person's own spelling is kept."""
