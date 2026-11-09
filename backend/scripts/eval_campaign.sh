@@ -10,7 +10,9 @@
 #
 #   backend/scripts/eval_campaign.sh --a . --b . --env-b LLAMACPP_MODEL=other --k ...
 #
-# --suite routing (default) runs tests/test_agent_evals.py; --suite session runs
+# --suite plan (default) runs tests/test_plan_evals.py (unseeded: it samples
+# CONDUCTOR_PLAN_SAMPLES=<runs> per case; the routing goldens retired at #75);
+# --suite session runs
 # the session evals' live tiers (tests/test_session_evals.py -k live, frontier
 # included). Each block runs the suite once per arm from that arm's own
 # backend/ (its own app and its own harness are what is measured) with
@@ -40,7 +42,7 @@ BACKEND="$(cd "$HERE/.." && pwd)"
 PYTHON="${PYTHON:-$BACKEND/.venv/bin/python}"
 [ -x "$PYTHON" ] || PYTHON="$(command -v python)"
 
-A=""; B=""; K=""; BLOCKS=4; OUT=""; RUNS=5; SEED=53; SUITE=routing
+A=""; B=""; K=""; BLOCKS=4; OUT=""; RUNS=5; SEED=53; SUITE=plan
 ENV_A=(); ENV_B=()
 BASE_URL="${LLAMACPP_BASE_URL:-http://127.0.0.1:8200/v1}"
 FLEET_DIR="${CONDUCTOR_EVAL_FLEET_DIR:-$(cd "$BACKEND/../.." && pwd)}"
@@ -57,17 +59,17 @@ while [ $# -gt 0 ]; do
     --suite) SUITE="$2"; shift 2 ;;
     --seed) SEED="$2"; shift 2 ;;
     --no-seed) SEED=""; shift ;;
-    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 [ -n "$A" ] && [ -n "$B" ] || { echo "need --a and --b" >&2; exit 2; }
 case "$SUITE" in
-  routing) TEST=tests/test_agent_evals.py; HARNESS_FILES=(tests/test_agent_evals.py tests/eval_seed.py) ;;
+  plan) TEST=tests/test_plan_evals.py; HARNESS_FILES=(tests/test_plan_evals.py tests/plan_cases.py) ;;
   session) TEST=tests/test_session_evals.py
     HARNESS_FILES=(tests/test_session_evals.py tests/session_harness.py tests/session_scenarios.py
                    tests/fake_world.py tests/receipt_claims.py tests/eval_seed.py) ;;
-  *) echo "--suite is routing or session" >&2; exit 2 ;;
+  *) echo "--suite is plan or session" >&2; exit 2 ;;
 esac
 A="$(cd "$A" && pwd)"; B="$(cd "$B" && pwd)"
 for tree in "$A" "$B"; do
@@ -113,6 +115,7 @@ run_block() {  # $1 = block number, $2 = arm name, $3 = tree
   (cd "$3/backend" && env CONDUCTOR_AGENT_EVALS=1 CONDUCTOR_FRONTIER_EVALS=1 \
       CONDUCTOR_EVAL_RUNS="$RUNS" CONDUCTOR_EVAL_MAX_RUNS="$RUNS" CONDUCTOR_FRONTIER_RUNS="$RUNS" \
       CONDUCTOR_EVAL_REPORT="$report" CONDUCTOR_AGENT_EVALS_SEED="$seed" \
+      CONDUCTOR_PLAN_EVALS=1 CONDUCTOR_PLAN_SAMPLES="$RUNS" \
       CONDUCTOR_EVAL_FLEET_DIR="$FLEET_DIR" "${extra[@]}" \
       "$PYTHON" -m pytest "$TEST" "${select[@]}" -q -s -p no:logging >"$OUT/block-$1-$2.out" 2>&1) || true
   log "block $1 arm $2 end $(date -u +%H:%M:%SZ) ($(wc -l <"$report" 2>/dev/null || echo 0) records)"

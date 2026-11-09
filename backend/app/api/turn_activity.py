@@ -1,7 +1,7 @@
 """In-memory registry of in-flight agent turns: the UI's live channel.
 
-Conductor's turns are slow by construction — one master iteration can wrap a
-subagent's full loop (warm delegate turns run ~1–2 s; thinking-on analysis
+Conductor's turns are slow by construction — one step can wrap an app
+agent's full loop (warm delegate turns run ~1–2 s; thinking-on analysis
 asks have measured ~12–22 s). While ``POST …/messages`` blocks, the page
 follows the turn here, two ways:
 
@@ -9,8 +9,8 @@ follows the turn here, two ways:
   event of the conversation's turn, pushed as it happens (:func:`follow`);
 - ``GET …/activity``, the poll fallback: the current beat only (:func:`get`).
 
-The loop reports each provider call and tool dispatch through its
-``on_activity`` seam (``app/ai/loop.py``) and each step's start, receipt and
+The turn reports each model call and step through its ``on_activity`` seam
+(``app/ai/runtime.py``) and each step's start, receipt and
 pause through :mod:`app.ai.turn_events`; the route publishes them here, keyed
 by conversation id, and closes the turn (``turn_ended``) only after the ledger
 has committed it. Nothing is published ahead of the record it describes.
@@ -67,8 +67,8 @@ QUEUE_LIMIT = 64
 MAX_SUBSCRIBERS = 8
 # Running jobs kept per conversation (the watcher's backstop, never the design).
 MAX_JOBS = 16
-# Steps kept in one turn's state (the loop caps a run at 12 calls and a plan
-# at 12 steps; this is the backstop, never the design).
+# Steps kept in one turn's state (a plan's ceiling is 12 steps; this is the
+# backstop, never the design).
 MAX_STEPS = 64
 # Seconds between heartbeats on a quiet stream (nginx and the browser keep it).
 HEARTBEAT_SECONDS = 15.0
@@ -87,6 +87,7 @@ class TurnActivity:
 
     kind: ActivityKind
     tool: str | None
+    # Always 1 since #75 (no loop iterations); kept on the wire for the page.
     iteration: int
     # time.monotonic() when the whole turn began — elapsed time, not the beat's.
     started_at: float
@@ -171,7 +172,7 @@ def update(
     *,
     kind: ActivityKind,
     tool: str | None,
-    iteration: int,
+    iteration: int = 1,
     ack: str | None = None,
 ) -> None:
     """Advance the in-flight turn's beat; a turn ``end()`` already cleared stays gone."""

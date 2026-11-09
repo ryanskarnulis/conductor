@@ -1,11 +1,10 @@
 """The narrator (#65): conductor's reply, written from code-built receipts.
 
-The loop decides what to call; when the run completes, a narrator call with no
-tools writes the reply from the person's words and a typed receipt of what ran
-(each call's v1.1 ``app_record``: outcome, what it touched by title, counts,
-undo, jobs; refusals). The planner's own text turn only ends the loop. The
-persona lives here and only here, so the planner's prompt and tool schemas
-stay byte-identical and routing can't move.
+The planner decides what runs; when the plan completes, a narrator call with
+no tools writes the reply from the person's words and a typed receipt of what
+ran (each call's v1.1 ``app_record``: outcome, what it touched by title,
+counts, undo, jobs; refusals). The persona lives here and only here, so the
+planner's prompt stays byte-identical and routing can't move.
 
 Spike R1 (#56) measured why: today's relay kept a saved song's title 0/40,
 the narrator 79/80 on a real-looking title, but it still dropped
@@ -27,7 +26,7 @@ placeholder-looking ones ~40% of the time. Descriptive rules don't bind the
 - a compiled plan's steps that never ran (an earlier step failed, or the data
   flow refused one, #72) are in the receipt with why, in plain words, and the
   reply says something was left undone; if not, code appends it (#113). Calls
-  the loop itself never sent (schema errors, the cap, Stop) stay out;
+  code itself never sent (schema errors, the retired loop's cap, Stop) stay out;
 - a ``recall`` (#80) is conductor's own read of its ledger: the receipt
   lists the turns it found by day, with the person's words quoted and what
   the apps touched then. The reply says when (the first one's day, or a
@@ -37,14 +36,13 @@ placeholder-looking ones ~40% of the time. Descriptive rules don't bind the
 
 Two kinds of turn are passthroughs and skip the narrator:
 
-- an ``open_*`` handoff keeps the planner's one short line;
+- an ``open_*`` handoff gets code's one short line;
 - a live ``confirm_required`` (#68) is the app's question, word for word,
   built by code (after a code line for anything else the turn did).
 
-A turn where no call ran keeps the planner's words: there is nothing to
-narrate. A narrator provider failure falls back to the code-built record
-reply, so the turn is never lost. Pure apart from the ``chat`` callable the
-loop passes in.
+A turn where no call ran has nothing to narrate. A narrator provider failure
+falls back to the code-built record reply, so the turn is never lost. Pure
+apart from the ``chat`` callable the runtime passes in.
 """
 
 from __future__ import annotations
@@ -60,7 +58,7 @@ from app.ai.provider import ChatResult
 from app.ai.stop import STOPPED_ERROR
 
 if TYPE_CHECKING:
-    from app.ai.loop import ToolCallRecord
+    from app.ai.runtime import ToolCallRecord
 
 Surface = Literal["desktop", "phone", "voice", "room_speaker"]
 SPOKEN: frozenset[str] = frozenset({"voice", "room_speaker"})
@@ -473,7 +471,7 @@ def _unrun_step(number: int, record: ToolCallRecord, reason: str) -> dict[str, A
 
 def _unrun_reason(record: ToolCallRecord) -> str | None:
     """Why a compiled plan's step didn't run, in plain words with no step ids;
-    ``None`` for a call that ran or one the loop itself never sent (schema
+    ``None`` for a call that ran or one code itself never sent (schema
     errors and unknown tools, the tool-call cap, a crashed batch, Stop)."""
     if run_record.classify(record) != "not_run":
         return None
@@ -965,7 +963,8 @@ _PLAN_STEP = re.compile(r"\bstep of the plan\b")
 _STEP_REF = re.compile(r"\{\s*s\d+\s*\}|\bs\d+\b")
 # An unfilled ref in a step's request is always braced: "s3 bucket" is a name.
 _BRACED_REF = re.compile(r"\{\s*s\d+\s*\}")
-# The loop's "not run" answers: calls it never sent, not a plan's steps.
+# "Not run" answers for calls never sent (the retired loop's, and Stop's), not
+# a plan's steps.
 _LOOP_UNSENT = frozenset(
     {run_record.TOOL_CALL_LIMIT_ERROR, run_record.CRASHED_BATCH_ERROR, STOPPED_ERROR}
 )

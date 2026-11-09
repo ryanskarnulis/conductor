@@ -2,11 +2,11 @@
 
 Conductor's runs used to leave ``delegate_call`` log lines and nothing else. A
 multi-agent misfire is found by reading traces, and blame has to come by
-construction, so with ``CONDUCTOR_TRACE_PATH`` set the loop appends one record
-per turn holding:
+construction, so with ``CONDUCTOR_TRACE_PATH`` set each turn appends one
+record holding:
 
-- the turn id (``run_id``), the conversation, the utterance and the history
-  the model was handed;
+- the turn id (``run_id``), the conversation, the utterance, the opening
+  (state block and recall) and the compiled plan;
 - one entry per model call (status, wall clock, tokens, finish reason);
 - every tool call with its arguments and answer;
 - one **hop** per delegate call: its ``hop_id`` (sent to the app as
@@ -14,16 +14,15 @@ per turn holding:
   subagent thread, the app's own request id (its ``X-Request-ID`` response
   header), what the app ran, its stop reason, and the error class if it
   failed. Turn → hops → app runs reads straight off one record;
-- the stop reason, the reply, and hashes of the system prompt and the tool
-  schemas beside the model, so two baselines' configurations can be told
-  apart.
+- the stop reason, the reply, and the planner prompt's hash beside the
+  model, so two baselines' configurations can be told apart.
 
 The exact bytes of each model call are #62's other half,
 :mod:`app.ai.context_capture`, keyed by the same ``run_id``; together they
 replay a turn offline (:mod:`app.ai.replay`).
 
 Diagnostics only: off unless a path is set, and a write that fails is logged
-and swallowed (:meth:`app.ai.loop.AgentLoop._write_trace`). Mirrors PCC's
+and swallowed (:meth:`app.ai.runtime.Runtime.write_trace`). Mirrors PCC's
 ``app/ai/trace.py`` (#400), minus its narrator, gather and state-block fields,
 plus hops. Read records with ``backend/scripts/read_trace.py``; the layout is
 in ``docs/agent-tracing.md``.
@@ -36,7 +35,7 @@ import hashlib
 import json
 import threading
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -46,11 +45,13 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from app.config import get_settings
 
 if TYPE_CHECKING:
-    from app.ai.loop import AgentRunResult
-    from app.ai.provider import ToolSpec, Usage
+    from app.ai.runtime import AgentRunResult
+    from app.ai.provider import Usage
 
 # The record layout's version; bump it on any change a reader must branch on.
-TRACE_SCHEMA = 1
+# 2 (#75): the loop's ``history``, ``iterations``, ``corrections``, ``limits``
+# and tool-schema fields are gone; the system prompt hash is the planner's.
+TRACE_SCHEMA = 2
 KIND_RUN = "run"
 
 # How one model call ended: ``ok``, ``truncated`` (cut off at ``max_tokens``),
@@ -71,12 +72,6 @@ def new_hop_id() -> str:
 
 def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def tool_schemas_sha256(specs: Sequence[ToolSpec]) -> str:
-    """One hash over every offered tool's wire schema, with sorted keys."""
-    wire = [spec.to_wire() for spec in specs]
-    return sha256(json.dumps(wire, sort_keys=True, separators=(",", ":")))
 
 
 @dataclass
@@ -132,7 +127,7 @@ class Hop:
 
 @dataclass
 class RunTrace:
-    """What one turn learned as it went, filled in by the loop and the
+    """What one turn learned as it went, filled in by the interpreter and the
     delegate tools. Always kept; :meth:`record` turns it into the JSONL line."""
 
     run_id: str
@@ -140,21 +135,17 @@ class RunTrace:
     utterance: str
     conversation_id: str | None = None
     model: str | None = None
-    history: list[dict[str, Any]] = field(default_factory=list)
     # The state block and recall that opened the turn's user message (#64).
     context: str | None = None
     # Where the person is (``Now.surface``) and how the reply was made (#65).
     surface: str | None = None
     narration: dict[str, Any] | None = None
-    # The compiled plan (#70), when the loop compiles turns.
+    # The compiled plan (#70).
     plan: dict[str, Any] | None = None
+    # The planner prompt's hash: what the fleet's manifests made of it.
     system_prompt_sha256: str | None = None
-    tool_schemas_sha256: str | None = None
-    tools_offered: int = 0
-    limits: dict[str, Any] = field(default_factory=dict)
     calls: list[ModelCall] = field(default_factory=list)
     hops: list[Hop] = field(default_factory=list)
-    corrections: int = 0
     started: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def record(self, result: AgentRunResult, *, error: str = "", total_ms: int) -> dict[str, Any]:
@@ -168,7 +159,6 @@ class RunTrace:
             "conversation_id": self.conversation_id,
             "actor": self.actor,
             "utterance": self.utterance,
-            "history": self.history,
             "context": self.context,
             "surface": self.surface,
             "narration": self.narration,
@@ -176,8 +166,6 @@ class RunTrace:
             "stop_reason": result.stop_reason,
             "error": error,
             "reply": result.reply,
-            "iterations": result.iterations,
-            "corrections": self.corrections,
             "tools": [record.model_dump() for record in result.tool_calls],
             "hops": [asdict(hop) for hop in self.hops],
             "model_calls": len(calls),
@@ -186,18 +174,15 @@ class RunTrace:
             "model_ms": sum(call.ms for call in calls),
             "total_ms": total_ms,
             "calls": [call.as_trace(seq) for seq, call in enumerate(calls)],
-            "limits": self.limits,
             "serving": {
                 "model": self.model,
                 "system_prompt_sha256": self.system_prompt_sha256,
-                "tool_schemas_sha256": self.tool_schemas_sha256,
-                "tools_offered": self.tools_offered,
             },
         }
 
 
 # The turn being traced, for the delegate tools to add hops to. Set by the
-# loop around the run; ``None`` outside one (a tool test, the MCP server's
+# interpreter around the turn; ``None`` outside one (a tool test, the MCP server's
 # direct calls).
 _CURRENT: contextvars.ContextVar[RunTrace | None] = contextvars.ContextVar(
     "conductor_run_trace", default=None
@@ -244,7 +229,7 @@ def current_hop() -> Hop | None:
 
 
 class Tracer(Protocol):
-    """Whatever records a finished turn. Free to fail: the loop swallows it."""
+    """Whatever records a finished turn. Free to fail: the runtime swallows it."""
 
     def write(self, record: dict[str, Any]) -> None: ...
 

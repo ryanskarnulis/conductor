@@ -2,7 +2,7 @@
 
 STANDARD.md §3: when a run stops at a limit, or fails after calls ran, its
 reply is this record — never the model's words. Every
-:class:`~app.ai.loop.ToolCallRecord` is sorted into
+:class:`~app.ai.runtime.ToolCallRecord` is sorted into
 
 - **done**: a delegate or handoff call that came back with an answer, or a
   delegate call that failed but whose app's record lists ``done`` work (#67):
@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from app.ai.memory import RECALL_TOOL
 
 if TYPE_CHECKING:
-    from app.ai.loop import ToolCallRecord
+    from app.ai.runtime import ToolCallRecord
 
 Outcome = Literal["done", "failed", "looked_up", "not_run"]
 
@@ -72,15 +72,15 @@ def is_read(tool: str) -> bool:
     return tool in READ_TOOLS or is_look(tool) or tool == RECALL_TOOL
 
 
-# The prefix of every error text the loop writes for a call it never
-# dispatched. The loop builds those texts from it, so a reworded one cannot
-# start reading as a refusal.
+# The prefix of every error text code writes for a call it never dispatched.
+# Those texts are built from it, so a reworded one cannot start reading as a
+# refusal.
 NOT_RUN_PREFIX = "not run: "
-# The loop's own "not run" answers, for calls it never sent (the tool-call cap,
-# the rest of a batch after a crash). A plan's unrun steps carry other reasons.
+# The retired loop's own "not run" answers (#75), kept so old records still
+# read the same. A plan's unrun steps carry other reasons.
 TOOL_CALL_LIMIT_ERROR = f"{NOT_RUN_PREFIX}the run reached its limit of tool calls before this call"
 CRASHED_BATCH_ERROR = f"{NOT_RUN_PREFIX}an earlier tool call in this turn failed unexpectedly"
-# The loop's prefix for schema-invalid arguments (``AgentLoop._dispatch``),
+# The prefix for schema-invalid arguments (``Runtime.dispatch``),
 # and the registry's for a tool name it does not know (``UnknownToolError``).
 INVALID_ARGUMENTS_PREFIX = "Invalid arguments: "
 UNKNOWN_TOOL_PREFIX = "Unknown tool "

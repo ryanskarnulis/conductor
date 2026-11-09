@@ -44,7 +44,7 @@ from app.ai.provider import Sampling
 from app.fleet.manifests import Fleet
 
 if TYPE_CHECKING:
-    from app.ai.loop import ToolCallRecord
+    from app.ai.runtime import ToolCallRecord
 
 # The jobs conductor owns are filed under its own name (never a fleet app's).
 APP = "conductor"
@@ -128,7 +128,7 @@ def record(
     changed. Its one receipt entry carries the job (so the ledger files the
     ``ledger_jobs`` row through the same path as an app's job) and touches
     the think itself, by its problem."""
-    from app.ai.loop import ToolCallRecord  # noqa: PLC0415 (the loop imports the interpreter)
+    from app.ai.runtime import ToolCallRecord  # noqa: PLC0415
 
     ref = new_ref()
     filled = dataflow.fill(step.problem, values)
@@ -295,8 +295,8 @@ def problems(proposal: Proposal, fleet: Fleet) -> list[str]:
         return found
     plan = plans.StepPlan(steps=list(proposal.steps))
     found += plans.problems(plan, plans.Checks(fleet=fleet))
-    if not found and plans.fallback_reason(plan) is not None:
-        found.append("a step refers to {sN} that no earlier ask can name")
+    if not found:
+        found += plans.unrunnable(plan)
     return found
 
 

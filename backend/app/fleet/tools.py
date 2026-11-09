@@ -46,8 +46,8 @@ Contract behaviors live here, not in the client:
   run is never on the context (``DelegationContext.pending_confirm``).
 
 ``list_agents`` is a local tool (no network) reporting the fleet from the
-manifests. Routing *hints* live in the system prompt, not tool docstrings —
-:func:`render_fleet_section` builds that layer.
+manifests. Routing hints live in the planner's prompt
+(:func:`app.ai.compiler.planner_prompt`), built from the manifests.
 """
 
 from __future__ import annotations
@@ -163,7 +163,7 @@ def build_delegate_tools(fleet: Fleet, client_factory: ClientFactory) -> list[st
     One ``ask_<app>`` per agent-bearing app and one ``open_<app>`` per openable
     app (an app can be both, or neither — the blocks are independent). Returns
     the registered tool names, in order. Mutates the shared registry — the one
-    surface the loop and the MCP server both consume. Inert fleet members get
+    surface the turn runtime and the MCP server both consume. Inert fleet members get
     no tool (``list_agents`` still names them).
     """
     names: list[str] = []
@@ -592,49 +592,6 @@ def _activity_note(app_name: str, tool_calls: list[Any] | None) -> str:
     return f"[{app_name} did: {names}]"
 
 
-def _confirmation_rules(fleet: Fleet) -> list[str]:
-    """Who asks the person before anything destructive (#68).
-
-    An app that declares ``agent.confirms`` asks itself, in code, so conductor
-    passes the request straight through and answers its question with
-    ``confirm``. For any other ask app conductor is the one safety stop: the
-    operational-voice backstop, scoped to those apps only.
-    """
-    confirming = [ask_tool_name(app.name) for app in _confirming_apps(fleet)]
-    unguarded = [
-        ask_tool_name(app.name)
-        for app in fleet.agent_apps()
-        if app.agent is not None and not app.agent.confirms
-    ]
-    lines: list[str] = []
-    if confirming:
-        first = _confirming_apps(fleet)[0].name
-        lines.append(
-            f"- {', '.join(confirming)} ask the person themselves before anything "
-            "destructive. Pass a delete, wipe, reset or overwrite request to the app "
-            "straight away, without asking first. If the app answers that it needs a "
-            "yes, put its question to the person word for word and stop. When the "
-            f"person's next message says yes to it, call confirm(app=...) — nothing "
-            "else; if they say no or anything else, don't call it. Example — user: "
-            f'"wipe the kitchen project" → {ask_tool_name(first)}(message="wipe the '
-            f'kitchen project") → {first}: needs a yes, "Trash Kitchen and its 12 '
-            'tasks?" → you: "Trash Kitchen and its 12 tasks?" — user: "yes" → '
-            f'confirm(app="{first}") → you say what it did.'
-        )
-    if unguarded:
-        lines.append(
-            f"- Destructive requests to {', '.join(unguarded)} get confirmed FIRST, "
-            "before any tool call. If the user asks to delete, overwrite, reset, or "
-            "abandon something there, do NOT call a tool this turn: reply with one short "
-            "question asking them to confirm, and delegate only after they've said yes. "
-            "Those apps don't confirm irreversible actions themselves, so you are the "
-            "one safety stop."
-        )
-    if lines:
-        lines.insert(0, "Destructive requests:")
-    return lines
-
-
 def _make_list_agents(fleet: Fleet) -> Callable[[], dict[str, Any]]:
     """Build the local ``list_agents`` tool over the discovered fleet."""
 
@@ -669,49 +626,3 @@ def _make_list_agents(fleet: Fleet) -> Callable[[], dict[str, Any]]:
 
 def _elapsed_ms(started: float) -> int:
     return round((time.monotonic() - started) * 1000)
-
-
-def render_fleet_section(fleet: Fleet) -> str:
-    """The system-prompt fleet layer: each app's tool, what it does, and its
-    routing examples — the ask tools and the open tools alike. Empty when the
-    fleet has no tool-bearing app.
-
-    This is where routing hints belong (STANDARD.md) — not in tool docstrings.
-    """
-    agent_apps = fleet.agent_apps()
-    open_apps = fleet.open_apps()
-    if not agent_apps and not open_apps:
-        return ""
-    lines = [
-        "Your fleet — the apps you can act through. Route each request to the single "
-        "best-fit app by calling its tool; if two could fit, pick the primary one, and if "
-        "none fit, say so plainly.",
-    ]
-    if agent_apps:
-        lines.append("Apps you delegate to (their agent does the work and reports back):")
-        for app in agent_apps:
-            assert app.agent is not None
-            lines.append(f"- {ask_tool_name(app.name)} — {app.agent.description}")
-            if app.agent.examples:
-                examples = "; ".join(f'"{example}"' for example in app.agent.examples)
-                lines.append(f"  routes here: {examples}")
-    if open_apps:
-        lines.append(
-            "Apps you hand the user OVER to — you don't do these things yourself, you send "
-            "the user to the app and its agent takes over from there. Pass their request "
-            "along as the `intent` so nothing is lost:"
-        )
-        for app in open_apps:
-            assert app.open is not None
-            lines.append(f"- {open_tool_name(app.name)} — {app.open.description}")
-            if app.open.examples:
-                examples = "; ".join(f'"{example}"' for example in app.open.examples)
-                lines.append(f"  routes here: {examples}")
-    lines += _confirmation_rules(fleet)
-    inert = fleet.inert_apps()
-    if inert:
-        names = ", ".join(app.name for app in inert)
-        lines.append(
-            f"Also in the house but with no agent to delegate to (you can't act on these): {names}."
-        )
-    return "\n".join(lines)

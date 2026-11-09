@@ -1,7 +1,7 @@
 """The relay probe (spike R1 → #65, from #55): does the reply keep the saved song's title?
 
-"download this song <link>" through conductor's real loop, prompt and workspace
-manifests on the live model, with music's hop canned to music's real handoff:
+"download this song <link>" through conductor's real planner, interpreter,
+narrator and workspace manifests on the live model (#75), with music's hop canned to music's real handoff:
 its note ("bet. it's in the Unsorted folder now.") and its v1.1 record, which
 names the song as outside text. "Kept" means the final reply names the title.
 Two titles, as the spike ran them: a real-looking one and a placeholder-looking
@@ -11,8 +11,8 @@ one the narrator alone dropped ~40% of the time.
     CONDUCTOR_AGENT_EVALS=1 .venv/bin/pytest tests/test_relay_probe.py -v -s
 
 ``CONDUCTOR_RELAY_RUNS`` sets runs per title (default 20); the bar is ≥95% kept
-across both. ``CONDUCTOR_NARRATOR=0`` measures the planner's own relay (the
-spike's "today" arm). Baseline in ``docs/agent-evals.md`` ("Relay probe").
+across both. ``CONDUCTOR_NARRATOR=0`` measures code's record reply instead of
+the narrator's. Baseline in ``docs/agent-evals.md`` ("Relay probe").
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 
-from app.ai.loop import loop_from_settings
+from app.ai.interpreter import conductor_from_settings
 from app.ai.providers.llamacpp import provider_from_settings
 from app.config import get_settings
 from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
@@ -39,7 +39,7 @@ from app.fleet.delegate import (
     Undo,
 )
 from app.fleet.manifests import fleet_from_settings
-from app.fleet.tools import build_delegate_tools, render_fleet_section
+from app.fleet.tools import build_delegate_tools
 from tests.evalstats import wilson_interval
 
 _LIVE = os.environ.get("CONDUCTOR_AGENT_EVALS") == "1"
@@ -120,7 +120,7 @@ def test_relay_keeps_the_title(fleet_dir: None) -> None:
     if "ask_music" not in tools:
         pytest.skip(f"no ask_music in {tools}; is {WORKSPACE_ROOT} the workspace root?")
     provider = provider_from_settings()
-    loop = loop_from_settings(provider, fleet_section=render_fleet_section(fleet))
+    conductor = conductor_from_settings(provider, fleet)
     kept = total = 0
     seconds: list[float] = []
     try:
@@ -134,7 +134,7 @@ def test_relay_keeps_the_title(fleet_dir: None) -> None:
                 )
                 started = time.monotonic()
                 with use_delegation_context(context):
-                    result = loop.run(SAID)
+                    result = conductor.run(SAID)
                 seconds.append(time.monotonic() - started)
                 asked = [call.tool for call in result.tool_calls]
                 hit = "ask_music" in asked and title.lower() in (result.reply or "").lower()

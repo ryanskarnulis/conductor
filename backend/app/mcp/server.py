@@ -7,11 +7,11 @@ exposes every one on a FastMCP instance — so an MCP host (Claude Code) can
 route to the house's apps through conductor. FastMCP re-derives each tool's
 schema from the same signatures/docstrings the registry uses.
 
-Unlike the HTTP loop (Slice 4), the MCP server has no per-request scope, so it
+Unlike the HTTP route, the MCP server has no per-request scope, so it
 registers **one process-global** :class:`DelegationContext`: subagent threads
 persist across tool calls within a session (follow-ups carry context app-side),
 the driver is tagged ``agent:mcp``, and the per-turn call budget is disabled
-(the driving agent is the trusted MCP host, not conductor's shallow loop). The
+(the driving agent is the trusted MCP host, not conductor's own turns). The
 delegate client still presents ``agent:conductor`` downstream, as the contract
 requires.
 

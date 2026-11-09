@@ -1,9 +1,9 @@
 """Seeded trajectory walks, in CI (#53, STANDARD.md §6).
 
 ``trajectory.py`` is the machinery: a seeded walk of user messages through the
-real route, loop, registry and delegate tools over the fake fleet, a scripted
-provider, injected faults, and every invariant checked after every step. This
-file is what runs:
+real route, interpreter (#75), registry and delegate tools over the fake fleet,
+a scripted planner and narrator, injected faults, and every invariant checked
+after every step. This file is what runs:
 
 - **The corpus.** ``CONDUCTOR_TRAJ_SEEDS`` walks (default 32) of
   ``CONDUCTOR_TRAJ_LENGTH`` messages (default 8) from seed
@@ -12,12 +12,12 @@ file is what runs:
   tests/test_trajectories.py -q -k corpus``.
 - **Named cases.** Fixed step sequences: a ``known bug`` reproduces a
   ``KNOWN_BUGS`` entry strictly (xfail until the fix lands, then it XPASSes and
-  fails until the entry and the mark go), a ``pending`` case waits on a
-  capability (Stop, #66), the rest pin combinations the corpus reaches only
-  now and then.
+  fails until the entry and the mark go); the rest pin combinations the
+  corpus reaches only now and then.
 - **The instrument's own checks.** Every invariant must be able to fire, every
-  registered tool must be walked, and a walk must be a pure function of its
-  seed — a checker that cannot fire reads green for having looked at nothing.
+  step kind, direct answer and fault must be walked, and a walk must be a pure
+  function of its seed — a checker that cannot fire reads green for having
+  looked at nothing.
 - **Replay.** ``CONDUCTOR_TRAJ_SEED=<n> CONDUCTOR_TRAJ_LENGTH=<k> .venv/bin/pytest
   tests/test_trajectories.py -k replay -s`` reruns one walk and prints it — the
   command every breach report carries.
@@ -29,13 +29,19 @@ import os
 import random
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from app.ai import interpreter
+from app.ai.runtime import ToolCallRecord
 from tests.trajectory import (
+    ANSWERS,
     CORPUS_LENGTH,
     INVARIANTS,
+    KINDS,
     Fault,
+    FaultKind,
     InvariantBreach,
     Observed,
     Step,
@@ -43,14 +49,15 @@ from tests.trajectory import (
     check_delegate_budget,
     check_every_app_write_has_a_receipt_row,
     check_every_app_write_is_recorded,
+    check_every_record_has_one_answer,
     check_every_turn_is_on_the_ledger,
-    check_every_call_has_one_answer,
     check_fault_ends_the_run_as_documented,
     check_handoffs_ask_nothing,
     check_history_is_text_only,
     check_nothing_starts_after_stop,
     check_saved_turn_is_what_ran,
     describe,
+    drawn_kinds,
     fixture_fleet,
     harness,
     next_step,
@@ -84,28 +91,50 @@ def test_replay(fleet: Path) -> None:
 # --- named cases -----------------------------------------------------------------------
 
 
-def calls(*batch: tuple[str, dict[str, str]]) -> Turn:
-    return Turn("calls", calls=tuple(batch))
+def ask(app_name: str, request: str) -> dict[str, Any]:
+    return {"do": "ask", "app": app_name, "request": request, "destructive": False}
 
 
-DONE = Turn("text", text="Done.")
-ADD = ("ask_tasks", {"message": "add a task to water the plants tomorrow"})
-SORT = ("ask_music", {"message": "sort my whole library"})
+def plan(*steps: dict[str, Any]) -> tuple[Turn, ...]:
+    return (Turn.plan({"steps": [{"id": f"s{n}", **s} for n, s in enumerate(steps, 1)]}),)
 
 
-def test_a_write_before_a_provider_death_is_kept(fleet: Path) -> None:
-    # Found by the walks before #52: the route saved only the person's words,
-    # so the app's write was in no turn. Now the partial record is saved.
+ADD = ask("tasks", "add a task to water the plants tomorrow")
+SORT = ask("music", "sort my whole library")
+
+
+def test_a_write_before_a_narrator_death_is_kept(fleet: Path) -> None:
+    # Model call 1 is the narrator's, after the write: it falls back to code's
+    # record reply, and the write is in the saved turn (#52, #65).
     for kind in ("provider_dies", "provider_crashes"):
-        step = Step("add it", (calls(ADD), DONE), Fault(kind, 1))
+        step = Step("add it", plan(ADD), fault=Fault(kind, 1))
         log = run_steps(fleet, [step], tolerate_known_bugs=False)
         saved = log[0].saved_assistant
-        assert log[0].receipts and saved is not None
-        assert saved["stop_reason"] in ("provider_error", "internal_error")
+        assert log[0].receipts and log[0].status == 200 and saved is not None
+        assert saved["stop_reason"] == "completed" and saved["content"]
+        assert [call["tool"] for call in saved["tool_calls"]] == ["ask_tasks"]
+
+
+def test_a_planner_death_is_a_failed_turn_with_nothing_written(fleet: Path) -> None:
+    deaths: tuple[tuple[FaultKind, int], ...] = (("provider_dies", 502), ("provider_crashes", 500))
+    for kind, status in deaths:
+        log = run_steps(fleet, [Step("add it", plan(ADD), fault=Fault(kind, 0))])
+        assert log[0].status == status and not log[0].receipts
+        assert [m["role"] for m in log[0].new_messages] == ["user"]
+
+
+def test_a_write_before_a_crash_is_kept(fleet: Path) -> None:
+    # The first ask writes; the second ask's client raises (a bug): the turn
+    # fails 500 and the route saves what ran, so the write never vanishes.
+    log = run_steps(fleet, [Step("add and sort", plan(ADD, SORT), fault=Fault("app_bug", 1))])
+    saved = log[0].saved_assistant
+    assert log[0].status == 500 and log[0].receipts and saved is not None
+    assert saved["stop_reason"] == "internal_error"
+    assert [call["tool"] for call in saved["tool_calls"]] == ["ask_tasks", "ask_music"]
 
 
 def test_partial_write_is_reported_as_outcome_unknown(fleet: Path) -> None:
-    log = run_steps(fleet, [Step("add it", (calls(ADD), DONE), Fault("app_partial", 0))])
+    log = run_steps(fleet, [Step("add it", plan(ADD), fault=Fault("app_partial", 0))])
     assert log[0].receipts and log[0].status == 200
     # The app's answer was lost, so the ledger's receipt is conductor's own (#69).
     ledger = log[0].ledger
@@ -114,26 +143,34 @@ def test_partial_write_is_reported_as_outcome_unknown(fleet: Path) -> None:
 
 
 def test_app_down_writes_no_receipt(fleet: Path) -> None:
-    log = run_steps(fleet, [Step("sort", (calls(SORT), DONE), Fault("app_down", 0))])
+    log = run_steps(fleet, [Step("sort", plan(SORT), fault=Fault("app_down", 0))])
     ledger = log[0].ledger
     assert ledger is not None and ledger.status == "ended"
     assert ledger.steps == [("ask_music", "failed")] and ledger.receipts == []
 
 
 def test_app_down_is_a_domain_error_and_the_run_completes(fleet: Path) -> None:
-    log = run_steps(fleet, [Step("sort", (calls(SORT), DONE), Fault("app_down", 0))])
+    log = run_steps(fleet, [Step("sort", plan(SORT), fault=Fault("app_down", 0))])
     assert log[0].run is not None and log[0].run.stop_reason == "completed"
     assert not log[0].receipts
 
 
-def test_over_budget_asks_never_reach_the_app(fleet: Path) -> None:
-    ask = ("ask_tasks", {"message": "what's due today?"})
-    log = run_steps(fleet, [Step("go", (calls(ask, ask), calls(ask, ask), DONE))])
-    assert log[0].sends == {"tasks": 3}
+def test_an_over_budget_plan_never_reaches_the_app(fleet: Path) -> None:
+    due = ask("tasks", "what's due today?")
+    log = run_steps(fleet, [Step("go", plan(due, due, due, due))])
+    # The validator refuses a fourth ask to one app, every repair repeats it,
+    # and code says so: nothing was asked (#75).
+    assert log[0].sends == {} and log[0].planner_calls == 3
+    assert log[0].run is not None and log[0].run.reply == interpreter.UNPLANNED
+
+
+def test_garbage_then_a_plan_is_repaired_and_runs(fleet: Path) -> None:
+    log = run_steps(fleet, [Step("add it", (Turn("garbage"), *plan(ADD)))])
+    assert log[0].planner_calls == 2 and log[0].receipts
 
 
 def test_history_stays_text_after_tool_turns(fleet: Path) -> None:
-    steps = [Step("add it", (calls(ADD), DONE)), Step("and sort", (calls(SORT), DONE))]
+    steps = [Step("add it", plan(ADD)), Step("and sort", plan(SORT))]
     log = run_steps(fleet, steps)
     # No chat turns replayed (#64): system, then one user message whose recall
     # carries the earlier turn as data.
@@ -142,7 +179,7 @@ def test_history_stays_text_after_tool_turns(fleet: Path) -> None:
 
 
 def test_stop_mid_delegate(fleet: Path) -> None:
-    log = run_steps(fleet, [Step("sort", (calls(SORT), DONE), Fault("stop", 0))])
+    log = run_steps(fleet, [Step("sort", plan(SORT), fault=Fault("stop", 0))])
     run = log[0].run
     assert run is not None and str(run.stop_reason) == "cancelled"
     # The record replies: the delegate call that finished, nothing after it.
@@ -157,7 +194,7 @@ def test_stop_mid_delegate(fleet: Path) -> None:
 
 
 def _one_clean_step(fleet: Path) -> Observed:
-    return run_steps(fleet, [Step("add it", (calls(ADD), DONE))])[0]
+    return run_steps(fleet, [Step("add it", plan(ADD))])[0]
 
 
 def _breaches(check: object, observed: Observed) -> bool:
@@ -176,10 +213,10 @@ def test_every_invariant_can_fire(fleet: Path) -> None:
     assert clean.run is not None
     run = clean.run
     unanswered = run.model_copy(
-        update={"messages": [m for m in run.messages if m["role"] != "tool"]}
+        update={"tool_calls": [ToolCallRecord(tool="ask_tasks", arguments={})]}
     )
     mutants = {
-        check_every_call_has_one_answer: replace(clean, run=unanswered),
+        check_every_record_has_one_answer: replace(clean, run=unanswered),
         check_saved_turn_is_what_ran: replace(clean, run=run.model_copy(update={"reply": "x"})),
         check_history_is_text_only: replace(
             clean,
@@ -206,17 +243,19 @@ def test_a_walk_is_a_pure_function_of_its_seed(fleet: Path, tmp_path: Path) -> N
     assert first == second
 
 
-def test_the_corpus_walks_every_tool_and_fault(fleet: Path) -> None:
+def test_the_corpus_walks_every_kind_and_fault(fleet: Path) -> None:
     with harness(fleet) as h:
-        tools, faults = set(h.tools), set(h.faults)
-    seen_tools: set[str] = set()
+        faults = set(h.faults)
+    kinds = KINDS | ANSWERS | {"garbage"}
+    seen_kinds: set[str] = set()
     seen_faults: set[str] = set()
     for seed in range(SEED_BASE, SEED_BASE + CORPUS_SEEDS):
         rng = random.Random(seed)
         for _ in range(LENGTH):
-            step = next_step(rng, sorted(tools), sorted(faults))
-            seen_tools |= {name for turn in step.turns for name, _ in turn.calls}
+            step = next_step(rng, sorted(faults))
+            seen_kinds |= drawn_kinds(step)
+            seen_kinds |= {turn.kind for turn in step.turns if turn.kind == "garbage"}
             if step.fault:
                 seen_faults.add(step.fault.kind)
-    assert tools <= seen_tools, f"never walked: {sorted(tools - seen_tools)}"
+    assert kinds <= seen_kinds, f"never walked: {sorted(kinds - seen_kinds)}"
     assert faults <= seen_faults, f"never injected: {sorted(faults - seen_faults)}"

@@ -71,29 +71,20 @@ class Settings(BaseSettings):
     # before the first byte; warm calls never approach it.
     llamacpp_timeout_seconds: float = 300.0
 
-    # Conductor's loop is deliberately shallower than the app loops' ~10: each
-    # iteration may wrap a full subagent loop (a delegate call fans out into
-    # that app's own bounded loop), so latency stacks. See CLAUDE.md.
-    conductor_max_iterations: int = 6
-    # STANDARD.md §3 safety nets (#52): the completion cap sent on every model
-    # call (model-profile's turn cap), and the per-run tool-call cap.
+    # STANDARD.md §3's completion cap, sent on every model call
+    # (model-profile's turn cap). A plan's length has its own ceiling
+    # (app/ai/plan.py, 12 steps); turns have no iteration or call caps (#75).
     conductor_max_tokens: int = 2048
-    conductor_max_tool_calls: int = 12
-    # A completed run's reply is the narrator's (#65, app/ai/narrator.py).
-    # Off replies with the planner's own words: an A/B switch for the evals.
+    # A completed turn's reply is the narrator's (#65, app/ai/narrator.py).
+    # Off replies with the code-built record: an A/B switch for the evals.
     conductor_narrator: bool = True
-    # Compiled plans (#70, app/ai/interpreter.py): each turn is compiled to a
-    # typed plan and the interpreter runs single-app plans; the rest falls back
-    # to the loop. On since #70's gates passed (docs/agent-evals.md); off is the
-    # old loop alone, the switch until #75 retires it.
-    conductor_compiler: bool = True
     # The job watcher (#76, app/services/job_watcher.py): polls running jobs
     # and posts one note when each ends. Off in tests (they drive it directly).
     conductor_job_watcher: bool = True
     # The escalation lane (#78, app/ai/think.py): a plan's `think` step runs
     # as a background job on this model (thinking on, json_schema), and its
-    # proposal waits for the person's yes. Off: `think` falls back to the loop,
-    # as before #78. The timeout covers a long thought plus a model swap.
+    # proposal waits for the person's yes. Off: a `think` step is not run and
+    # code says so (#75). The timeout covers a long thought plus a model swap.
     conductor_think: bool = True
     conductor_think_model: str = "gemma-4-26b-a4b"
     conductor_think_timeout_seconds: float = 600.0
@@ -143,8 +134,8 @@ class Settings(BaseSettings):
     fleet_upstream_host: str = ""
 
     # Per-turn ceiling on how many times conductor may call any one app's
-    # delegate tool within a single master loop run. Exceeding it is a domain
-    # error the model sees, so it stops hammering one app and moves on.
+    # delegate tool within a single turn. The validator sends a plan over it
+    # back for one request (#70); the tool also refuses past it.
     conductor_delegate_calls_per_turn_per_app: int = 3
 
 
