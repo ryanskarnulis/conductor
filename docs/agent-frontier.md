@@ -28,8 +28,8 @@ reads 0 for a reason the report names. It becomes a real measurement the day
 the capability lands, with no harness change: the driver looks for a cancel
 route and for tools by name.
 
-The routing gate's known reds (`refuse-playback`, `music-save`) stay in the gate
-as `xfail`, not here: they are regressions to fix, not capabilities to build.
+The routing gate's reds stay in the gate, not here: they are regressions to
+fix, not capabilities to build.
 
 ## Running it
 
