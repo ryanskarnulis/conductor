@@ -774,6 +774,7 @@ FACT_IN_ASK = Scenario(
         Say(_SORTING_DAY, label="used"),
     ),
     (_fact_reaches_the_app,),
+    tier="gate",
     script=lambda w: [
         _ask("memory", "remember I sort music on Sundays"),
         _say("Got it: “I sort music on Sundays”."),

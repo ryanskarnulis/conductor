@@ -174,7 +174,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   "Remember …", "what do you know about me?" and "forget that" are asks to
   `memory`, conductor's own app: one `ask` enum value and one planner-prompt
   line, run by code (no agent, model, budget or gate). A fact is cut from the
-  person's own words, never a model's; outside text never becomes one. Its
+  person's own words, never a model's, and so is what to forget (#134);
+  outside text never becomes one. Its
   receipts have no undo handle and no registry entity. Saved facts ride the
   state block (capped) and the speaker's facts. Forgetting soft-deletes the
   fact and `unindex`es the turn it was said in and the one that forgot it
