@@ -87,8 +87,9 @@ class Recall:
         parts = []
         if self.record:
             parts.append(
-                "The record of earlier turns in this conversation (what the apps did, "
-                "oldest first):\n" + "\n".join(f"- {line}" for line in self.record)
+                "The record of earlier turns in this conversation (what the apps did and "
+                "answered then, oldest first; an answer is as of then, not now):\n"
+                + "\n".join(f"- {line}" for line in self.record)
             )
         if self.requests:
             parts.append(
@@ -149,10 +150,11 @@ def section(recall: Recall, earlier: Sequence[str] = ()) -> str | None:
     parts = [recall.render()]
     if earlier:
         parts.append(
-            "Possibly what the person is pointing back at, from earlier conversations. "
-            "Leads for naming it to the app, not facts about now: use the name in your "
-            "message to the app, and never tell the person something is done or exists "
-            "from these lines alone:\n" + "\n".join(f"- {line}" for line in earlier)
+            "Possibly what the person is pointing back at, from earlier conversations, "
+            "as of then. Leads for naming it to the app, not facts about now: use the name "
+            "in your message to the app, and never tell the person something is done or "
+            "exists from these lines alone. An answer here was true that day; a question "
+            "about now still looks or asks the app:\n" + "\n".join(f"- {line}" for line in earlier)
         )
     rendered = "\n\n".join(part for part in parts if part)
     return f"Before this turn:\n\n{rendered}" if rendered else None
@@ -229,7 +231,9 @@ def _touched(record: ToolCallRecord) -> str:
 def _hit_line(call: EarlierCall) -> str:
     line = _record_line(call.record) or ""
     when = f"{call.when:%A} {call.when.date().isoformat()}"
-    return _truncate(f'{when}, asked "{_truncate(_flat(call.asked), 80)}": {line}', HIT_CHARS)
+    return _truncate(
+        f'{when} (as of then), asked "{_truncate(_flat(call.asked), 80)}": {line}', HIT_CHARS
+    )
 
 
 def _searchable(call: EarlierCall) -> str:

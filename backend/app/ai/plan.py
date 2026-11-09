@@ -36,6 +36,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
 
+from app.ai.memory import terms
 from app.fleet.manifests import Fleet
 
 # A ceiling against a runaway, not a design limit (decided 2026-11-06).
@@ -284,6 +285,7 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
     seen: set[str] = set()
     asks: dict[str, int] = {}
     found += _lost_refs(steps)
+    found += _mixed_asks(steps, checks.fleet)
     for index, step in enumerate(steps):
         expected = f"s{index + 1}"
         if step.id != expected:
@@ -429,6 +431,77 @@ def _lost_refs(steps: list[Step]) -> list[str]:
                     break
         earlier.append(step)
     return found
+
+
+def _work_for(noun: str) -> re.Pattern[str]:
+    """Words that ask for a new one of another app's things: "add a task",
+    "make another task", and for tasks, "remind me"."""
+    made = (
+        rf"\b(?:add|make|create|put|set\s+up|set|schedule|write)\b(?:\s+[\w'’]+){{0,2}}?"
+        rf"\s+(?:a|an|another|one\s+more)\s+(?:new\s+|quick\s+)?{noun}s?\b"
+    )
+    if noun == "task":
+        made += r"|\bremind\s+(?:me|us)\b"
+    return re.compile(made, re.IGNORECASE)
+
+
+def _mixed_asks(steps: list[Step], fleet: Fleet) -> list[str]:
+    """An ask that carries a second app's work (#127, S15): "download Caribou's
+    other album and add a task to sort it", all sent to music. Music can't
+    make the task, and the plan would claim it was asked. The repair splits
+    it: each app gets its own step, the second writing ``{sN}`` for what the
+    first finds. Another app's work is a new one of its things ("add a task",
+    "remind me" for tasks); naming its things in passing ("add a task to sort
+    my music") is not."""
+    others = {app.name: _work_for(app.name.lower().removesuffix("s")) for app in fleet.agent_apps()}
+    found: list[str] = []
+    for step in steps:
+        if not isinstance(step, Ask):
+            continue
+        for name, work in others.items():
+            if name == step.app:
+                continue
+            carried = work.search(step.request)
+            if carried is None:
+                continue
+            found.append(
+                f'{step.id} asks {step.app} to "{carried.group(0)}", which is work for {name}: '
+                f"{step.app} can't do it. Split it: ask {step.app} only its own part, then ask "
+                f"{name} the rest as its own step, writing {{{step.id}}} for what {step.app} finds"
+            )
+            break
+    return found
+
+
+# A call line in State or recall and the person's words on it: this
+# conversation's record (`… (asked: "…")`) and other conversations' hits
+# (`…, asked "…": ask_tasks …`).
+_ASKED = re.compile(r'asked:? "(?P<asked>[^"]*)"')
+_APP_CALL = re.compile(r"\b(?:ask|look)_[a-z0-9_]+\b")
+
+
+def recalled_answer(plan: Plan, words: str, context: str) -> list[str]:
+    """A direct answer to a question an app answered before (#127, #122's
+    leak): "what's due today?" again, with the earlier ``ask_tasks`` and its
+    "Nothing's due" in State. That answer is as of then, so the plan asks or
+    looks again. Matched on the words memory matches on (the same question
+    asked again), only for a call that reached an app."""
+    if not isinstance(plan, Direct) or plan.answer not in ("knowledge", "chat"):
+        return []
+    wanted = terms(words)
+    if not wanted:
+        return []
+    for line in context.splitlines():
+        if not _APP_CALL.search(line):
+            continue
+        for found in _ASKED.finditer(line):
+            asked = found.group("asked").rstrip("…").strip()
+            if asked and terms(asked) == wanted:
+                return [
+                    f'they asked "{asked}" before and an app answered it then; that answer is '
+                    "as of then, not now, so never answer from it: ask or look at that app again"
+                ]
+    return []
 
 
 def fallback_reason(

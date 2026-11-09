@@ -131,12 +131,41 @@ def test_a_new_conversation_recalls_what_shares_the_persons_words() -> None:
     ]
     hits = recall.hits("put that Caribou song in the house folder", calls)
     assert len(hits) == 1
-    assert hits[0].startswith('Tuesday 2026-11-03, asked "grab Odessa by Caribou"')
+    assert hits[0].startswith('Tuesday 2026-11-03 (as of then), asked "grab Odessa by Caribou"')
     assert "Odessa" in hits[0]
     assert recall.hits("put that in there", calls) == []  # no word that names a thing
     # A fresh request that points back at nothing gets no earlier conversation,
     # so a past write is never read as the state of things.
     assert recall.hits("move Caribou songs to the house folder", calls) == []
+
+
+def test_a_recalled_answer_is_labelled_as_of_then() -> None:
+    # #127: an answered read from another day is a lead, never the state of things now.
+    tuesday = datetime(2026, 11, 3, 18, 0, tzinfo=UTC)
+    week = "what am I working on this week?"
+    calls = [
+        EarlierCall(
+            tuesday,
+            week,
+            ToolCallRecord.model_validate(_ask("tasks", week, "Nothing's due today.")),
+        )
+    ]
+    (hit,) = recall.hits(week, calls)
+    assert hit.startswith(f'Tuesday 2026-11-03 (as of then), asked "{week}"')
+    section = recall.section(Recall(), [hit]) or ""
+    assert "from earlier conversations, as of then." in section
+    assert "a question about now still looks or asks the app" in section
+    # This conversation's own record is as of then too.
+    history: list[dict[str, Any]] = [
+        {"role": "user", "content": week},
+        {
+            "role": "assistant",
+            "content": "Nothing's due today.",
+            "tool_calls": [_ask("tasks", week, "Nothing's due today.")],
+        },
+    ]
+    rendered = Recall.of(history).render()
+    assert "answered then, oldest first; an answer is as of then, not now" in rendered
 
 
 def test_the_route_recalls_an_earlier_conversation(client: TestClient) -> None:
