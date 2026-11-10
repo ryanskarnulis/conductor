@@ -1,10 +1,11 @@
 """The plan-level eval cases (#70): spike D1's bench, promoted.
 
-Every routing golden re-labelled as a plan, the S1–S16 scenarios, the held-out
-set written after v1's misses and never tuned against (D1, #56), and the
+Every routing golden re-labelled as a plan, the S1–S16 scenarios, D1's old
+held-out set (the ``mixed`` group since #142: it was tuned against), and the
 long-plan cases (6–10 steps) added when the 5-step limit went (decided
 2026-11-06). Each case lists the plan shapes that count as correct; a sample
-passes when the compiled plan is valid and matches one of them.
+passes when the compiled plan is valid and matches one of them. The held-out
+set lives apart, in ``held_out_cases.py``.
 
 Run by ``test_plan_evals.py`` (opt-in, the real model). Pure data and
 matchers: no I/O.
@@ -588,32 +589,34 @@ CASES: tuple[Case, ...] = (
 )
 
 
-# Held out: written after v1's misses were read, never used to tune v2.
-HOLDOUT: tuple[Case, ...] = (
+# Spike D1's held-out set, written after v1's misses were read. Every PR has
+# run it and decided on it since 2026-11-06, so it is an ordinary group now
+# (#142); the held-out set is ``held_out_cases.py``.
+MIXED: tuple[Case, ...] = (
     Case(
         "ho-swim-task",
         "download Swim by Caribou and add a task to sort it Monday",
         (one(M("ask", "music", ("swim",)), M("ask", "tasks", ref_or_words=("swim",))),),
-        "holdout",
+        "mixed",
     ),
     Case(
         "ho-lyrics-task",
         "find the song that goes 'I can't do without you' and add a task to put it on the "
         "party playlist",
         (one(M("ask", "music", ("without you",)), M("ask", "tasks", ref=True)),),
-        "holdout",
+        "mixed",
     ),
     Case(
         "ho-two-reads",
         "how many songs are waiting to be sorted, and what's overdue?",
         (one(READ_MUSIC, READ_TASKS, ordered=False),),
-        "holdout",
+        "mixed",
     ),
     Case(
         "ho-cancel",
         "cancel that download",
         (one(M("cancel", target_has="17")),),
-        "holdout",
+        "mixed",
         state(jobs='music:job:17 downloading playlist "Road Trip" (running, 6 of 40)'),
         frozenset({"music:job:17", "job:17", "17"}),
     ),
@@ -621,7 +624,7 @@ HOLDOUT: tuple[Case, ...] = (
         "ho-amend",
         "make it the first twenty instead",
         (one(M("amend", target_has="17")),),
-        "holdout",
+        "mixed",
         state(jobs='music:job:17 downloading playlist "Road Trip" (running, 6 of 40)'),
         frozenset({"music:job:17", "job:17", "17"}),
     ),
@@ -629,23 +632,21 @@ HOLDOUT: tuple[Case, ...] = (
         "ho-recall",
         "what do you remember about the fence project?",
         (one(M("recall", words=("fence",))), one(M("recall", words=("fence",)), READ_TASKS)),
-        "holdout",
+        "mixed",
     ),
-    Case(
-        "ho-knowledge", "how many teaspoons are in a tablespoon?", (none("knowledge"),), "holdout"
-    ),
-    Case("ho-decline-score", "what's the score of the Leafs game?", (none("decline"),), "holdout"),
+    Case("ho-knowledge", "how many teaspoons are in a tablespoon?", (none("knowledge"),), "mixed"),
+    Case("ho-decline-score", "what's the score of the Leafs game?", (none("decline"),), "mixed"),
     Case(
         "ho-delete-project",
         "delete the fence project",
         (one(M("ask", "tasks", ("fence",), destructive=True)),),
-        "holdout",
+        "mixed",
     ),
     Case(
         "ho-chess-last",
         "how did my last chess game go?",
         (one(M("look", "chess")), one(M("open", "chess"))),
-        "holdout",
+        "mixed",
     ),
 )
 

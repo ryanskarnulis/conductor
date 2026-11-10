@@ -700,14 +700,32 @@ def test_a_dead_model_while_compiling_is_a_502_with_the_turn_kept(
 
 def test_every_eval_case_has_a_gated_group_and_a_bounded_state() -> None:
     from app.ai import state_block
-    from tests.plan_cases import CASES, HOLDOUT, LONG
+    from tests.plan_cases import CASES, LONG, MIXED
     from tests.test_plan_evals import FLOORS
 
-    cases = CASES + HOLDOUT + LONG
+    cases = CASES + MIXED + LONG
     assert {case.group for case in cases} == set(FLOORS)
     assert len({case.id for case in cases}) == len(cases)
     assert all(len(case.state) <= state_block.MAX_CHARS for case in cases)
     assert len(LONG) >= 8
+
+
+def test_the_held_out_set_is_its_own_and_covers_every_kind() -> None:
+    # #142: about twenty new cases over every kind of request, none of them
+    # an ordinary group's words, kept out of the gated groups.
+    from app.ai import state_block
+    from tests.held_out_cases import HELD_OUT, KINDS
+    from tests.plan_cases import CASES, LONG, MIXED
+
+    ordinary = CASES + MIXED + LONG
+    assert len(HELD_OUT) >= 20
+    assert {case.group for case in HELD_OUT} == set(KINDS)
+    ids = {case.id for case in HELD_OUT}
+    assert len(ids) == len(HELD_OUT)
+    assert not ids & {case.id for case in ordinary}
+    assert not {case.text.lower() for case in HELD_OUT} & {case.text.lower() for case in ordinary}
+    assert all(case.expect for case in HELD_OUT)
+    assert all(len(case.state) <= state_block.MAX_CHARS for case in HELD_OUT)
 
 
 def test_the_eval_matchers_accept_a_right_plan_and_refuse_a_wrong_one() -> None:
