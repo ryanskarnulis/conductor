@@ -20,7 +20,7 @@ import json
 import threading
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +35,7 @@ from app.ai.provider import (
     ProviderRequestError,
     ProviderResponseError,
     Sampling,
+    SamplingRole,
     ToolCall,
     ToolCallArgumentsError,
     ToolSpec,
@@ -52,6 +53,17 @@ logger = structlog.get_logger(__name__)
 _TEMPERATURE = 1.0
 _TOP_P = 0.95
 _TOP_K = 64
+
+# Per-role profiles (#150). Every role starts on the profile above, so request
+# bytes are the same as before roles existed; a role moves only on evidence
+# (``docs/agent-evals.md``). The planner's temperature is the one knob
+# (``CONDUCTOR_PLANNER_TEMPERATURE``) so its A/B can be rerun.
+DEFAULT_SAMPLING = Sampling(_TEMPERATURE, _TOP_P, _TOP_K)
+ROLE_SAMPLING: Mapping[SamplingRole, Sampling] = {
+    "planner": DEFAULT_SAMPLING,
+    "narrator": DEFAULT_SAMPLING,
+    "speaker": DEFAULT_SAMPLING,
+}
 
 # The rendered-template fetch is diagnostics beside a call that already ran:
 # short, and never retried.
@@ -90,9 +102,21 @@ class _WireChoice(BaseModel):
     finish_reason: str | None = None
 
 
+class _WireUsage(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    # OpenAI's spelling of the cache hit, ``{"cached_tokens": n}``. Untyped:
+    # a server that shapes it differently must not fail the call (#152).
+    prompt_tokens_details: Any = None
+
+
 class _WireCompletion(BaseModel):
     choices: list[_WireChoice] = Field(min_length=1)
-    usage: Usage | None = None
+    usage: _WireUsage | None = None
+    # llama-server's own per-call timings (``cache_n``, ``prompt_n``,
+    # ``prompt_ms``…); untyped for the same reason.
+    timings: Any = None
 
 
 class LlamaCppProvider:
@@ -112,13 +136,16 @@ class LlamaCppProvider:
         client: httpx.Client | None = None,
         capture: ContextCapture | None = None,
         sampling: Sampling | None = None,
+        role_sampling: Mapping[SamplingRole, Sampling] | None = None,
         stream: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         # The model's sampling profile; the 12B's unless a caller brings its
-        # own (the 26B's ``think``, #78).
-        self._sampling = sampling or Sampling(_TEMPERATURE, _TOP_P, _TOP_K)
+        # own (the 26B's ``think``, #78). ``role_sampling`` overrides it for
+        # the roles it names (#150); a call without a role uses the default.
+        self._sampling = sampling or DEFAULT_SAMPLING
+        self._role_sampling = dict(role_sampling or {})
         # Streamed calls (the ``think`` lane, #78) can be cut off between
         # chunks: closing a blocked non-streamed read from another thread
         # doesn't unblock it, and llama-swap holds the GPU for a request
@@ -165,11 +192,17 @@ class LlamaCppProvider:
         enable_thinking: bool = False,
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
+        role: SamplingRole | None = None,
     ) -> ChatResult:
         """One completion turn, optionally offering tools, or decoding under a
-        ``response_format`` (``json_schema``: llama-server's grammar, #70)."""
+        ``response_format`` (``json_schema``: llama-server's grammar, #70),
+        sampled as ``role``'s profile (#150)."""
         payload = self._payload(
-            messages, tools=tools, enable_thinking=enable_thinking, max_tokens=max_tokens
+            messages,
+            tools=tools,
+            enable_thinking=enable_thinking,
+            max_tokens=max_tokens,
+            sampling=self._role_sampling.get(role, self._sampling) if role else self._sampling,
         )
         if response_format is not None:
             payload["response_format"] = response_format
@@ -198,15 +231,16 @@ class LlamaCppProvider:
         tools: Sequence[ToolSpec] | None,
         enable_thinking: bool,
         max_tokens: int | None,
+        sampling: Sampling,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": list(messages),
-            "temperature": self._sampling.temperature,
-            "top_p": self._sampling.top_p,
+            "temperature": sampling.temperature,
+            "top_p": sampling.top_p,
             # llama-server accepts these OpenAI extensions as plain body fields
             # (no SDK extra_body indirection needed).
-            "top_k": self._sampling.top_k,
+            "top_k": sampling.top_k,
             "chat_template_kwargs": {"enable_thinking": enable_thinking},
         }
         if max_tokens is not None:
@@ -251,13 +285,16 @@ class LlamaCppProvider:
                 f"llama-server response failed wire validation: {exc}"
             ) from exc
         choice = completion.choices[0]
+        usage = _usage(completion)
         log.info(
             "llm_response",
             duration_ms=duration_ms,
             finish_reason=choice.finish_reason,
             tool_calls=len(choice.message.tool_calls),
-            prompt_tokens=completion.usage.prompt_tokens if completion.usage else None,
-            completion_tokens=completion.usage.completion_tokens if completion.usage else None,
+            prompt_tokens=usage.prompt_tokens if usage else None,
+            completion_tokens=usage.completion_tokens if usage else None,
+            cached_tokens=usage.cached_tokens if usage else None,
+            prefill_ms=usage.prefill_ms if usage else None,
         )
         return completion
 
@@ -271,7 +308,8 @@ class LlamaCppProvider:
         started = time.monotonic()
         content: list[str] = []
         finish: str | None = None
-        usage: Usage | None = None
+        usage: _WireUsage | None = None
+        timings: Any = None
         try:
             with self._client.stream(
                 "POST", f"{self._base_url}/chat/completions", json={**payload, "stream": True}
@@ -292,7 +330,9 @@ class LlamaCppProvider:
                         break
                     chunk = json.loads(data)
                     if isinstance(chunk.get("usage"), dict):
-                        usage = Usage.model_validate(chunk["usage"])
+                        usage = _WireUsage.model_validate(chunk["usage"])
+                    if chunk.get("timings") is not None:
+                        timings = chunk["timings"]
                     for choice in chunk.get("choices") or []:
                         delta = choice.get("delta") or {}
                         if isinstance(delta.get("content"), str):
@@ -314,7 +354,9 @@ class LlamaCppProvider:
         )
         message = _WireMessage(content="".join(content) or None)
         return _WireCompletion(
-            choices=[_WireChoice(message=message, finish_reason=finish)], usage=usage
+            choices=[_WireChoice(message=message, finish_reason=finish)],
+            usage=usage,
+            timings=timings,
         )
 
     def _begin_capture(self) -> CallStamp | None:
@@ -403,7 +445,7 @@ class LlamaCppProvider:
             content=choice.message.content,
             tool_calls=calls,
             finish_reason=choice.finish_reason,
-            usage=completion.usage,
+            usage=_usage(completion),
         )
 
 
@@ -415,6 +457,44 @@ def provider_from_settings() -> LlamaCppProvider:
         settings.llamacpp_model,
         timeout_seconds=settings.llamacpp_timeout_seconds,
         capture=context_capture_from_settings(),
+        role_sampling=role_sampling_from_settings(),
+    )
+
+
+def role_sampling_from_settings() -> Mapping[SamplingRole, Sampling]:
+    """:data:`ROLE_SAMPLING`, with the planner's temperature as configured."""
+    temperature = get_settings().conductor_planner_temperature
+    if temperature is None:
+        return ROLE_SAMPLING
+    planner = ROLE_SAMPLING["planner"]
+    return {**ROLE_SAMPLING, "planner": Sampling(temperature, planner.top_p, planner.top_k)}
+
+
+def _number(value: Any) -> float | None:
+    """A JSON number, or ``None`` for anything else (a bool is not one)."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _usage(completion: _WireCompletion) -> Usage | None:
+    """The server's counts for one call (#152): OpenAI's ``usage`` plus the
+    prompt-cache hit and prefill time from llama-server's ``timings``. Any
+    field the server leaves out stays ``None``; none can fail a call."""
+    wire = completion.usage
+    if wire is None:
+        return None
+    timings = completion.timings if isinstance(completion.timings, dict) else {}
+    details = wire.prompt_tokens_details if isinstance(wire.prompt_tokens_details, dict) else {}
+    cached = _number(timings.get("cache_n"))
+    if cached is None:
+        cached = _number(details.get("cached_tokens"))
+    return Usage(
+        prompt_tokens=wire.prompt_tokens,
+        completion_tokens=wire.completion_tokens,
+        total_tokens=wire.total_tokens,
+        cached_tokens=None if cached is None else int(cached),
+        prefill_ms=_number(timings.get("prompt_ms")),
     )
 
 

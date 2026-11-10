@@ -135,7 +135,9 @@ def _compile(case: Case, fleet: Fleet, prompt: str) -> tuple[compiler.Compiled, 
     ) -> ChatResult:
         started = time.monotonic()
         try:
-            return provider.chat(messages, max_tokens=max_tokens, response_format=response_format)
+            return provider.chat(
+                messages, max_tokens=max_tokens, response_format=response_format, role="planner"
+            )
         finally:
             calls.append(time.monotonic() - started)
 

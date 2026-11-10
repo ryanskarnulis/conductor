@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -54,6 +54,11 @@ class Sampling:
     top_k: int
 
 
+# The roles a call can sample as (#150). ``think`` has its own profile
+# (``app/ai/think.py``) on its own provider.
+SamplingRole = Literal["planner", "narrator", "speaker"]
+
+
 class ToolSpec(BaseModel):
     """One callable tool: name, description, JSON Schema for the arguments."""
 
@@ -81,9 +86,16 @@ class ToolCall(BaseModel):
 
 
 class Usage(BaseModel):
+    """What the server counted for one call. ``cached_tokens`` (prompt tokens
+    served from the server's prompt cache) and ``prefill_ms`` (time spent
+    reading the rest of the prompt) are ``None`` when the server didn't say,
+    never a zero that reads as measured (#152)."""
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cached_tokens: int | None = None
+    prefill_ms: float | None = None
 
 
 class ChatResult(BaseModel):
@@ -130,6 +142,7 @@ class ChatProvider(Protocol):
         enable_thinking: bool = False,
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
+        role: SamplingRole | None = None,
     ) -> ChatResult: ...
 
 
@@ -140,6 +153,7 @@ __all__ = [
     "ProviderRequestError",
     "ProviderResponseError",
     "Sampling",
+    "SamplingRole",
     "ToolCall",
     "ToolCallArgumentsError",
     "ToolSpec",

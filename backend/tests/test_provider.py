@@ -180,6 +180,131 @@ def test_thinking_defaults_off_and_optional_fields_omitted() -> None:
     assert "max_tokens" not in payload
 
 
+# --- per-role sampling (#150) ----------------------------------------------------------
+
+
+def _sent(provider: LlamaCppProvider, requests: list[httpx.Request], **kw: Any) -> dict[str, Any]:
+    requests.clear()
+    provider.chat([{"role": "user", "content": "hi"}], **kw)
+    sent: dict[str, Any] = json.loads(requests[0].content)
+    return sent
+
+
+def test_every_role_sends_the_same_bytes_as_no_role_by_default() -> None:
+    provider, requests = _provider(_ok({"content": "ok"}))
+    plain = _sent(provider, requests)
+    for role in ("planner", "narrator", "speaker"):
+        assert _sent(provider, requests, role=role) == plain
+    assert (plain["temperature"], plain["top_p"], plain["top_k"]) == (1.0, 0.95, 64)
+
+
+def test_a_role_with_its_own_sampling_changes_only_that_role() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _response({"content": "ok"})
+
+    provider = LlamaCppProvider(
+        "http://test/v1",
+        "gemma-4-12b",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        role_sampling={"planner": Sampling(temperature=0.3, top_p=0.9, top_k=40)},
+    )
+    planner = _sent(provider, requests, role="planner")
+    assert (planner["temperature"], planner["top_p"], planner["top_k"]) == (0.3, 0.9, 40)
+    for kw in ({"role": "narrator"}, {"role": "speaker"}, {}):
+        other = _sent(provider, requests, **kw)
+        assert (other["temperature"], other["top_p"], other["top_k"]) == (1.0, 0.95, 64)
+
+
+def test_a_provider_sampling_is_every_roles_unless_the_role_names_its_own() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _response({"content": "ok"})
+
+    provider = LlamaCppProvider(
+        "http://test/v1",
+        "gemma-4-26b-a4b",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        sampling=Sampling(temperature=0.5, top_p=0.9, top_k=40),
+    )
+    assert _sent(provider, requests, role="narrator")["temperature"] == 0.5
+
+
+# --- the prompt cache (#152) -----------------------------------------------------------
+
+# What llama-server answers (b9935): OpenAI's usage plus its own timings.
+_USAGE = {
+    "prompt_tokens": 19,
+    "completion_tokens": 8,
+    "total_tokens": 27,
+    "prompt_tokens_details": {"cached_tokens": 7},
+}
+_TIMINGS = {"cache_n": 7, "prompt_n": 12, "prompt_ms": 105.135, "predicted_n": 8}
+
+
+def _answering(**extra: Any) -> LlamaCppProvider:
+    body = {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], **extra}
+    provider, _ = _provider(lambda _request: httpx.Response(200, json=body))
+    return provider
+
+
+def test_a_call_carries_cached_tokens_and_prefill_time() -> None:
+    result = _answering(usage=_USAGE, timings=_TIMINGS).chat([{"role": "user", "content": "hi"}])
+    assert result.usage is not None
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens) == (19, 8)
+    assert result.usage.cached_tokens == 7
+    assert result.usage.prefill_ms == 105.135
+
+
+def test_a_total_miss_is_a_measured_zero() -> None:
+    timings = {"cache_n": 0, "prompt_n": 19, "prompt_ms": 155.8}
+    result = _answering(usage=_USAGE, timings=timings).chat([{"role": "user", "content": "hi"}])
+    assert result.usage is not None
+    assert result.usage.cached_tokens == 0
+
+
+@pytest.mark.parametrize(
+    ("extra", "cached", "prefill"),
+    [
+        # OpenAI's field alone still counts the hit; there is no prefill time.
+        ({"usage": _USAGE}, 7, None),
+        # Timings alone: no usage, so nothing to attach them to.
+        ({"timings": _TIMINGS}, None, None),
+        # A server that answers neither: unknown, not zero.
+        ({"usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6}}, None, None),
+        # Wrong shapes and nulls never fail the call.
+        ({"usage": {**_USAGE, "prompt_tokens_details": "x"}, "timings": "x"}, None, None),
+        ({"usage": _USAGE, "timings": {"cache_n": None, "prompt_ms": "fast"}}, 7, None),
+        ({"usage": _USAGE, "timings": {"cache_n": True, "prompt_ms": False}}, 7, None),
+    ],
+)
+def test_missing_or_odd_cache_fields_never_break_a_call(
+    extra: dict[str, Any], cached: int | None, prefill: float | None
+) -> None:
+    result = _answering(**extra).chat([{"role": "user", "content": "hi"}])
+    assert result.content == "ok"
+    if "usage" not in extra:
+        assert result.usage is None
+    else:
+        assert result.usage is not None
+        assert (result.usage.cached_tokens, result.usage.prefill_ms) == (cached, prefill)
+
+
+def test_a_streamed_call_carries_the_cache_figures_from_its_last_chunk() -> None:
+    chunks = _sse(
+        {"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": _USAGE, "timings": _TIMINGS},
+    )
+    provider, _ = _streaming(lambda _p: iter(chunks))
+    result = provider.chat([{"role": "user", "content": "hi"}])
+    assert result.usage is not None
+    assert (result.usage.cached_tokens, result.usage.prefill_ms) == (7, 105.135)
+
+
 # --- the think lane's streamed calls (#78) ---------------------------------------------
 
 

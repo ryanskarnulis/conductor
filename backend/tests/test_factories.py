@@ -8,7 +8,11 @@ import pytest
 
 from app.ai import trace as run_trace
 from app.ai.interpreter import conductor_from_settings
-from app.ai.providers.llamacpp import provider_from_settings
+from app.ai.providers.llamacpp import (
+    ROLE_SAMPLING,
+    provider_from_settings,
+    role_sampling_from_settings,
+)
 from app.config import get_settings
 from app.fleet.manifests import Fleet
 from tests.scripted_provider import ScriptedProvider
@@ -58,5 +62,39 @@ def test_conductor_from_settings_narrates_and_keeps_no_trace_by_default(
         assert conductor._rt.narrate is True
         assert conductor._rt.tracer is None
         assert conductor._rt.max_tokens == 2048
+    finally:
+        get_settings.cache_clear()
+
+
+def test_every_role_samples_the_model_profile_unless_the_planner_is_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CONDUCTOR_PLANNER_TEMPERATURE", raising=False)
+    get_settings.cache_clear()
+    try:
+        assert role_sampling_from_settings() == ROLE_SAMPLING
+        assert {(s.temperature, s.top_p, s.top_k) for s in ROLE_SAMPLING.values()} == {
+            (1.0, 0.95, 64)
+        }
+        monkeypatch.setenv("CONDUCTOR_PLANNER_TEMPERATURE", "0")
+        get_settings.cache_clear()
+        sampling = role_sampling_from_settings()
+        assert (sampling["planner"].temperature, sampling["planner"].top_p) == (0.0, 0.95)
+        assert sampling["narrator"] == ROLE_SAMPLING["narrator"]
+        assert sampling["speaker"] == ROLE_SAMPLING["speaker"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_a_planner_temperature_out_of_range_fails_startup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CONDUCTOR_PLANNER_TEMPERATURE", "3")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="CONDUCTOR_PLANNER_TEMPERATURE"):
+            get_settings()
     finally:
         get_settings.cache_clear()
