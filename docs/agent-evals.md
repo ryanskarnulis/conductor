@@ -1122,9 +1122,9 @@ What the table shows besides:
   where the case expects an amend), so the group sits at its 0.8 floor at any
   temperature. It is a case or prompt question, not sampling.
 - Lower temperature raised passes a little (0 and 0.3: 1400/1460 against
-  1383/1460, from `ref`, `hard`, `long` and `cross`), and moved no
-  first-try figure for the better. `ho-amend` is the other steady miss
-  (13/20 at 1.0, 20/20 wrong at 0).
+  1383/1460, mostly `ref`, `golden`, `cross` and `hard`; `holdout` fell at 0),
+  and moved no first-try figure for the better. `ho-amend` is the other
+  steady miss: 13/20 wrong at 1.0, 20/20 at 0.
 - At 0 the 20 samples of a case are near-identical, so its counts are close
   to one sample per case: they overstate the evidence.
 - Noise at 1.0 is real: `golden`'s 395/420 here against 393/420 and 390/420
