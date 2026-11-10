@@ -7,7 +7,8 @@ suites under the vendored Wilson gate (#59):
 
 - **Plan-level evals** (`tests/test_plan_evals.py`, below): does the 12B
   compile the right plan? Every routing golden re-labelled as a plan, the
-  S1–S16 scenarios, a held-out set and long plans, per group.
+  S1–S16 scenarios and long plans, per group, at n=20 with each group's
+  first-try rate beside its score; and a held-out set run only at milestones.
 - **Session evals** (`tests/test_session_evals.py`, below): whole multi-turn
   sessions over a fake fleet, checked on the end state and the replies.
 
@@ -370,16 +371,36 @@ passes when the plan is valid and matches one of the case's shapes
 
 The cases are:
 - spike D1's bench: every routing golden re-labelled as a plan, the S1–S16
-  scenarios and the held-out set;
+  scenarios and D1's held-out set, which every PR since 2026-11-06 has run
+  and decided on, so it is the ordinary `mixed` group since #142;
 - eight long-plan cases (6–10 steps when compiled one thing per step), added
   when the 5-step limit went. They check coverage, not exact shape.
 
-The gate is per group. Red takes evidence: the Wilson upper bound below the
-floor. Floors sit a little under the spike's 12B v2 rates.
+The gate is per group, at 20 samples per case (`CONDUCTOR_PLAN_SAMPLES`,
+default 20 since #142; n=5 read `chess-resign` anywhere from 5/20 to 15/20
+on one day). Red takes evidence: the Wilson upper bound below the floor.
+Floors sit a little under the spike's 12B v2 rates. Each group line also
+prints its **first-try** rate: samples right on the planner's first reply,
+before any repair or nudge. Record it beside the score: a validator nudge can
+lift a score without the planner changing (`self` 29/60 to 60/60 in #134),
+and only the first-try rate shows that.
 
 ```bash
 cd backend
 CONDUCTOR_PLAN_EVALS=1 CONDUCTOR_EVAL_FLEET_DIR=~/Documents/workspace \
+    .venv/bin/pytest tests/test_plan_evals.py -v -s
+```
+
+**The held-out set** (`tests/held_out_cases.py`, #142): about twenty cases
+over every kind of request, new phrasings and situations. Run it only at
+milestones, never in a PR's tuning loop, and never tune the prompt, the
+validator, a manifest or its expectations against it. A miss is reported and
+fixed on the ordinary groups; a case that gets tuned against moves to
+`plan_cases.py` and a new one replaces it. It is gated as one pool at 0.8,
+a floor fixed before its first run.
+
+```bash
+CONDUCTOR_HELDOUT_EVALS=1 CONDUCTOR_EVAL_FLEET_DIR=~/Documents/workspace \
     .venv/bin/pytest tests/test_plan_evals.py -v -s
 ```
 
@@ -1072,6 +1093,67 @@ Session evals, gate tier at 5 and frontier at 5:
   is unchanged.
 - Claims were 126/126 backed. No infra misses.
 
+### A fresh held-out set, the n=20 gate and first-try rates (#142, 2026-11-09)
+
+The planner prompt, step kinds, compiler, validator and manifests are
+unchanged. D1's held-out set is now the `mixed` group, plan evals default to
+n=20, and each group records its first-try rate (right on the planner's first
+reply) beside the final score. Floors are unchanged; `control`'s waits for
+the state-narrowed schema (#140).
+
+Plan evals at n=20 on gemma-4-12b, this branch on `2af6371`:
+
+| group | floor | score | first-try |
+|---|---|---|---|
+| golden | 0.8 | 394/420 | 377/420 |
+| cross | 0.8 | 140/140 | 123/140 |
+| ref | 0.85 | 76/80 | 76/80 |
+| control | 0.8 | **80/100** | 80/100 |
+| memory | 0.8 | 139/140 | 116/140 |
+| knowledge | 0.65 | 60/60 | 60/60 |
+| hard | 0.5 | 20/20 | 20/20 |
+| self | 0.55 | 59/60 | **31/60** |
+| mixed (was `holdout`) | 0.85 | 190/200 | 170/200 |
+| long | 0.7 | 154/160 | 143/160 |
+| stale | 0.8 | 80/80 | 60/80 |
+
+- Every group passed its gate, and every plan was valid. Nothing needed the
+  third call.
+- `control` sits exactly on its floor, as before: `amend-job` read 0/20,
+  an ask to music every time. `ho-amend` (now in `mixed`) read 10/20, its
+  misses the same ask.
+- The gap between score and first-try is the validator's repairs and #134's
+  nudges: `self` is 31/60 on the planner alone, `stale` 60/80, `memory`
+  116/140.
+- Other misses: `chess-analysis` 0/20 (`look_chess`, as before) and
+  `long-cleanup` 14/20 (each miss drops "sort my music").
+
+**Held-out baseline** (`CONDUCTOR_HELDOUT_EVALS=1`, 24 cases, n=20, the same
+code, run once): **438/480 (91%, Wilson 0.89–0.93), first-try 437/480**,
+above its 0.8 pool floor.
+
+| kind | score | first-try |
+|---|---|---|
+| routing | 74/80 | 74/80 |
+| cross | 60/60 | 60/60 |
+| ref | 59/60 | 59/60 |
+| control | 79/80 | 79/80 |
+| memory | 57/60 | 57/60 |
+| knowledge | 47/60 | 47/60 |
+| self | 22/40 | 22/40 |
+| long | 40/40 | 39/40 |
+
+Misses, reported and not tuned against:
+- `h-self-apps` "which apps are you connected to?" 2/20: `knowledge` 18 times.
+  `plan.about_you`'s nudge doesn't cover the phrasing.
+- `h-know-al-dente` "what does al dente mean?" 7/20: `decline` 6, `self` 6,
+  `chat` 1.
+- `h-route-rematch` "set up a chess rematch" 14/20: the misses add an ask to
+  tasks before the open.
+- `h-memory-keep-in-mind` 17/20: all three misses wrote the memory line's
+  own example, "remember I sort music on Sundays" (M2's pattern, #134).
+- `h-ref-album-playlist` and `h-control-drop-album` 19/20 each.
+
 ### Planner temperature A/B (#150, 2026-11-09)
 
 Sampling is now per role (`app/ai/providers/llamacpp.py`: planner, narrator,
@@ -1085,6 +1167,11 @@ Plan evals, n=20 (`CONDUCTOR_PLAN_SAMPLES=20`), every group, gemma-4-12b,
 `233fc83`, four runs on one server (one arm per GPU hold, not interleaved).
 Each cell is passed/runs, then first-try (a valid plan with no repair, the
 harness's `first-try`).
+
+Read with the #142 section above: this A/B ran before #142 merged, so its
+"first-try" is what the harness now prints as `first-valid` (a valid plan with
+no repair, right or not), not #142's first-try (right on the first reply), and
+`holdout` is the group now called `mixed`.
 
 | group | 1.0 | 0 | 0.3 | 0.6 |
 |---|---|---|---|---|

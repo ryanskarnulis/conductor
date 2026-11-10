@@ -8,9 +8,11 @@ Conductor is the workspace fleet's master agent: it routes a user's request to
 the right per-app agent over the standardized REST delegate contract
 (`../agent-standard/delegate-api.md`) and holds the conversation. Every turn
 is planner → validator → interpreter → narrator (#75; no tool-calling loop).
-Apps with an `agent:` block in their `app.yaml` get an `ask_<app>` tool;
-apps with an `open:` block get an `open_<app>` handoff (the user's words
-carried as `?intent=`); plan steps dispatch through them. The backend mirrors
+A plan is typed steps, and an app is a step's parameter, never a tool of its
+own: `ask` an app whose
+`app.yaml` has an `agent:` block, `look` at one with a `glance:` block,
+`open` one with an `open:` block (the user's words carried as `?intent=`);
+see "Compiled plans are the only path" below. The backend mirrors
 PCC's reference implementation (`../project-command-center/backend/app/`) —
 read the code as "same as PCC, minus deltas". `docs/agent-evals.md` is the
 eval baseline.
@@ -40,10 +42,14 @@ backend dev `8301`, vite dev `5174`.
 - **Eval gate** (#59, since #75): any change to the planner prompt, the step
   kinds, compiler/validator, interpreter, narrator, the model, **or any fleet
   app's `agent:`/`open:`/`glance:` manifest block** runs the plan-level evals
-  (`CONDUCTOR_PLAN_EVALS=1 pytest tests/test_plan_evals.py -v -s`) and the
-  session evals (`CONDUCTOR_AGENT_EVALS=1 CONDUCTOR_FRONTIER_EVALS=1 pytest
-  tests/test_session_evals.py -v -s`), llama-swap up, both under the Wilson
-  gate, and must not regress `docs/agent-evals.md`. The routing goldens
+  (`CONDUCTOR_PLAN_EVALS=1 pytest tests/test_plan_evals.py -v -s`, n=20 per
+  case, #142) and the session evals (`CONDUCTOR_AGENT_EVALS=1
+  CONDUCTOR_FRONTIER_EVALS=1 pytest tests/test_session_evals.py -v -s`),
+  llama-swap up, both under the Wilson gate, and must not regress
+  `docs/agent-evals.md`, which records each plan group's first-try rate
+  beside its score. The held-out set (`tests/held_out_cases.py`,
+  `CONDUCTOR_HELDOUT_EVALS=1`) runs only at milestones and is never tuned
+  against: its misses are reported, never fixed on it. The routing goldens
   retired at #75. The manifest half is the easy one to forget — the PR that
   breaks a plan usually lands in another repo.
 
