@@ -1071,3 +1071,63 @@ Session evals, gate tier at 5 and frontier at 5:
   timeline didn't cause it. Both turns sit in one window, where the opening
   is unchanged.
 - Claims were 126/126 backed. No infra misses.
+
+### Planner temperature A/B (#150, 2026-11-09)
+
+Sampling is now per role (`app/ai/providers/llamacpp.py`: planner, narrator,
+speaker), every role on the model profile (temperature 1.0, top_p 0.95,
+top_k 64), so request bytes are unchanged. The planner's temperature is the
+one knob: `CONDUCTOR_PLANNER_TEMPERATURE` (unset = 1.0), so this A/B can be
+rerun. The plan-level harness now sends `role="planner"`; its request was
+checked per arm and carried exactly 1.0, 0, 0.3 and 0.6.
+
+Plan evals, n=20 (`CONDUCTOR_PLAN_SAMPLES=20`), every group, gemma-4-12b,
+`233fc83`, four runs on one server (one arm per GPU hold, not interleaved).
+Each cell is passed/runs, then first-try (a valid plan with no repair, the
+harness's `first-try`).
+
+| group | 1.0 | 0 | 0.3 | 0.6 |
+|---|---|---|---|---|
+| golden | 395/420 (94%), 416/420 (99%) | 400/420 (95%), 400/420 (95%) | 399/420 (95%), 410/420 (98%) | 397/420 (95%), 417/420 (99%) |
+| cross | 138/140 (99%), 128/140 (91%) | 140/140 (100%), 120/140 (86%) | 140/140 (100%), 124/140 (89%) | 140/140 (100%), 123/140 (88%) |
+| ref | 73/80 (91%), 80/80 (100%) | 80/80 (100%), 80/80 (100%) | 80/80 (100%), 80/80 (100%) | 78/80 (98%), 80/80 (100%) |
+| control | 80/100 (80%), 100/100 (100%) | 80/100 (80%), 100/100 (100%) | 80/100 (80%), 100/100 (100%) | 80/100 (80%), 100/100 (100%) |
+| memory | 138/140 (99%), 115/140 (82%) | 140/140 (100%), 120/140 (86%) | 140/140 (100%), 120/140 (86%) | 140/140 (100%), 118/140 (84%) |
+| knowledge | 60/60 (100%), 60/60 (100%) | 60/60 (100%), 60/60 (100%) | 60/60 (100%), 60/60 (100%) | 60/60 (100%), 60/60 (100%) |
+| hard | 18/20 (90%), 20/20 (100%) | 20/20 (100%), 20/20 (100%) | 20/20 (100%), 20/20 (100%) | 20/20 (100%), 20/20 (100%) |
+| self | 59/60 (98%), 37/60 (62%) | 60/60 (100%), 30/60 (50%) | 60/60 (100%), 34/60 (57%) | 60/60 (100%), 37/60 (62%) |
+| holdout | 187/200 (94%), 180/200 (90%) | 180/200 (90%), 180/200 (90%) | 185/200 (92%), 180/200 (90%) | 181/200 (90%), 180/200 (90%) |
+| long | 155/160 (97%), 147/160 (92%) | 160/160 (100%), 160/160 (100%) | 156/160 (98%), 146/160 (91%) | 155/160 (97%), 151/160 (94%) |
+| stale | 80/80 (100%), 60/80 (75%) | 80/80 (100%), 60/80 (75%) | 80/80 (100%), 60/80 (75%) | 80/80 (100%), 60/80 (75%) |
+| **all** | 1383/1460 (95%), 1343/1460 (92%) | 1400/1460 (96%), 1330/1460 (91%) | 1400/1460 (96%), 1334/1460 (91%) | 1391/1460 (95%), 1346/1460 (92%) |
+
+**The winner rule did not fire; the planner stays at 1.0.** The rule: an arm
+wins only if no group is Wilson-significantly below the 1.0 arm (read as the
+arm's upper bound below the 1.0 arm's lower bound, `evalstats.wilson_interval`
+at 1.645, on both pass and first-try) and it improves both `control` and the
+overall first-try rate.
+
+- 0: `golden` first-try is significantly below (400/420 against 416/420), and
+  overall first-try is lower (91.1% against 92.0%).
+- 0.3: no group is significantly below, but overall first-try is lower
+  (91.4%).
+- 0.6: no group is significantly below and overall first-try is up by three
+  plans in 1460 (92.2%), but `control` did not move.
+- `control` cannot improve on first-try (100/100 at 1.0), and its pass count
+  was 80/100 in all four arms, so no reading of the rule lets it improve.
+
+What the table shows besides:
+
+- `control` is `amend-job`, 0/20 in every arm (the planner files `ask:music`
+  where the case expects an amend), so the group sits at its 0.8 floor at any
+  temperature. It is a case or prompt question, not sampling.
+- Lower temperature raised passes a little (0 and 0.3: 1400/1460 against
+  1383/1460, from `ref`, `hard`, `long` and `cross`), and moved no
+  first-try figure for the better. `ho-amend` is the other steady miss
+  (13/20 at 1.0, 20/20 wrong at 0).
+- At 0 the 20 samples of a case are near-identical, so its counts are close
+  to one sample per case: they overstate the evidence.
+- Noise at 1.0 is real: `golden`'s 395/420 here against 393/420 and 390/420
+  in the last two runs, the same code.
+
+Session evals were not run: no default changed.
