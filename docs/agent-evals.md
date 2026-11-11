@@ -1408,6 +1408,14 @@ here, 16/20 on main**, the same two failure modes. S15 paired at n=20: **14/20
 here, 11/20 on main** (its input is unchanged too). Frontier: S3, S10, S11,
 S12 5/5, S14 4/5, S13 0/5 (the brief misses the counts, as before).
 
+**Combined run (2026-11-10), this branch on top of #159, #158 and #140's cases**,
+the three changes gated separately before: every plan group above its floor
+(golden 391/420, cross 139/140, ref 78/80, control 156/180, memory 239/240,
+knowledge 60/60, hard 20/20, self 99/100 first-try 47, mixed 185/200, long
+153/160, stale 100/100 first-try 100). Session gate all 5/5 except S16 4/5,
+M3 and S6 both 5/5; frontier S3, S10, S11, S12 5/5, S14 and S15 4/5, S13 0/5
+(as before); claims 124/125 backed.
+
 ## Fleet smoke (#143)
 
 `backend/tests/test_fleet_smoke.py`: S2, S3, S9 and S15 through conductor
