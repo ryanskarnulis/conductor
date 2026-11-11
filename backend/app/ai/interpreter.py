@@ -66,9 +66,12 @@ already run; the plan ends after the group.
 **No plan, no guess** (#75). A plan the validator still refuses after the
 compiler's repair, or one with a ``{sN}`` no step can name, gets one more
 round (:func:`compiler.repair_turn`). Still nothing runnable: code asks which
-app was meant when the tries disagreed on it, else says plainly it couldn't
-put the request together. A model outage is a failed turn (502), never a
-question.
+app was meant when the tries disagreed on it; else, for a request the planner
+never shaped into steps (#146), files a ``think`` for the person's own words,
+as a planner-planned one is filed, and says it is thinking it over; else (the
+lane off, an answer to a waiting question, a yes with nothing waiting) says
+plainly it couldn't put the request together. A model outage is a failed turn
+(502), never a question and never a think.
 
 For a slow plan (one that asks an app) code speaks an honest ack as soon as the
 plan is valid: what's about to happen, never what's done.
@@ -154,6 +157,8 @@ _CONFIRM_TOOL = "confirm"
 UNPLANNED = "I couldn't put that together. Try it in two parts?"
 ONE_CONTROL = "I can only undo, cancel or change one thing at a time. Say them one by one?"
 THINK_OFF = "I can't think that through here: the thinking model is switched off."
+# Code's lead when it files the think itself (#146); the think's own line follows.
+UNPLANNED_THINKS = "I couldn't put that together as steps."
 # What a control step did, as the reason the rest of its plan didn't run.
 _ACTED_ON = {"cancel": "cancelled", "amend": "changed", "undo": "undone"}
 
@@ -339,7 +344,7 @@ class Interpreter:
                 note="; ".join(compiled.problems)[:500] or None,
                 repaired=compiled.repaired,
             )
-            return self._unplanned(state, compiled)
+            return self._unplanned(state, compiled, waiting=checks.confirmable or checks.resumable)
         body = plans.dump(plan)
         confirm_app = (gate.app if gate else None) or (pending.app if pending else None)
         logger.info(
@@ -440,11 +445,18 @@ class Interpreter:
             raise self._rt.failed("internal_error", f"agent run crashed: {exc}", [], []) from exc
         return compiled
 
-    def _unplanned(self, state: _Run, compiled: compiler.Compiled) -> AgentRunResult:
+    def _unplanned(
+        self, state: _Run, compiled: compiler.Compiled, *, waiting: bool
+    ) -> AgentRunResult:
         """No plan code can run, after every repair (#75): code asks which app
-        was meant when the tries disagreed on it, else says it couldn't put
-        the request together. Nothing runs and nothing is guessed."""
+        was meant when the tries disagreed on it; else, when nothing waits on
+        the person and the words are a request the planner never shaped into
+        steps, hands them to a think (#146); else says it couldn't put the
+        request together. Nothing runs and nothing is guessed."""
         question = clarifying(compiled.raw)
+        if question is None and not waiting and not answering(compiled.raw):
+            if get_settings().conductor_think and not _stopped(state.stop):
+                return self._think_unplanned(state, compiled)
         path = "code:clarify" if question else "code:unplanned"
         logger.info("plan_unplanned", problems=compiled.problems, clarify=question is not None)
         state.trace.narration = {"path": path, "appended": [], "model_calls": 0}
@@ -794,18 +806,40 @@ class Interpreter:
             state.dropped = []  # still in the paused plan: said when it gets there
         return self._finish(state, turn, [])
 
+    def _think_unplanned(self, state: _Run, compiled: compiler.Compiled) -> AgentRunResult:
+        """A request no round could shape into a plan (#146): the person's own
+        words go to the background as a think, through the same path a planned
+        one takes. The ledger plan stays ``invalid`` (the planner wrote none);
+        the reply says it is thinking it over, never that anything ran."""
+        step = plans.Think(id="s1", do="think", problem=state.words, inputs=[])
+        turn_events.plan({"steps": [step.model_dump()]}, 0)
+        why = "; ".join(compiled.problems)[:350] or "no plan"
+        logger.info("plan_unplanned_to_think", problems=compiled.problems)
+        return self._think(
+            state,
+            state.plan or TurnPlan(status="invalid"),
+            step,
+            {},
+            lead=UNPLANNED_THINKS,
+            why=f"no plan ({why})",
+        )
+
     def _think(
         self,
         state: _Run,
         turn: TurnPlan,
         step: plans.Think,
         values: dict[str, dataflow.Value],
+        *,
+        lead: str = "",
+        why: str | None = None,
     ) -> AgentRunResult:
         """Hand a think to the background (#78): its record carries the job
         and what its inputs found; the reply is code's, at once. The thinker
         runs it on the 26B later; nothing here calls a model. The plan ends
         here: steps after it are not run, and said (#75). With the lane off
-        the think is not run either, and code says so."""
+        the think is not run either, and code says so. ``lead`` opens the reply
+        and ``why`` the plan's note when code filed the think itself (#146)."""
         record = think.record(step, state.found, values)
         off = not get_settings().conductor_think
         if off:
@@ -831,7 +865,12 @@ class Interpreter:
             reply = narrator.fit(f"{line} {THINK_OFF}".strip(), state.trace.surface)
             return self._rt.finish("completed", reply, state.records, state.messages)
         ref = think.ref_of(record)
-        turn.note = f"thinking in the background ({ref})"
+        turn.note = (
+            f"{why}; thinking in the background ({ref})"
+            if why
+            else (f"thinking in the background ({ref})")
+        )
+        line = f"{lead} {line}".strip()
         logger.info("plan_think_detached", ref=ref, inputs=list(step.inputs))
         reply = think.thinking_reply(line, state.trace.surface)
         state.trace.narration = {"path": "code:think", "appended": [], "model_calls": 0}
@@ -1192,6 +1231,25 @@ def _refusal(
     if not confirms:
         return f"outside text from {source} can't go to {step.app}, which doesn't confirm changes"
     return None
+
+
+def answering(raws: Sequence[str]) -> bool:
+    """Whether any try read the words as an answer or a control (#146): a
+    resume, a confirm, or a cancel, amend or undo. Those fail on what's
+    waiting, not on how hard the request is, so there is nothing to think
+    over; code says it couldn't put that together."""
+    for raw in raws:
+        try:
+            plan = plans.parse(raw)
+        except ValueError:
+            continue
+        if isinstance(plan, plans.Resume):
+            return True
+        if isinstance(plan, plans.StepPlan) and any(
+            isinstance(step, plans.Confirm) or step.do in plans.CONTROL_KINDS for step in plan.steps
+        ):
+            return True
+    return False
 
 
 def clarifying(raws: Sequence[str]) -> str | None:
