@@ -196,6 +196,8 @@ def close_turn(
     # Memory (#80): index the ended turn (and any backlog), on its own, so a
     # failure costs neither the turn nor its journal.
     _safely(db, "ledger_memory_index_failed", lambda: memory_index.index_pending(db))
+    # And its meaning (#147): short timeouts, and what fails waits for a later close.
+    _safely(db, "ledger_memory_embed_failed", lambda: memory_index.embed_pending(db))
     logger.info(
         "ledger_turn_closed",
         turn_id=turn.id,

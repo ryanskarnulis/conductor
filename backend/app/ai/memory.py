@@ -24,10 +24,11 @@ same entries.
 from __future__ import annotations
 
 import re
+import statistics
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
+from typing import Any, TypeVar
 
 from app import clock
 
@@ -221,6 +222,46 @@ def _names(refs: Sequence[Mapping[str, Any]]) -> str:
 def _clip(text: str, limit: int) -> str:
     flat = " ".join(text.split())
     return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+
+
+# --- meaning (#147) ------------------------------------------------------------------------
+
+# Raw cosines from the embeddings service are compressed (most turns score
+# 0.55-0.65 against any query), so a turn counts on meaning alone only when it
+# stands this far above the median cosine of the turns searched: its lift
+# (PCC's gather). Set from the paraphrase cases and unrelated controls in
+# ``tests/recall_cases.py`` against the real service (its docstring has the
+# numbers): every control under it, the nearest near miss at +0.16.
+LIFT_ALONE = 0.18
+# Below this many embedded turns a median says nothing: words alone.
+MIN_VECTOR_CORPUS = 5
+# Reciprocal rank fusion's constant (the usual 60, as PCC and chess).
+RRF_K = 60
+
+K = TypeVar("K")
+
+
+def meaning_text(said: str, titles: Iterable[str]) -> str:
+    """What a turn is embedded as: the person's words, then the titles its
+    receipts touched (the same things :func:`terms` indexes it on)."""
+    named = [" ".join(title.split()) for title in titles if title and title.strip()]
+    return ". ".join(part for part in (" ".join(said.split()), ", ".join(named)) if part)
+
+
+def lifts(cosines: Mapping[int, float]) -> dict[int, float]:
+    """Each cosine minus the median of them all."""
+    median = statistics.median(cosines.values())
+    return {key: cosine - median for key, cosine in cosines.items()}
+
+
+def fuse(*rankings: Sequence[K]) -> dict[K, float]:
+    """Reciprocal rank fusion: each key's summed ``1 / (RRF_K + rank)`` over
+    the rankings it is in (best first). It orders; it never decides what counts."""
+    fused: dict[K, float] = {}
+    for ranking in rankings:
+        for rank, key in enumerate(ranking, start=1):
+            fused[key] = fused.get(key, 0.0) + 1 / (RRF_K + rank)
+    return fused
 
 
 # --- resolving a reference ---------------------------------------------------------------

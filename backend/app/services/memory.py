@@ -24,9 +24,17 @@ one entity when one clearly answers it. **Matches** (:func:`matches`) are the
 state block's leads from earlier conversations for words the person just
 used, only when they point back at something.
 
+**Meaning** (#147, :mod:`app.services.turn_vectors`): each indexed turn is
+also embedded as it closes (:func:`embed_pending`), and recall and matches
+rank by meaning beside shared words, fused: a turn found by either counts, but
+on meaning alone only when it clears :data:`app.ai.memory.LIFT_ALONE`. Meaning
+only ranks: ``{sN}`` is still the entity the words resolve. With the service
+off or down, words alone.
+
 **Forgetting** (#81, :func:`unindex`): a turn whose saved fact the person
 forgot leaves the index for good: its words come off its topic and off the
-entities it touched, and recall, matches and the replays skip it.
+entities it touched, its vector is deleted, and recall, matches and the
+replays skip it.
 
 Bounded: every read scans a fixed window, so a turn's cost never grows with the
 ledger.
@@ -43,7 +51,8 @@ import structlog
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.ai import memory
+from app.ai import facts, memory
+from app.ai.embeddings import BATCH_SIZE, BATCH_TIMEOUT, INDEX_TIMEOUT, document_text
 from app.ai.memory import Candidate, Found, Hit, Recalled
 from app.ai.recall import points_back
 from app.ai.state_block import Entity, Match
@@ -56,8 +65,10 @@ from app.db.models import (
     LedgerTopic,
     LedgerTouch,
     LedgerTurn,
+    LedgerTurnVector,
     utcnow,
 )
+from app.services import turn_vectors
 
 logger = structlog.get_logger(__name__)
 
@@ -78,6 +89,10 @@ ENTITIES_SCANNED = 500
 MAX_MATCHES = 3
 # Best-scored entities checked for a last turn in another conversation.
 MATCHES_LOOKED_AT = 20
+# Turns embedded as one closes: the newest not yet embedded, one request.
+EMBED_AT_CLOSE = 8
+# Touched titles a turn is embedded with (a list read touches dozens).
+TITLES_EMBEDDED = 5
 
 _SEEN = ("done", "looked_up")
 
@@ -232,6 +247,66 @@ def _grow(db: Session, topic_id: int | None, words: set[str], *, start: bool = F
     return topic.id
 
 
+def embed_pending(
+    db: Session,
+    *,
+    limit: int = EMBED_AT_CLOSE,
+    oldest_first: bool = False,
+    patient: bool = False,
+) -> int | None:
+    """Embed indexed turns that have no vector yet (#147), newest first (the
+    backfill: ``oldest_first``, ``patient``); how many, or ``None`` when the
+    service couldn't. Never an incognito, forgotten or wordless turn, nor one
+    in a trashed conversation: those are never sent."""
+    turns = (
+        db.execute(
+            select(LedgerTurn)
+            .join(Conversation, Conversation.id == LedgerTurn.conversation_id)
+            .outerjoin(LedgerTurnVector, LedgerTurnVector.turn_id == LedgerTurn.id)
+            .where(
+                LedgerTurnVector.turn_id.is_(None),
+                LedgerTurn.status == "ended",
+                LedgerTurn.terms.is_not(None),
+                func.json_array_length(LedgerTurn.terms) > 0,
+                LedgerTurn.forgotten_at.is_(None),
+                LedgerTurn.incognito.is_(False),
+                Conversation.deleted_at.is_(None),
+            )
+            .order_by(LedgerTurn.id if oldest_first else LedgerTurn.id.desc())
+            .limit(limit)
+        )
+        .scalars()
+        .all()
+    )
+    if not turns:
+        return 0
+    touched = _touched(db, [turn.id for turn in turns])
+    texts = [document_text(_meaning_of(turn, touched.get(turn.id, []))) for turn in turns]
+    done = 0
+    for start in range(0, len(turns), BATCH_SIZE):
+        embedded = turn_vectors.embed(
+            texts[start : start + BATCH_SIZE],
+            timeout=BATCH_TIMEOUT if patient else INDEX_TIMEOUT,
+            patient=patient,
+        )
+        if embedded is None:
+            break
+        for turn, vector in zip(turns[start : start + BATCH_SIZE], embedded.vectors, strict=True):
+            turn_vectors.store(db, turn.id, embedded.model, vector)
+            done += 1
+    if done:
+        db.flush()
+        logger.info("memory_embedded", turns=done)
+    return done if done else None
+
+
+def _meaning_of(turn: LedgerTurn, touched: Sequence[_Touched]) -> str:
+    """The turn as embedded: what :func:`_index` indexed it on, as text."""
+    said = turn.words if turn.kind != "job" else ""
+    titles = list(dict.fromkeys(item.title for item in touched if item.title))
+    return memory.meaning_text(said, titles[:TITLES_EMBEDDED])
+
+
 def unindex(db: Session, turn_id: int) -> None:
     """Take a turn out of memory (#81): marked forgotten, so it is never
     indexed, recalled or replayed again; the words it added come off its
@@ -256,6 +331,7 @@ def unindex(db: Session, turn_id: int) -> None:
             item.entity.terms = _less(item.entity.terms, said - own) or None
     turn.terms = []
     turn.topic_id = None
+    turn_vectors.delete(db, turn.id)
     quoting = db.execute(
         select(LedgerReceipt).where(LedgerReceipt.cites_turn_id == turn.id)
     ).scalars()
@@ -313,13 +389,34 @@ def recall(db: Session, query: str, *, limit: int = memory.MAX_HITS) -> Recalled
         points = 2 * shared + (1 if turn.topic_id in scope else 0)
         if points:
             scored[turn.id] = (points, turn, title)
-    ranked = sorted(scored.values(), key=lambda item: (-item[0], -item[1].id))[:limit]
+    found_by: dict[int, tuple[LedgerTurn, str | None]] = {
+        turn_id: (turn, title) for turn_id, (_, turn, title) in scored.items()
+    }
+    order = [turn_id for turn_id, _ in sorted(scored.items(), key=lambda i: (-i[1][0], -i[0]))]
+    meaning = _meaning(db, query)
+    alone: list[int] = []
+    if meaning is not None:
+        # Both searches, ranked together: a turn found by either counts, by
+        # meaning alone only when it stands clear of the rest (#147).
+        lifted = memory.lifts(meaning)
+        alone = [
+            turn_id
+            for turn_id, lift in lifted.items()
+            if lift >= memory.LIFT_ALONE and turn_id not in found_by
+        ]
+        if alone:
+            for turn, title in db.execute(live.where(LedgerTurn.id.in_(alone))).all():
+                if turn.terms:
+                    found_by[turn.id] = (turn, title)
+        fused = memory.fuse(order, sorted(meaning, key=lambda t: (-meaning[t], -t)))
+        order = sorted(found_by, key=lambda t: (-fused.get(t, 0.0), -t))
+    ranked = [found_by[turn_id] for turn_id in order[:limit]]
     if not ranked:
         return Recalled(query)
-    touched = _touched(db, [turn.id for _, turn, _ in ranked])
+    touched = _touched(db, [turn.id for turn, _ in ranked])
     hits: list[Hit] = []
     candidates: dict[tuple[str, str, str], Candidate] = {}
-    for _, turn, title in ranked:
+    for turn, title in ranked:
         items = touched.get(turn.id, [])
         matching = [
             item for item in items if memory.score(wanted, item.entity.terms, item.entity.kind) > 0
@@ -347,8 +444,23 @@ def recall(db: Session, query: str, *, limit: int = memory.MAX_HITS) -> Recalled
             )
         )
     best = memory.best(list(candidates.values()))
-    logger.info("memory_recalled", hits=len(hits), resolved=best is not None, topics=len(scope))
+    logger.info(
+        "memory_recalled",
+        hits=len(hits),
+        resolved=best is not None,
+        topics=len(scope),
+        source="words" if meaning is None else "hybrid",
+        by_meaning_alone=len([turn for turn, _ in ranked if turn.id in alone]),
+    )
     return Recalled(query, tuple(hits), best)
+
+
+def _meaning(db: Session, text: str) -> dict[int, float] | None:
+    """Turns' cosines with ``text`` (#147), or ``None`` for words alone. A
+    request to forget something is never sent: its words are on their way out."""
+    if facts.parse(text).kind == "forget":
+        return None
+    return turn_vectors.cosines(db, text)
 
 
 def _topics_in_scope(db: Session, wanted: set[str]) -> set[int]:
@@ -410,7 +522,7 @@ def matches(
     ]
     scored.sort(key=lambda item: (-item[0], -_aware(item[1].last_seen_at).timestamp()))
     found: list[Match] = []
-    for _, entity in scored[:MATCHES_LOOKED_AT]:
+    for entity in _with_meaning(db, words, [entity for _, entity in scored])[:MATCHES_LOOKED_AT]:
         last = _last_turn(db, entity.id)
         if last is None or (
             last.conversation_id == conversation_id
@@ -427,6 +539,37 @@ def matches(
         if len(found) == limit:
             break
     return found
+
+
+def _with_meaning(db: Session, words: str, by_words: list[LedgerEntity]) -> list[LedgerEntity]:
+    """The word-matched entities, and those the turns nearest ``words`` in
+    meaning touched (#147), ranked together. An entity found by meaning alone
+    counts only when one of its turns clears :data:`app.ai.memory.LIFT_ALONE`."""
+    meaning = _meaning(db, words)
+    if meaning is None:
+        return by_words
+    lifted = memory.lifts(meaning)
+    nearest = sorted(meaning, key=lambda t: (-meaning[t], -t))[:MATCHES_LOOKED_AT]
+    entities = {entity.id: entity for entity in by_words}
+    best_lift: dict[int, float] = {}
+    for turn_id, items in _touched(db, nearest).items():
+        for item in items:
+            entity = item.entity
+            if item.crowd > NAMED_PER_RECEIPT or not entity.title or entity.kind.endswith("job"):
+                continue
+            if lifted[turn_id] > best_lift.get(entity.id, float("-inf")):
+                best_lift[entity.id] = lifted[turn_id]
+                entities.setdefault(entity.id, entity)
+    by_meaning = sorted(best_lift, key=lambda e: (-best_lift[e], -e))
+    fused = memory.fuse([entity.id for entity in by_words], by_meaning)
+    counted = {entity.id for entity in by_words} | {
+        entity_id for entity_id, lift in best_lift.items() if lift >= memory.LIFT_ALONE
+    }
+    ranked = sorted(
+        counted,
+        key=lambda e: (-fused.get(e, 0.0), -_aware(entities[e].last_seen_at).timestamp()),
+    )
+    return [entities[entity_id] for entity_id in ranked]
 
 
 def _last_turn(db: Session, entity_id: int) -> LedgerTurn | None:
