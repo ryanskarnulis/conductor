@@ -242,6 +242,10 @@ S2R = Scenario(
 
 def _s3(session: Session) -> None:
     _album_queued(session, "Honey")
+    # Music resolved one album, so its record names it by a release-group id
+    # (music#96): the title the task carries comes from that ref.
+    (queued,) = [r for r in session.world.receipts if r.kind == "queue"]
+    assert queued.detail.get("album_id"), "music queued a download that names no album"
     _weekend_task_titled(session, "honey")
     only_writes(session, {("queue", "honey"), ("create", "honey")})
 
@@ -639,14 +643,26 @@ S14 = Scenario(
 
 
 def _s15(session: Session) -> None:
+    # Real music can't tell which album is "the other" (music#96): it names the
+    # candidates and writes nothing, so the task that would carry the album's
+    # name has none to carry. Honey from S3 stays the only album, the only task.
     _album_queued(session, "Honey")
-    _album_queued(session, "Suddenly")
-    _weekend_task_titled(session, "suddenly")
+    same = session.turn("same")
+    assert not session.writes(same), (
+        "wrote "
+        + ", ".join(f"{r.kind} {r.title!r}" for r in session.writes(same))
+        + " though music couldn't say which album"
+    )
+    reply = _lower(same.reply)
+    assert re.search(r"suddenly|swim|which|link|\?", reply), (
+        "didn't name the albums to pick from or ask which one"
+    )
 
 
 S15 = Scenario(
     "S15",
-    "after S3, 'do the same for their other album': the same two steps for Suddenly",
+    "after S3, 'do the same for their other album': music can't say which, so it names the "
+    "candidates and nothing more is written",
     (Say(_S3_TEXT), Say("do the same for their other album", label="same")),
     (_s15,),
     script=lambda w: [
@@ -655,7 +671,11 @@ S15 = Scenario(
             ask("music", "download the other album by Caribou"),
             ask("tasks", "add a task to sort {s1} this weekend"),
         ),
-        _say("Queued “Suddenly” and added “sort Suddenly” for the weekend."),
+        _say(
+            "Music can't tell which Caribou album is the other one: it has Honey, Suddenly "
+            "and Swim. I haven't added a task, since the album step gave no name to pass on. "
+            "Which one do you want?"
+        ),
     ],
 )
 
