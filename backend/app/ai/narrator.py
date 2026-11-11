@@ -313,7 +313,12 @@ def _speak(chat: Chat, messages: list[dict[str, Any]]) -> str | None:
     return content
 
 
-def _opening(words: str, records: Sequence[ToolCallRecord], surface: str | None) -> str:
+def opening_header(surface: str | None) -> str:
+    """The user message's fixed start: the length line for the surface, then
+    the receipt's label. It is the same on every call, so it goes first with
+    the system prompt, and the server's prompt cache (reused up to the first
+    byte that differs, #163) reaches this far; the receipt and then the words,
+    which vary on every call, follow."""
     length = (
         _LENGTH["spoken"]
         if surface in SPOKEN
@@ -321,8 +326,12 @@ def _opening(words: str, records: Sequence[ToolCallRecord], surface: str | None)
         if surface == "phone"
         else _LENGTH["screen"]
     )
+    return f"{length}\n\nReceipts:\n"
+
+
+def _opening(words: str, records: Sequence[ToolCallRecord], surface: str | None) -> str:
     receipt = json.dumps({"steps": receipt_steps(records)}, indent=1, ensure_ascii=False)
-    return f"The person said: {words}\n\nReceipts:\n{receipt}\n\n{length}"
+    return f"{opening_header(surface)}{receipt}\n\nThe person said: {words}"
 
 
 def receipt_steps(records: Sequence[ToolCallRecord]) -> list[dict[str, Any]]:

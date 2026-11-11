@@ -194,7 +194,7 @@ def _narrator_receipt(provider: ScriptedProvider) -> dict[str, Any]:
     for request in provider.requests:
         for message in request["messages"]:
             content = str(message["content"])
-            if content.startswith("The person said:") and "Receipts:\n" in content:
+            if "\n\nThe person said:" in content and "Receipts:\n" in content:
                 receipts = content.split("Receipts:\n", 1)[1].rsplit("\n\n", 1)[0]
                 return dict(json.loads(receipts))
     raise AssertionError("the narrator was never called")
