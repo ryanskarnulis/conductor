@@ -35,9 +35,11 @@ let unlocked = false
 /** Object URL of the clip currently loaded in the shared element. */
 let liveUrl: string | null = null
 /** How one playback ended. `ended` played to the end; `error` failed while
- * playing; `interrupted` was cut off by a newer clip; `blocked` was refused
- * by the browser (autoplay); `no_audio` never got a clip (voice unavailable,
- * a transport failure); `timeout` gave up at the speak deadline. */
+ * playing; `interrupted` was cut off before it ended — by a newer clip, or by
+ * stopPlayback() (mid-clip or while its audio was still being fetched);
+ * `blocked` was refused by the browser (autoplay); `no_audio` never got a clip
+ * (voice unavailable, a transport failure); `timeout` gave up at the speak
+ * deadline. */
 export type PlaybackOutcome =
   | 'ended'
   | 'error'
@@ -45,6 +47,22 @@ export type PlaybackOutcome =
   | 'blocked'
   | 'no_audio'
   | 'timeout'
+
+/** How much of a reply the listener heard before it was cut off by
+ * stopPlayback() (a barge-in, a mute) — what a host sends along with the next
+ * utterance so the agent does not assume the rest was heard. Read it once with
+ * takeHeard(). A reply that played to the end has no report. */
+export interface Heard {
+  /** Milliseconds of the reply that played before the cut (0 if none did). */
+  playedMs: number
+  /** Length of the whole reply audio, or null when the browser can't say. */
+  totalMs: number | null
+  /** Estimated characters of the reply text heard: text length × played/total,
+   * rounded. null only when audio played but its total length is unknown. */
+  heardChars: number | null
+  /** Length of the reply text, so `heardChars` of `totalChars` was heard. */
+  totalChars: number
+}
 
 /** Optional observer of one playback, for latency measurement. `id` rides the
  * speak request as `X-Interaction-Id`, so the host's server can join its own
@@ -62,6 +80,13 @@ let currentPlayback: Promise<PlaybackOutcome | void> = Promise.resolve()
 /** Settles the promise of the clip currently in the element; called when a
  * new clip interrupts it, because its own onended will never fire. */
 let settleInterrupted: (() => void) | null = null
+/** Cancels each speak request still fetching its clip; stopPlayback() runs
+ * them all, since any of them would otherwise start playing when it lands. */
+const pendingStops = new Set<() => void>()
+/** Text of the clip currently loaded in the shared element, for heardReport. */
+let liveText = ''
+/** The report of the reply stopPlayback() last cut, until read or superseded. */
+let heardReport: Heard | null = null
 
 function element(): HTMLAudioElement {
   if (!sharedAudio) sharedAudio = new Audio()
@@ -109,6 +134,58 @@ export function playText(text: string, observer?: PlaybackObserver): Promise<Pla
 }
 
 /**
+ * The heard-up-to report of the reply stopPlayback() last cut short, or null
+ * when there is none — and then clears it, so each cut is reported once, with
+ * the next utterance. Null for a reply that played to the end, failed, or was
+ * replaced by a newer one; a report is also dropped when the next reply's clip
+ * loads, since the next utterance answers that one. Hosts that ignore it lose
+ * nothing.
+ */
+export function takeHeard(): Heard | null {
+  const report = heardReport
+  heardReport = null
+  return report
+}
+
+function heardOf(text: string, playedMs: number, totalMs: number | null): Heard {
+  const totalChars = text.length
+  let heardChars: number | null = null
+  if (playedMs <= 0) heardChars = 0
+  else if (totalMs !== null) {
+    heardChars = Math.min(totalChars, Math.round((totalChars * playedMs) / totalMs))
+  }
+  return { playedMs, totalMs, heardChars, totalChars }
+}
+
+/**
+ * Stop speaking now: cut off the clip that is playing and cancel any clip
+ * still being fetched. Every playback this cuts short resolves `interrupted`,
+ * so audioIdle() resolves and a hands-free loop awaiting it reopens the mic.
+ * The shared element is paused, not replaced, so its mobile-autoplay unlock
+ * survives and the next playText() plays normally. No-op when nothing is
+ * playing or pending — in particular it leaves an in-progress unlockAudio()
+ * alone, since pausing that silent clip would void the unlock.
+ *
+ * What was cut is recorded for takeHeard(): the live clip with how much of it
+ * played, or a clip still being fetched as nothing heard.
+ */
+export function stopPlayback(): void {
+  if (liveUrl !== null) {
+    const el = element()
+    const playedMs = Math.round((Number.isFinite(el.currentTime) ? el.currentTime : 0) * 1000)
+    const totalMs =
+      Number.isFinite(el.duration) && el.duration > 0 ? Math.round(el.duration * 1000) : null
+    heardReport = heardOf(liveText, playedMs, totalMs)
+  }
+  // Requests still fetching are newer than the live clip, so they win.
+  for (const stop of [...pendingStops]) stop()
+  if (liveUrl === null) return
+  element().pause()
+  // finish() revokes the live URL and clears the settle hook.
+  settleInterrupted?.()
+}
+
+/**
  * Request the audio for `text` and hand back an object URL for it, or null
  * when voice is unavailable (503/502) or the deadline has already passed.
  */
@@ -143,29 +220,44 @@ async function speak(text: string, observer?: PlaybackObserver): Promise<Playbac
   // audioIdle() never reopens the mic. So the deadline resolves the race with
   // "no clip" — the same best-effort completion every other failure produces —
   // rather than rejecting, and it settles the wait even if the request itself
-  // stays pending forever.
+  // stays pending forever. stopPlayback() cuts the wait short the same way.
   const controller = new AbortController()
-  let expire = () => {}
-  let timedOut = false
-  const expired = new Promise<null>((resolve) => {
-    expire = () => resolve(null)
+  let release = () => {}
+  /** Why the wait was cut short — the deadline or a stop — once it was. */
+  let cut: PlaybackOutcome | null = null
+  const cutShort = new Promise<null>((resolve) => {
+    release = () => resolve(null)
   })
-  const deadline = setTimeout(() => {
-    timedOut = true
+  const cutOff = (outcome: PlaybackOutcome) => {
+    if (cut !== null) return
+    cut = outcome
     controller.abort()
-    expire()
-  }, SPEAK_DEADLINE_MS)
+    release()
+  }
+  const deadline = setTimeout(() => cutOff('timeout'), SPEAK_DEADLINE_MS)
+  const stop = () => {
+    if (cut !== null) return
+    heardReport = heardOf(text, 0, null)
+    cutOff('interrupted')
+  }
+  pendingStops.add(stop)
 
   let url: string
   try {
-    const clip = await Promise.race([loadClip(text, controller.signal, observer?.id), expired])
-    if (clip === null) return timedOut ? 'timeout' : 'no_audio'
+    const clip = await Promise.race([loadClip(text, controller.signal, observer?.id), cutShort])
+    if (clip !== null && cut !== null) {
+      // The clip landed in the same tick it was given up on; nobody wants it.
+      URL.revokeObjectURL(clip)
+    }
+    if (clip === null || cut !== null) return cut ?? 'no_audio'
     url = clip
   } catch {
-    return timedOut ? 'timeout' : 'no_audio'
+    return cut ?? 'no_audio'
   } finally {
-    // Every exit — played, unavailable, failed, expired — drops the timer.
+    // Every exit — played, unavailable, failed, expired, stopped — drops the
+    // timer and the stop hook.
     clearTimeout(deadline)
+    pendingStops.delete(stop)
   }
   const el = element()
   // A new clip interrupts whatever was loaded: settle the old clip's promise
@@ -174,6 +266,9 @@ async function speak(text: string, observer?: PlaybackObserver): Promise<Playbac
   settleInterrupted?.()
   if (liveUrl) URL.revokeObjectURL(liveUrl)
   liveUrl = url
+  liveText = text
+  // The next utterance answers this reply, not an earlier one that was cut.
+  heardReport = null
   el.src = url
   observer?.onReady?.()
   return new Promise<PlaybackOutcome>((resolve) => {
