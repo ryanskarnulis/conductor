@@ -166,7 +166,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   The interpreter makes one plain GET (`app/fleet/glance.py`: declared path,
   no forwarded headers, 2s/5s timeouts, no redirects, no model, no delegate
   budget) and files `look_<app>` with a `looked_up` receipt built by code
-  (`app/ai/glance.py`; outside titles cleaned and marked) and no writes. It is
+  (`app/ai/glance.py`; outside titles cleaned and marked; a ref keeps its
+  other scalar fields, bounded and cleaned the same way, and a last-changed
+  time such as chess's `last_move_at` becomes a stated age on the household
+  clock, "last move 19 days ago", #161) and no writes. It is
   not a registry tool. A glance that can't
   be read asks the same app the person's words, but only for a plain question,
   a plan whose words are the request, an app with an agent and no ask to it
