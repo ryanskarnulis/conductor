@@ -79,9 +79,31 @@ _REMEMBER = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _TRAILING = re.compile(
-    r"^(?P<fact>.+?)[\s,;:.-]+(?:please\s+)?(?:remember|note|keep in mind)\s+(?:that|this|it)"
-    r"\W*$",
+    r"^(?P<fact>.+?)[\s,;:.-]+(?:please\s+)?(?:(?:remember|note|keep in mind)\s+(?:that|this|it)|"
+    r"keep\s+(?:that|this|it)\s+in\s+mind)\W*$",
     re.IGNORECASE | re.DOTALL,
+)
+# The person's own "remember" anywhere in what they said (#159), not just at
+# the start: "add a task to buy tofu and keep in mind that …".
+_SAY = re.compile(
+    r"\b(?:remember|keep in mind|don'?t forget|don’t forget|do not forget|make a note)\b"
+    r"(?:\s+(?:of|that|this|for me))?[\s,:;-]*",
+    re.IGNORECASE,
+)
+# Words before a "remember" that make it no request: "I can't remember", "if you remember".
+_NOT_ASKED = re.compile(
+    r"\b(?:can'?t|can’t|cannot|couldn'?t|couldn’t|didn'?t|didn’t|don'?t|don’t|do not|not|never|"
+    r"if you|do you|did you|i|we|they|he|she)\s+$",
+    re.IGNORECASE,
+)
+# Where a sentence ends.
+_SENTENCE_END = re.compile(r"[.!?;]+(?=\s|$)|\n")
+# Where another ask starts after a fact: "…, and add a task", "… then could you".
+_NEXT_ASK = re.compile(
+    r"[\s,]+(?:(?:and|then|also|so|but)\s+)+(?:please\s+)?(?:(?:can|could|would|will)\s+you\b|"
+    r"please\b|(?:add|put|create|schedule|book|remind|download|queue|open|start|show|tell|text|"
+    r"email|send|cancel|delete|remember|keep in mind|don'?t forget|don’t forget|make a note)\b)",
+    re.IGNORECASE,
 )
 _FORGET = re.compile(
     _LEAD + r"(?:forget|delete|remove|erase|unremember)\b(?:\s+(?:about|that|this|it))?"
@@ -134,21 +156,75 @@ def _clean(text: str) -> str:
 
 
 def own_words(request: str, words: str) -> str | None:
-    """The fact to keep, exactly as the person said it: the planner's version
-    if it appears word for word in what they said, else what follows their
-    own "remember". ``None`` when their words hold no fact."""
-    candidates = []
+    """The fact to keep, exactly as the person said it, whatever the plan's
+    request says (#159: told "keep in mind that …", the 12B sometimes wrote
+    its prompt's example). When their words hold their own "remember", the
+    fact is what follows it: the planner's version only if it is word for
+    word inside that (it split off another ask), else code's cut, up to the
+    end of the sentence or the next ask. With no "remember" of theirs, the
+    planner's version if they said it word for word. ``None`` when their
+    words hold no fact."""
     asked = parse(request)
-    if asked.kind == "remember" and asked.text:
-        candidates.append(asked.text)
-    said = parse(words)
-    if said.kind == "remember" and said.text:
-        candidates.append(said.text)
-    for candidate in candidates:
-        found = literal(candidate, words)
-        if found:
-            return found
-    return None
+    planned = asked.text if asked.kind == "remember" else ""
+    found = _said(words)
+    span = _find(planned, words) if planned else None
+    if not found:
+        return words[span[0] : span[1]] if span else None
+    if span is not None:
+        for _, start, end in found:
+            if start <= span[0] and span[1] <= end:
+                return words[span[0] : span[1]]
+    return found[0][0]
+
+
+def said(words: str) -> list[str]:
+    """The facts the person's words hold after their own "remember" (or
+    "keep in mind", "don't forget", …), in order, each cut at the end of its
+    sentence or where another ask starts, in their spelling."""
+    return [fact for fact, _, _ in _said(words)]
+
+
+def _said(words: str) -> list[tuple[str, int, int]]:
+    """Each fact the person said, with where the rest of its sentence lies
+    in ``words`` (start, end): what a planner's cut of it must sit inside."""
+    found: list[tuple[str, int, int]] = []
+    start = 0
+    for stop in [*_SENTENCE_END.finditer(words), None]:
+        end = len(words) if stop is None else stop.end()
+        sentence, offset = words[start:end], start
+        start = end
+        if not sentence.strip() or sentence.rstrip().endswith("?"):
+            continue
+        at = 0
+        lead = parse(sentence)
+        if lead.kind == "remember" and lead.text:
+            span = _find(lead.text, sentence)
+            if span is not None:
+                cut = _cut(sentence, span[0], span[1])
+                if cut is not None:
+                    found.append((cut[0], offset + span[0], offset + len(sentence)))
+                    at = cut[1]
+        for say in _SAY.finditer(sentence, at):
+            if _NOT_ASKED.search(sentence[: say.start()]):
+                continue
+            cut = _cut(sentence, say.end(), len(sentence))
+            if cut is not None:
+                found.append((cut[0], offset + say.end(), offset + len(sentence)))
+    return found
+
+
+def _cut(sentence: str, start: int, end: int) -> tuple[str, int] | None:
+    """The fact in ``sentence[start:end]``, up to another ask, cleaned and in
+    the person's spelling; with where the cut fell. ``None`` when empty."""
+    rest = sentence[start:end]
+    after = _NEXT_ASK.search(rest)
+    if after is not None:
+        rest = rest[: after.start()]
+    fact = _clean(rest)
+    span = _find(fact, rest) if fact else None
+    if span is None:
+        return None
+    return rest[span[0] : span[1]], start + len(rest)
 
 
 def forget_target(asked: str, words: str) -> str:
@@ -168,6 +244,12 @@ def forget_target(asked: str, words: str) -> str:
 def literal(text: str, words: str) -> str | None:
     """``text`` as it appears in ``words`` (case, punctuation and spacing
     aside), cut from ``words`` so the person's own spelling is kept."""
+    span = _find(text, words)
+    return words[span[0] : span[1]] if span else None
+
+
+def _find(text: str, words: str) -> tuple[int, int] | None:
+    """Where ``text`` first appears in ``words``, as :func:`literal` reads it."""
     want = [_fold(token) for token in _TOKEN.findall(text)]
     if not want:
         return None
@@ -175,7 +257,7 @@ def literal(text: str, words: str) -> str | None:
     have = [_fold(match.group(0)) for match in found]
     for start in range(len(have) - len(want) + 1):
         if have[start : start + len(want)] == want:
-            return words[found[start].start() : found[start + len(want) - 1].end()]
+            return found[start].start(), found[start + len(want) - 1].end()
     return None
 
 
