@@ -273,6 +273,8 @@ def paused_plan(
 
 # How many of this conversation's turns the self-report reads.
 SELF_REPORT_TURNS = 3
+# How much of the last reply it repeats (#158): a reply runs to a few sentences.
+SELF_REPORT_REPLY_CHARS = 300
 
 # Plain words for the self-report, so the speaker never reads a tool name or a
 # bare "done" as a claim that something was completed (S16).
@@ -302,7 +304,8 @@ _RECEIPT_WORDS = {
 def self_report(db: Session, conversation_id: int, *, since: datetime | None = None) -> str:
     """What conductor did lately and what's still running, from the ledger
     alone, for "what are you doing / what did you just do?" (S16): this
-    conversation's turns since ``since`` (the timeline's window, #82)."""
+    conversation's turns since ``since`` (the timeline's window, #82), and
+    your last reply for "what did you just say?" (#158)."""
     turns = (
         db.execute(
             select(LedgerTurn)
@@ -361,6 +364,12 @@ def self_report(db: Session, conversation_id: int, *, since: datetime | None = N
                 lines.append(f"  - {did}: {action}{what}{undone}")
         if turn.stop_reason and turn.stop_reason != "completed" and turn.kind != JOB_TURN:
             lines.append(f"- the turn ended {turn.stop_reason}")
+        if turn is turns[0] and turn.assistant_message_id is not None:
+            # What you last said (#158), for "what did you just say?": the
+            # newest turn's only, so an older reply never passes as the last.
+            reply = db.get(ConversationMessage, turn.assistant_message_id)
+            if reply is not None and reply.content:
+                lines.append(f'- you said: "{_clip(reply.content, SELF_REPORT_REPLY_CHARS)}"')
     for job in running_jobs(db, conversation_id, limit=5):
         if job.app == think.APP:
             lines.append(f"Running: {think.running_line(job.ref, job.title, job.status)}")

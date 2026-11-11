@@ -43,6 +43,10 @@ class M:
     # Saved facts code must send with this ask (#134): the request keeps the
     # words that point at them, and the interpreter attaches them.
     attaches: tuple[str, ...] = ()
+    # (the person's words, the fact) a memory ask must save (#159): code cuts
+    # it from their words, so a request that copies the prompt's example
+    # still passes when the fact saved is theirs.
+    saves: tuple[str, str] | None = None
 
     def matches(self, step: BaseModel) -> bool:
         kinds = (self.do,) if isinstance(self.do, str) else self.do
@@ -67,6 +71,13 @@ class M:
         if self.attaches:
             request = plans.REF.sub(" ", str(getattr(step, "request", "")))
             if facts.related(request, self.attaches) != list(self.attaches):
+                return False
+        if self.saves is not None:
+            request, (words, fact) = str(getattr(step, "request", "")), self.saves
+            if facts.parse(request).kind != "remember":
+                return False
+            saved = facts.own_words(request, words)
+            if saved is None or not facts.same(saved, fact):
                 return False
         return True
 
@@ -439,6 +450,36 @@ CASES: tuple[Case, ...] = (
         state(last=_LAST_S3),
         frozenset({"pcc:task:301", "music:album:55", "last"}),
     ),
+    # The same words with nothing for them (#140): nothing waits, runs or was
+    # done. A cancel, amend or undo is right (code then says there's nothing
+    # to act on), and so is a chat or self answer: neither acts. A confirm
+    # with nothing waiting is the validator's to send back, so "yes" passes
+    # on its repair. A guard against a plan that invents work for an empty
+    # State (#140's narrowed schema did, and wasn't shipped).
+    Case(
+        "yes-nothing-waiting",
+        "yes",
+        (one(M("confirm")), none("chat"), none("status")),
+        "control",
+    ),
+    Case(
+        "cancel-nothing-running",
+        "cancel that",
+        (one(M("cancel")), none("chat"), none("status")),
+        "control",
+    ),
+    Case(
+        "amend-nothing-waiting",
+        "actually make it the first ten instead",
+        (one(M("amend")), none("chat"), none("status")),
+        "control",
+    ),
+    Case(
+        "undo-nothing-done",
+        "undo that",
+        (one(M("undo")), none("chat"), none("status")),
+        "control",
+    ),
     # --- memory ----------------------------------------------------------------------
     Case(
         "s5-garage",
@@ -459,6 +500,78 @@ CASES: tuple[Case, ...] = (
         (one(M("ask", "memory", ("sort music", "sunday"))),),
         "memory",
     ),
+    # Facts that aren't the prompt's example (#159): the case checks the fact
+    # code saves from the person's words, whatever the request copied.
+    Case(
+        "memory-keep-in-mind",
+        "keep in mind that I'm allergic to shellfish",
+        (
+            one(
+                M(
+                    "ask",
+                    "memory",
+                    saves=(
+                        "keep in mind that I'm allergic to shellfish",
+                        "I'm allergic to shellfish",
+                    ),
+                )
+            ),
+        ),
+        "memory",
+    ),
+    Case(
+        "memory-remember-place",
+        "remember that the wifi router is in the hall closet",
+        (
+            one(
+                M(
+                    "ask",
+                    "memory",
+                    saves=(
+                        "remember that the wifi router is in the hall closet",
+                        "the wifi router is in the hall closet",
+                    ),
+                )
+            ),
+        ),
+        "memory",
+    ),
+    Case(
+        "memory-dont-forget",
+        "don't forget the car is due for an oil change in March",
+        (
+            one(
+                M(
+                    "ask",
+                    "memory",
+                    saves=(
+                        "don't forget the car is due for an oil change in March",
+                        "the car is due for an oil change in March",
+                    ),
+                )
+            ),
+        ),
+        "memory",
+    ),
+    Case(
+        "memory-remember-and-ask",
+        "add a task to book the vet and remember that Biscuit is allergic to chicken",
+        (
+            one(
+                M("ask", "tasks", ("vet",), destructive=False),
+                M(
+                    "ask",
+                    "memory",
+                    saves=(
+                        "add a task to book the vet and remember that Biscuit is allergic to chicken",
+                        "Biscuit is allergic to chicken",
+                    ),
+                ),
+                ordered=False,
+            ),
+        ),
+        "memory",
+    ),
     Case(
         "memory-about-me",
         "what do you know about me?",
@@ -472,6 +585,38 @@ CASES: tuple[Case, ...] = (
         (one(M("ask", "memory", ("forget",))),),
         "memory",
         state(facts="the spare key is under the blue pot"),
+    ),
+    # "Forget that" right after saving, as M2 says it (#138): the fact is in
+    # State and this conversation's record. Code takes what to forget from
+    # the words; a request that copies the prompt's example still forgets it.
+    Case(
+        "memory-forget-just-saved",
+        "forget that",
+        (one(M("ask", "memory", ("forget",))),),
+        "memory",
+        state(facts="the recycling goes out on Thursdays")
+        + "\n\n"
+        + str(
+            recall.section(
+                recall.Recall.of(
+                    [
+                        {"role": "user", "content": "remember the recycling goes out on Thursdays"},
+                        {
+                            "role": "assistant",
+                            "content": "Got it: the recycling goes out on Thursdays.",
+                            "tool_calls": [
+                                _call(
+                                    "ask_memory",
+                                    {"message": "remember the recycling goes out on Thursdays"},
+                                    "Remembered “the recycling goes out on Thursdays”. "
+                                    "It's in the memory list.",
+                                ).model_dump()
+                            ],
+                        },
+                    ]
+                )
+            )
+        ),
     ),
     Case(
         "memory-forget-named",
@@ -522,6 +667,33 @@ CASES: tuple[Case, ...] = (
     ),
     Case("status-last", "what did you just do?", (none("status"),), "self", state(last=_LAST_S3)),
     Case("chat-thanks", "thanks!", (none("chat"),), "self"),
+    # What conductor said, and what it reaches (#158): about conductor, never
+    # general knowledge. The speaker answers from the ledger's facts (the last
+    # reply since #158) and the app list.
+    Case(
+        "self-said-just-now",
+        "what did you say just now?",
+        (none("status"),),
+        "self",
+        before(
+            "what did you say just now?",
+            history=[
+                {"role": "user", "content": "add a task to call the plumber on Friday"},
+                {
+                    "role": "assistant",
+                    "content": "Added “Call the plumber” for Friday.",
+                    "tool_calls": [
+                        _call(
+                            "ask_tasks",
+                            {"message": "add a task to call the plumber on Friday"},
+                            "Created task “Call the plumber”, due Friday.",
+                        ).model_dump()
+                    ],
+                },
+            ],
+        ),
+    ),
+    Case("self-apps-reach", "what apps can you reach from here?", (none("status"),), "self"),
     # --- a question about now, over a recalled answer (#127, #122's leak) --------------
     Case(
         "stale-week-recalled",
