@@ -159,9 +159,10 @@ def test_an_over_budget_plan_never_reaches_the_app(fleet: Path) -> None:
     due = ask("tasks", "what's due today?")
     log = run_steps(fleet, [Step("go", plan(due, due, due, due))])
     # The validator refuses a fourth ask to one app, every repair repeats it,
-    # and code says so: nothing was asked (#75).
+    # and code hands it to a think (#146): nothing was asked (#75).
     assert log[0].sends == {} and log[0].planner_calls == 3
-    assert log[0].run is not None and log[0].run.reply == interpreter.UNPLANNED
+    assert log[0].run is not None
+    assert (log[0].run.reply or "").startswith(interpreter.UNPLANNED_THINKS)
 
 
 def test_garbage_then_a_plan_is_repaired_and_runs(fleet: Path) -> None:
