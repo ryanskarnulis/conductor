@@ -121,6 +121,13 @@ class Settings(BaseSettings):
     conductor_trace_path: Path | None = None
     conductor_context_path: Path | None = None
 
+    # --- recall by meaning (shared workspace embeddings service) ------------
+    # ../embeddings/: EmbeddingGemma 2 on 8600, OpenAI /v1/embeddings (#147).
+    # Every recall and state-block match ranks turns by meaning beside shared
+    # words. Off, down or slow: word overlap alone; a turn never waits on it.
+    conductor_embeddings: bool = True
+    embeddings_base_url: str = "http://127.0.0.1:8600/v1"
+
     # --- voice (shared workspace speech service) -----------------------------
     # ../speech/: Speaches STT on 8400, Kokoro-FastAPI TTS on 8410. Env var
     # names are the fleet voice contract's (../agent-standard/voice.md). Unset

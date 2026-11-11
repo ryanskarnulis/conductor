@@ -26,6 +26,7 @@ from app.ai.interpreter import Interpreter
 from app.ai.runtime import Activity
 from app.ai.provider import ChatResult, ProviderRequestError, ProviderResponseError
 from app.api import routes_agent
+from app.config import get_settings
 from app.db.models import LedgerPlan, LedgerTurn
 from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
 from app.fleet.manifests import Fleet, discover_fleet
@@ -543,10 +544,26 @@ def test_a_ref_no_step_can_name_gets_one_more_repair(
 def test_no_runnable_plan_after_the_repairs_is_said_never_guessed(
     run_with: Any, world: World, db_session: Session
 ) -> None:
+    # Since #146 the request goes to the background as a think (tests/test_think.py);
+    # either way nothing runs and nothing is guessed, and the reply claims no more.
+    provider = ScriptedProvider([text_turn("nope"), text_turn("still nope"), text_turn("no")])
+    reply = run_with(provider, "do the thing with the stuff")
+    assert reply["content"].startswith(interpreter_module.UNPLANNED_THINKS)
+    assert len(provider.requests) == 3  # the compile, its repair, and one more round
+    assert [call["tool"] for call in reply["tool_calls"]] == ["think"]
+    assert world.writes() == [] and world.reads == []
+    (compiled,) = _plans(db_session)
+    assert (compiled.status, compiled.acted, compiled.body) == ("invalid", True, None)
+    assert compiled.note is not None and compiled.note.startswith("no plan (not a plan")
+
+
+def test_with_the_lane_off_no_runnable_plan_is_said_never_guessed(
+    run_with: Any, world: World, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "conductor_think", False)
     provider = ScriptedProvider([text_turn("nope"), text_turn("still nope"), text_turn("no")])
     reply = run_with(provider, "do the thing with the stuff")
     assert reply["content"] == interpreter_module.UNPLANNED
-    assert len(provider.requests) == 3  # the compile, its repair, and one more round
     assert reply["tool_calls"] is None
     assert world.writes() == [] and world.reads == []
     (compiled,) = _plans(db_session)
@@ -560,7 +577,7 @@ def test_a_data_flow_plan_that_stays_unrunnable_runs_nothing(
     looked = plan_turn(steps({"do": "look", "app": "tasks"}, ask("tasks", "move {s1} to friday")))
     provider = ScriptedProvider([looked, looked])
     reply = run_with(provider, "move what's due today to friday")
-    assert reply["content"] == interpreter_module.UNPLANNED
+    assert reply["content"].startswith(interpreter_module.UNPLANNED_THINKS)
     assert world.writes() == [] and world.reads == []
     (compiled,) = _plans(db_session)
     assert compiled.status == "invalid" and "gives no name" in (compiled.note or "")

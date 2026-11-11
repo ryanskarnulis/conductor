@@ -1,7 +1,7 @@
 // vendored voice module — canonical: speech/client/frontend/MicButton.tsx (agent-standard/voice.md); re-copy, never edit
 import { useEffect, useRef, useState } from 'react'
 import { transcribe } from './api'
-import { audioIdle, unlockAudio } from './tts'
+import { audioIdle, stopPlayback, takeHeard, unlockAudio, type Heard } from './tts'
 import { createVad, type Vad } from './vad'
 import { ListeningIcon, MicIcon } from './icons'
 import { encodeWav } from './wav'
@@ -10,8 +10,15 @@ export interface MicButtonProps {
   /** Receives the recognized text — the caller sends it down the same
    * pipeline as a typed command. Hands-free mode awaits the returned promise
    * (the agent turn) before listening again. `interactionId` is whatever
-   * `beginUtterance` returned for this utterance, if anything. */
-  onTranscript: (text: string, interactionId?: string) => void | Promise<void>
+   * `beginUtterance` returned for this utterance, if anything. `heard` is
+   * passed only with `bargeIn`, and only when the reply before this utterance
+   * was cut off: how much of it was heard (see `Heard`), so the agent does not
+   * assume the rest was. Callbacks that ignore it work unchanged. */
+  onTranscript: (
+    text: string,
+    interactionId?: string,
+    heard?: Heard,
+  ) => void | Promise<void>
   /** Optional: called the moment an utterance ends (the VAD's end of speech,
    * or the push-to-talk stop) — the start of the player's wait. Whatever id it
    * returns rides the transcription request as `X-Interaction-Id` and comes
@@ -20,6 +27,14 @@ export interface MicButtonProps {
   /** Starting a conversation is pointless while the agent is busy — lock the
    * button. An already-running conversation stays escapable. */
   disabled: boolean
+  /** Opt-in barge-in (default off, which keeps the mic shut while the agent
+   * talks). On, the mic listens over a spoken reply and sustained speech stops
+   * it at once (the minimum is `BARGE_IN_MIN_SPEECH_MS` in vad.ts); the next
+   * utterance then carries the reply's `Heard` report. Relies on the browser's
+   * echo cancellation to keep the agent's own voice out. Hands-free only —
+   * push-to-talk has no live mic to talk over, though it still delivers a
+   * pending report. */
+  bargeIn?: boolean
 }
 
 type MicState =
@@ -69,7 +84,7 @@ const ICONS: Record<MicState, React.ReactNode> = {
  * tap to send). Renders nothing in browsers without MediaRecorder /
  * getUserMedia — voice is an enhancement, the text box always works.
  */
-export function MicButton({ onTranscript, beginUtterance, disabled }: MicButtonProps) {
+export function MicButton({ onTranscript, beginUtterance, disabled, bargeIn }: MicButtonProps) {
   const [micState, setMicState] = useState<MicState>('idle')
   const [error, setError] = useState<string | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
@@ -131,6 +146,8 @@ export function MicButton({ onTranscript, beginUtterance, disabled }: MicButtonP
     if (busyRef.current !== null) return
     busyRef.current = session
     const interactionId = beginUtterance?.()
+    // Whether the mic was already reopened over the reply (barge-in).
+    let listening = false
     try {
       vadRef.current?.pause()
       setMicState('working')
@@ -144,13 +161,24 @@ export function MicButton({ onTranscript, beginUtterance, disabled }: MicButtonP
       }
       if (text.trim()) {
         // The agent turn, then its spoken reply — only when both are done is
-        // it safe to listen again (half-duplex).
-        await onTranscript(text.trim(), interactionId)
+        // it safe to listen for the next utterance (half-duplex), unless
+        // barge-in is on and the mic listens over the reply for a cut-in.
+        const heard = bargeIn ? takeHeard() : null
+        await (heard
+          ? onTranscript(text.trim(), interactionId, heard)
+          : onTranscript(text.trim(), interactionId))
+        // Barge-in: open the mic as the reply starts, so talking over it is
+        // heard. The latch above stays held, so speech picked up now is not
+        // taken as an utterance until the reply has been cut or has ended.
+        if (bargeIn && sessionRef.current === session) {
+          vadRef.current?.resume()
+          listening = true
+        }
         await audioIdle()
         if (sessionRef.current !== session) return
       }
       // Empty transcript: a VAD misfire, not worth nagging about.
-      vadRef.current?.resume()
+      if (!listening) vadRef.current?.resume()
       setMicState('listening')
     } catch {
       // Nothing above is meant to reject — the api client resolves its failures
@@ -185,6 +213,12 @@ export function MicButton({ onTranscript, beginUtterance, disabled }: MicButtonP
       onSpeechEnd: (audio) => {
         if (sessionRef.current === session) void handleUtterance(audio, session)
       },
+      // Sustained speech over a reply: cut it. A no-op when nothing is playing.
+      ...(bargeIn && {
+        onSustainedSpeech: () => {
+          if (sessionRef.current === session) stopPlayback()
+        },
+      }),
       onUnavailable: (reason) => {
         // Surfaced, not swallowed: on a phone this line is the only
         // diagnostic anyone will ever see.
@@ -243,7 +277,10 @@ export function MicButton({ onTranscript, beginUtterance, disabled }: MicButtonP
       if (text === null) {
         setError('Voice input is unavailable.')
       } else if (text.trim()) {
-        void onTranscript(text.trim(), interactionId)
+        const heard = bargeIn ? takeHeard() : null
+        void (heard
+          ? onTranscript(text.trim(), interactionId, heard)
+          : onTranscript(text.trim(), interactionId))
       } else {
         setError("Didn't catch that — try again.")
       }

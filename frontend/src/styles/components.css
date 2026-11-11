@@ -162,3 +162,25 @@ q.cd-job-title{quotes:"“" "”"}
 .cd-choice:disabled{opacity:.55;cursor:default}
 .cd-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 @media (prefers-reduced-motion:reduce){.cd-ref[data-filled="true"]{animation:none}}
+/* Side threads (#139): the header, what it carries, its result in the timeline, the tabs */
+.cd-thhead{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-4) var(--space-5);border-radius:var(--radius);border:1px solid var(--glow);background:var(--surface-soft)}
+.cd-thhead-r{justify-content:space-between}
+.cd-thhead b{color:var(--glow);font-weight:600;overflow-wrap:anywhere}
+.cd-carry{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center;font-size:12px;color:var(--muted)}
+.cd-carry .c{padding:1px var(--space-3);border-radius:var(--radius-pill);border:1px solid var(--silk-border);color:var(--silk);overflow-wrap:anywhere}
+.cd-carry .c[data-outside="true"]{border-style:dashed}
+.cd-carry-none{font-style:italic}
+.cd-why{margin:0;font-size:12.5px;color:var(--muted)}
+.cd-why--bad{color:var(--danger)}
+.cd-flow{display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap;padding:var(--space-3) var(--space-4);border-radius:var(--radius-step);border:1px dashed var(--glow);font-size:13px;color:var(--silk)}
+.cd-flow-tag{font-family:var(--font-mono);font-size:10.5px;padding:1px var(--space-3);border-radius:var(--radius-pill);border:1px solid var(--glow);color:var(--glow)}
+.cd-flow-text{flex:1;min-width:0;overflow-wrap:anywhere}
+.cd-flow-text b{color:var(--ink);font-weight:600}
+.cd-flow button{flex:none}
+.cd-threadtabs{display:flex;gap:var(--space-2);overflow-x:auto;padding:var(--space-3) var(--space-8) 0;scrollbar-width:thin}
+.cd-threadtabs button{flex:none;max-width:16em;min-height:32px;padding:0 var(--space-4);border-radius:var(--radius-pill);border:1px solid var(--silk-border);background:transparent;color:var(--silk);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cd-threadtabs button[aria-current="page"]{border-color:var(--glow);color:var(--glow)}
+.cd-threadtabs button:focus-visible{outline:2px solid var(--glow);outline-offset:2px}
+.cd-thstart{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-5);border-radius:var(--radius);border:1px solid var(--silk-border);background:var(--surface-soft)}
+.cd-thstart input{min-height:38px;padding:0 var(--space-4);border:1px solid var(--silk-border);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;font-size:14px}
+.cd-thstart input:focus-visible{outline:2px solid var(--glow);outline-offset:1px}

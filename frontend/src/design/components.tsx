@@ -363,3 +363,172 @@ export function MemoryFact({ source, date, fact, onForget }: { source: string; d
     </div>
   )
 }
+
+/** One thing a side thread carries in: an entity by its title (outside text
+ * quoted), or a saved fact's words. */
+export interface CarryData {
+  label: string
+  outside?: boolean
+}
+
+/** A side thread's header (#139): its name, what it carries, and how it ends.
+ * Open, "Done" closes it and its result flows back to the timeline (nothing
+ * says closed before the server does); closed, it shows what flowed back. */
+export function ThreadHead({
+  title,
+  carries,
+  result = null,
+  closing = false,
+  onDone,
+  onBack,
+}: {
+  title: string
+  carries: CarryData[]
+  /** Set once the thread closed: the note it posted to the timeline. */
+  result?: string | null
+  closing?: boolean
+  onDone?: () => void
+  onBack: () => void
+}) {
+  const closed = result !== null
+  return (
+    <section className="cd-thhead" aria-label={`Side thread: ${title}`}>
+      <div className="cd-row cd-thhead-r">
+        <b>Side thread · {title}</b>
+        {closed || !onDone ? (
+          <button type="button" className="cd-btn cd-btn--small" onClick={onBack}>
+            Back to the timeline
+          </button>
+        ) : (
+          <button type="button" className="cd-btn cd-btn--small" onClick={onDone} disabled={closing}>
+            {closing ? 'Closing…' : 'Done · back to the timeline'}
+          </button>
+        )}
+      </div>
+      <div className="cd-carry">
+        <span>Carries</span>
+        {carries.length === 0 ? (
+          <span className="cd-carry-none">nothing: it started empty</span>
+        ) : (
+          carries.map((carry, index) => (
+            <span key={index} className="c" data-outside={carry.outside ? 'true' : undefined}>
+              {carry.outside ? `“${carry.label}”` : carry.label}
+            </span>
+          ))
+        )}
+      </div>
+      <p className="cd-why">
+        {closed
+          ? `Closed. What flowed back: ${result}`
+          : closing
+            ? 'Closing: its result is being written from what it did.'
+            : 'Its own small context: only what it carries, not the whole timeline. Close it and what it did flows back.'}
+      </p>
+    </section>
+  )
+}
+
+/** A side thread's result in the timeline (#139): what flowed back when it closed. */
+export function ThreadNote({ title, text, onOpen }: { title: string; text: string; onOpen?: () => void }) {
+  return (
+    <div className="cd-flow" role="group" aria-label={`Side thread result: ${title}`}>
+      <span className="cd-flow-tag">side thread</span>
+      <span className="cd-flow-text">
+        <b>{title}</b> · {text}
+      </span>
+      {onOpen ? (
+        <button type="button" className="cd-btn cd-btn--small" onClick={onOpen}>
+          Open
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/** The timeline and each open side thread; one is on the page at a time. */
+export function ThreadTabs({
+  threads,
+  active,
+  onSelect,
+  disabled = false,
+}: {
+  threads: { id: number; title: string }[]
+  active: number | null
+  onSelect: (id: number | null) => void
+  disabled?: boolean
+}) {
+  return (
+    <nav className="cd-threadtabs" aria-label="Timeline and side threads">
+      <button type="button" aria-current={active === null ? 'page' : undefined} onClick={() => onSelect(null)} disabled={disabled}>
+        Timeline
+      </button>
+      {threads.map((thread) => (
+        <button
+          key={thread.id}
+          type="button"
+          aria-current={active === thread.id ? 'page' : undefined}
+          onClick={() => onSelect(thread.id)}
+          disabled={disabled}
+        >
+          {thread.title}
+        </button>
+      ))}
+    </nav>
+  )
+}
+
+/** Starting a side thread: an optional name (none while incognito: it would be kept). */
+export function ThreadStart({
+  name,
+  incognito,
+  busy,
+  error,
+  onName,
+  onStart,
+  onCancel,
+}: {
+  name: string
+  incognito: boolean
+  busy: boolean
+  error?: string | null
+  onName: (name: string) => void
+  onStart: () => void
+  onCancel: () => void
+}) {
+  const id = useId()
+  return (
+    <form
+      className="cd-thstart"
+      aria-label="New side thread"
+      onSubmit={(event) => {
+        event.preventDefault()
+        onStart()
+      }}
+    >
+      <p className="cd-why">It carries what the timeline touched and saved since the last quiet gap: names and facts, not what was said.</p>
+      {incognito ? (
+        <p className="cd-why">Incognito is on, so its name isn’t kept.</p>
+      ) : (
+        <>
+          <label htmlFor={id} className="cd-label">
+            Name (optional)
+          </label>
+          <input id={id} value={name} maxLength={60} onChange={(event) => onName(event.target.value)} placeholder="What’s it about?" />
+        </>
+      )}
+      {error ? (
+        <p role="alert" className="cd-why cd-why--bad">
+          {error}
+        </p>
+      ) : null}
+      <div className="cd-row">
+        <button type="submit" className="cd-btn cd-btn--propose primary" disabled={busy}>
+          {busy ? 'Starting…' : 'Start'}
+        </button>
+        <button type="button" className="cd-btn" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}

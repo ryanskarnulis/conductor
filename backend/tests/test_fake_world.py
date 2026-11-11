@@ -3,6 +3,7 @@ write leaves a receipt. CI, no GPU."""
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 import pytest
@@ -16,7 +17,7 @@ from tests.fake_world import (
     parse_date,
     weekend_targets,
 )
-from app.fleet.delegate import DelegateConfirmRefused
+from app.fleet.delegate import DelegateConfirmRefused, RecordEntry
 
 THURSDAY = date(2026, 11, 5)
 
@@ -110,11 +111,79 @@ def test_tasks_wipe_project_asks_then_runs_on_the_token(world: World) -> None:
     assert [(r.kind, r.title) for r in world.receipts] == [("trash", "Kitchen")]
 
 
-def test_music_resolves_albums(world: World) -> None:
+def _music_record(world: World, message: str) -> list[RecordEntry]:
+    music = client_factory(world)(_App("music"))
+    record = music.send_message(1, message).assistant_message.record
+    assert record is not None
+    return list(record)
+
+
+# The shape real music returns once music#96 lands: an album it resolved is an
+# entity ref (the MusicBrainz release-group id, the album's title) beside the
+# download job; one it can't resolve writes nothing and touches nothing, and
+# its reply asks for a link or names the candidates. Nothing else about the
+# artist's discography is knowledge a real music agent has.
+
+
+def test_music_resolves_a_named_album_to_an_album_ref_beside_the_job(world: World) -> None:
+    [entry] = _music_record(world, "download the new Caribou album")
+    assert (entry.tool, entry.outcome) == ("queue_download", "done")
+    album, job = entry.touched
+    assert (album.app, album.kind, album.title) == ("music", "album", "Honey")
+    assert re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", album.id), album.id
+    assert album.id != job.id  # a release-group id, not the job's
+    assert (job.kind, job.title) == ("download_job", "album download")
+    assert entry.job is not None and entry.job.ref == job.id
+    assert [r.title for r in world.receipts] == ["Honey"]
+
+
+def test_the_album_id_is_stable_and_the_job_record_names_the_same_album(world: World) -> None:
+    [entry] = _music_record(world, "download Suddenly by Caribou")
+    album = entry.touched[0]
+    assert album.title == "Suddenly"
+    world.advance()
+    ended = world.job_read("1")
+    assert ended is not None
+    assert [ref["id"] for ref in ended["record"][0]["touched"]] == [album.id]
+    assert [ref["kind"] for ref in ended["record"][0]["touched"]] == ["album"]
+
+
+def test_one_album_by_an_artist_resolves_without_naming_it(world: World) -> None:
+    [entry] = _music_record(world, "download the Miles Davis album")
+    assert entry.touched[0].title == "Kind of Blue"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "download the Caribou album",
+        "download the other album by Caribou",
+        "download Caribou's other album",
+        "download another Caribou album",
+    ],
+)
+def test_music_cannot_resolve_one_album_so_it_writes_and_touches_nothing(
+    world: World, message: str
+) -> None:
     app = MusicApp(world)
-    assert "Honey" in app.handle(1, "download the new Caribou album").text
-    assert "Suddenly" in app.handle(1, "download Caribou's other album").text
-    assert [r.title for r in world.receipts] == ["Honey", "Suddenly"]
+    reply = app.handle(1, message)
+    assert world.receipts == [] and world.jobs == {}
+    # It names the candidates (all of them: it doesn't know which is "other").
+    assert all(title in reply.text for title in ("Honey", "Suddenly", "Swim")) and "?" in reply.text
+    assert _music_record(World(THURSDAY), message) == []
+
+
+def test_music_does_not_know_what_other_means(world: World) -> None:
+    app = MusicApp(world)
+    app.handle(1, "download the new Caribou album")
+    reply = app.handle(1, "download the other album by Caribou")
+    assert [r.title for r in world.receipts] == ["Honey"]  # nothing queued for "other"
+    assert "Suddenly" in reply.text and "Swim" in reply.text and "?" in reply.text
+
+
+def test_music_with_no_artist_asks_for_a_link(world: World) -> None:
+    reply = MusicApp(world).handle(1, "download the album with the red cover")
+    assert "link" in reply.text and world.receipts == []
 
 
 def test_music_asks_when_a_song_is_ambiguous(world: World) -> None:
