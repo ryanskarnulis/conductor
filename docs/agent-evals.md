@@ -1536,6 +1536,43 @@ Plan evals at n=20 on gemma-4-12b, this branch on #151's commit, against
   `amend-nothing-waiting` 4/20, against 18 and 16 on main), so the group's
   rate sits just above 0.8 and leaves nothing to raise it into.
 
+### The memory line's examples name no fact (#138, 2026-11-11)
+
+Told "forget that", the planner wrote the memory line's own example, "forget
+that I sort music on Sundays", in about half the plans (behaviour was right
+since #134: code takes what to forget from the person's words). On top of
+#151 and #160 the examples were A/B'd again at n=20 over `golden`, `memory`
+and `self`, one arm per GPU hold:
+
+- **shipped**: `"remember I sort music on Sundays"; "what do you know about
+  me?"; "forget that"; "forget that I sort music on Sundays"`, run twice:
+  with #160's full run, and again after the two arms;
+- **placeholders** (#159's rewording, dropped then): `"remember <the fact, as
+  they said it>"` and `"forget that <the fact>"`;
+- **neutral forget**: the shipped remember example, and `"forget that <a fact
+  they saved>"`.
+
+| group | shipped (#160 run) | shipped (rerun) | **placeholders** | neutral forget |
+|---|---|---|---|---|
+| golden | 401, 401 /420 | 400, 400 | 400, 400 | 401, 401 |
+| memory | 239, 234 /240 | 236, 235 | 236, 235 | 239, 236 |
+| self | 91, 89 /100 | 93, 89 | 94, 93 | 89, 87 |
+| forget plans copying the example | 20/40 | 21/40 | **0/40** | 0/40 |
+
+Each cell is passed, then first-try.
+
+- **The placeholders ship.** They take the copying to zero (no plan wrote a
+  literal placeholder either) and are at least as good as the shipped line's
+  rerun, in the same window, in every group on both rates; nothing is
+  Wilson-significantly below either shipped run. Against the earlier shipped
+  run, `golden` is one plan lower and `memory` three, the same swing the
+  shipped line itself shows between its two runs (`memory-dont-forget`'s
+  "… oil change in March" goes to tasks 3 times in 20 on both).
+- #159's loss doesn't recur: there `self` fell 58/60 to 51/60 on
+  `status-last` filed as chat; since #151's `about`, `status-last` is 20/20.
+- Neutral forget also stopped the copying, but `self` read 89/100 against 93
+  (`self-said-just-now` 9/20; it reads 9 to 14 across these runs).
+
 ## Fleet smoke (#143)
 
 `backend/tests/test_fleet_smoke.py`: S2, S3, S9 and S15 through conductor
