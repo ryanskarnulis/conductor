@@ -177,6 +177,108 @@ def test_a_recalled_answer_is_labelled_as_of_then() -> None:
     assert "answered then, oldest first; an answer is as of then, not now" in rendered
 
 
+# --- the planner's view (#141) ----------------------------------------------------------
+
+_DUE = "what's due today?"
+
+
+def _opening(words: str, history: list[dict[str, Any]], **parts: Any) -> str:
+    return turn_context.build(THURSDAY, Now(), words, lambda: history, lambda: [], **parts)
+
+
+def test_the_planner_never_sees_the_same_question_as_the_last_exchange() -> None:
+    # #141's diagnosis: the earlier request alone, record line or last exchange,
+    # gets "what's due today?" filed as already answered.
+    history = _turns((_DUE, "Nothing's due today.", [_ask("tasks", _DUE, "No tasks due.")]))
+    opening = _opening("What's due today", history)
+    assert '(asked: "what\'s due today?")' in opening and "The last exchange:" in opening
+    shown = turn_context.for_planner(opening, "What's due today")
+    assert shown == state_block.render(THURSDAY, Now(), history)  # nothing left before the turn
+    assert "due today" not in shown.lower() and recall.HEADING not in shown
+
+
+def test_the_planner_never_sees_the_same_question_earlier_in_the_thread() -> None:
+    history = _turns(
+        (_DUE, "Groceries.", [_ask("tasks", _DUE, "Groceries")]),
+        ("push the dentist", "Moved it.", [_ask("tasks", "push dentist", "Moved")]),
+        ("add call mom", "Added.", [_ask("tasks", "add call mom", "Added")]),
+    )
+    shown = turn_context.for_planner(_opening(_DUE, history), _DUE)
+    assert "Groceries" not in shown and "what's due today" not in shown
+    # The rest of the record, the other requests and the last exchange stay.
+    assert 'push dentist"} -> Moved (asked: "push the dentist")' in shown
+    assert f'{recall.REQUESTS_HEADING}, oldest first:\n- "push the dentist"\n\n' in shown
+    assert 'The person said: "add call mom"' in shown
+
+
+def test_a_different_question_leaves_the_opening_byte_for_byte() -> None:
+    history = _turns(
+        (_DUE, "Groceries.", [_ask("tasks", _DUE, "Groceries")]),
+        ("add call mom", "Added.", [_ask("tasks", "add call mom", "Added")]),
+    )
+    for words in ("what's on my calendar?", "how is the chess game going?", "thanks!", "yes"):
+        opening = _opening(words, history)
+        assert turn_context.for_planner(opening, words) == opening
+
+
+def test_an_earlier_conversations_hit_and_match_on_the_same_words_go() -> None:
+    week = "what am I working on this week?"
+    tuesday = datetime(2026, 11, 3, 18, 0, tzinfo=UTC)
+    calls = [
+        EarlierCall(tuesday, week, ToolCallRecord.model_validate(_ask("tasks", week, "Nothing."))),
+        EarlierCall(
+            tuesday,
+            "what is the working title of that album",
+            ToolCallRecord.model_validate(_ask("music", "album working title", "Honey.")),
+        ),
+    ]
+    garage = state_block.Entity(app="tasks", kind="task", id="9", title="Garage")
+    honey = state_block.Entity(app="music", kind="album", id="4", title="Honey")
+    matches = [
+        state_block.Match(garage, "Tuesday 2026-11-03", said=week),
+        state_block.Match(honey, "Monday 2026-11-02", said="that working album"),
+    ]
+    opening = turn_context.build(
+        THURSDAY, Now(), week, lambda: [], lambda: calls, matches=lambda: matches
+    )
+    shown = turn_context.for_planner(opening, week)
+    assert "Garage" not in shown and "task 9" not in shown
+    assert f"{state_block.MATCHES_HEADING}\n- music album 4: Honey" in shown
+    # The registry found matches, so no hits; without them, the same-words hit goes.
+    hits_only = turn_context.build(THURSDAY, Now(), week, lambda: [], lambda: calls)
+    assert 'asked "what am I working on this week?"' in hits_only
+    shown = turn_context.for_planner(hits_only, week)
+    assert 'asked "what is the working title of that album"' in shown
+    assert week not in shown
+    # Every match the same words: the heading goes with them.
+    alone = turn_context.build(
+        THURSDAY, Now(), week, lambda: [], lambda: [], matches=lambda: matches[:1]
+    )
+    assert state_block.MATCHES_HEADING not in turn_context.for_planner(alone, week)
+
+
+def test_the_planner_reads_the_view_and_the_validator_the_whole_opening(tmp_path: Path) -> None:
+    @registry.tool
+    def ask_tasks(message: str) -> str:
+        """Scratch tasks agent."""
+        return "Bills."
+
+    history = _turns((_DUE, "Nothing's due today.", [_ask("tasks", _DUE, "No tasks due.")]))
+    opening = _opening(_DUE, history)
+    # The planner answers from memory anyway: plan.recalled_answer still sees the
+    # earlier ask in the whole opening and sends the plan back.
+    provider = ScriptedProvider(
+        [text_turn(json.dumps({"answer": "knowledge"})), _plan_ask("tasks", _DUE)]
+    )
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+        Interpreter(provider, _fleet(tmp_path)).run(_DUE, context=opening)
+    first = provider.requests[0]["messages"][1]["content"]
+    assert first == f"{turn_context.for_planner(opening, _DUE)}\n\nThe person said: {_DUE}"
+    assert "No tasks due" not in first
+    repair = provider.requests[1]["messages"][-1]["content"]
+    assert f'they asked "{_DUE}" before and an app answered it then' in repair
+
+
 def _fleet(tmp_path: Path) -> Fleet:
     return discover_fleet(write_fixture_fleet(tmp_path / "fleet"))
 
