@@ -205,8 +205,9 @@ def _problems(plan: plans.Plan, words: str, checks: plans.Checks) -> list[str]:
 def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Checks) -> list[str]:
     """Repairs that read the person's words against State (#134): a
     remembered topic nothing saved is about, a lookup of a fact State lists,
-    a question about you filed as general knowledge; and a plan its own
-    ``about`` contradicts (#151). The first plan gets them once; a repaired
+    a question about you filed as general knowledge; a plan its own
+    ``about`` contradicts (#151); and a new ask for a running job the words
+    narrow (#160). The first plan gets them once; a repaired
     plan that keeps its choice still runs, since each of these plans can run
     and a turn that answers beats code's "couldn't put that together"."""
     return (
@@ -214,6 +215,7 @@ def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Check
         + plans.looked_up_fact(plan, words, checks.context)
         + plans.about_you(plan, words)
         + plans.disagrees(about, plan)
+        + plans.narrows_job(plan, words, checks.context)
     )
 
 

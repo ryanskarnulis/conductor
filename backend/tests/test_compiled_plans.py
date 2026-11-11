@@ -436,6 +436,97 @@ def test_the_plan_must_agree_with_what_it_said_the_message_is_about(
         assert found[0].startswith(f'you wrote "about": "{about}", but the plan is ')
 
 
+@pytest.mark.parametrize(
+    ("words", "jobs", "body", "ref"),
+    [
+        # #160: the job runs, and their words narrow it.
+        (
+            "actually just grab the first ten songs",
+            'music:job:17 downloading playlist "Road Trip" (running, 6 of 40)',
+            steps(ask("music", "grab the first ten songs")),
+            "music:job:17",
+        ),
+        (
+            "make it the first twenty instead",
+            "music job 31, the playlist “Road Trip”: running, 6 of 40",
+            steps(ask("music", "make it the first twenty instead")),
+            "music:job:31",
+        ),
+        (
+            "only the first five",
+            "music ask_music (job 9): running, 2 of 40",
+            # A cancel and a new ask start it over: changing it is an amend.
+            steps({"do": "cancel", "target": "music:job:9"}, ask("music", "the first five")),
+            "music:job:9",
+        ),
+        # Words that don't narrow it, an amend already, or no job: no objection.
+        (
+            "download Swim by Caribou",
+            'music:job:17 downloading playlist "Road Trip" (running, 6 of 40)',
+            steps(ask("music", "download Swim by Caribou")),
+            None,
+        ),
+        (
+            "just grab the first ten songs",
+            'music:job:17 downloading playlist "Road Trip" (running, 6 of 40)',
+            steps({"do": "amend", "target": "music:job:17", "change": "the first ten"}),
+            None,
+        ),
+        ("just grab the first ten songs", "", steps(ask("music", "grab the first ten")), None),
+        (
+            "just add a task for the first ten",
+            'music:job:17 downloading playlist "Road Trip" (running, 6 of 40)',
+            steps(ask("tasks", "add a task for the first ten")),
+            None,
+        ),
+    ],
+)
+def test_words_that_narrow_a_running_job_get_an_amend_repair(
+    words: str, jobs: str, body: dict[str, Any], ref: str | None
+) -> None:
+    from tests.plan_cases import state
+
+    context = state(jobs=jobs) if jobs else state()
+    found = plans.narrows_job(plans.load(body), words, context)
+    if ref is None:
+        assert found == []
+        return
+    (objection,) = found
+    assert f'amend it (target: "{ref}"' in objection and "never a new ask" in objection
+
+
+def test_the_amend_job_case_gets_its_repair_from_the_compiler(fleet: Fleet) -> None:
+    from tests.plan_cases import CASES
+
+    case = next(case for case in CASES if case.id == "amend-job")
+    replies = [
+        json.dumps({"about": "an app", **steps(ask("music", "grab the first ten songs"))}),
+        json.dumps(
+            {
+                "about": "a running job",
+                **steps({"do": "amend", "target": "music:job:17", "change": "the first ten"}),
+            }
+        ),
+    ]
+    sent: list[list[dict[str, Any]]] = []
+
+    def chat(messages: list[dict[str, Any]], _max: int, _fmt: dict[str, Any]) -> ChatResult:
+        sent.append(list(messages))
+        return text_turn(replies.pop(0))
+
+    compiled = compiler.compile_turn(
+        chat,
+        system_prompt=compiler.planner_prompt(fleet),
+        context=case.state,
+        words=case.text,
+        fleet=fleet,
+        checks=plans.Checks(fleet=fleet, context=case.state),
+    )
+    assert compiled.repaired and plans.describe(compiled.plan) == "amend"  # type: ignore[arg-type]
+    assert 'amend it (target: "music:job:17"' in sent[1][-1]["content"]
+    assert any(shape.matches(compiled.plan) for shape in case.expect)  # type: ignore[arg-type]
+
+
 def test_a_plan_its_about_contradicts_gets_one_repair(fleet: Fleet) -> None:
     job = steps(ask("music", "just grab the first ten songs"))
     amend = steps({"do": "amend", "target": "music:job:17", "change": "the first ten songs"})

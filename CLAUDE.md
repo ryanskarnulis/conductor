@@ -268,6 +268,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   never failed. A note isn't an exchange: it never lapses a waiting question.
   `cancel` calls the app's `…/cancel` and says the `done` count it answered;
   `amend` can't change a running job and says so (the contract has none).
+  A new ask to an app with a running job, when the words narrow it ("just
+  the first ten"), gets one repair to an amend (`plan.narrows_job`, #160).
 - **`think` is a background job on the local 26B** (#78, `app/ai/think.py`,
   `app/services/thinker.py`; `CONDUCTOR_THINK` off: the think isn't run and
   code says so). The plan ends at a think (later steps not run, and said):
