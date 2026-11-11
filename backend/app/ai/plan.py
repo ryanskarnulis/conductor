@@ -29,6 +29,7 @@ Pure: no I/O.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -149,13 +150,64 @@ class Resume(BaseModel):
 Plan = StepPlan | Direct | Resume
 _PLAN: TypeAdapter[Plan] = TypeAdapter(Plan)
 
+# What the person's message is about (#151): the planner's first key, written
+# before the plan's shape, so the hardest decision isn't made on the plan's
+# first token. Code checks it agrees with the plan (:func:`disagrees`); it is
+# not part of the plan and isn't stored with it.
+ABOUT: tuple[str, ...] = (
+    "an app",
+    "conductor itself",
+    "general knowledge",
+    "the outside world",
+    "the waiting question",
+    "a running job",
+    "small talk",
+)
 
-def parse(text: str) -> Plan:
-    """The planner's JSON as a plan; raises ``ValueError`` when it isn't one."""
+
+def _strip_fence(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
         text = text.strip("`").removeprefix("json").strip()
-    return _PLAN.validate_json(text)
+    return text
+
+
+def parse(text: str) -> Plan:
+    """The planner's JSON as a plan; raises ``ValueError`` when it isn't one."""
+    return _PLAN.validate_json(_strip_fence(text))
+
+
+def about_of(text: str) -> str | None:
+    """The reply's ``about`` (#151), or ``None`` when it has none we know."""
+    try:
+        body = json.loads(_strip_fence(text))
+    except ValueError:
+        return None
+    about = body.get("about") if isinstance(body, dict) else None
+    return about if about in ABOUT else None
+
+
+_RUNNING_HEADER = "Running jobs"
+_WAITING_HEADER = "Waiting on the person"
+
+
+def offered_about(checks: Checks) -> tuple[str, ...]:
+    """The ``about`` values this turn's State supports (#151): "a running job"
+    only when State lists one, "the waiting question" only when something
+    waits on the person. Offered always, both drew plans for things that
+    weren't there ("undo that" as a running job, "yes" with nothing waiting)."""
+    lines = checks.context.splitlines()
+    jobs = any(line.startswith(_RUNNING_HEADER) for line in lines)
+    waiting = (
+        checks.confirmable
+        or checks.resumable
+        or any(line.startswith(_WAITING_HEADER) for line in lines)
+    )
+    return tuple(
+        value
+        for value in ABOUT
+        if (value != "a running job" or jobs) and (value != "the waiting question" or waiting)
+    )
 
 
 def dump(plan: Plan) -> dict[str, Any]:
@@ -169,12 +221,15 @@ def load(body: dict[str, Any]) -> Plan:
 # --- the schema ----------------------------------------------------------------------------
 
 
-def schema(fleet: Fleet, *, resumable: bool = False) -> dict[str, Any]:
+def schema(
+    fleet: Fleet, *, resumable: bool = False, about: Collection[str] = ABOUT
+) -> dict[str, Any]:
     """The ``json_schema`` the planner decodes under, from the fleet.
 
     Each step kind is an object with every field required and nothing else,
     which is what llama-server's strict grammar needs. ``resumable`` offers the
-    ``resume`` shape, only while a plan is paused on ``ask_user``.
+    ``resume`` shape, only while a plan is paused on ``ask_user``; ``about``
+    the values State supports (:func:`offered_about`, #151).
     """
     # ``memory`` (#81) is conductor's own app: always there, run by code.
     ask_apps = sorted({app.name for app in fleet.agent_apps()} | {MEMORY_APP})
@@ -192,6 +247,9 @@ def schema(fleet: Fleet, *, resumable: bool = False) -> dict[str, Any]:
         }
 
     text = {"type": "string"}
+    # Every shape opens with ``about`` (#151), so it is decided first.
+    about_values = [value for value in ABOUT if value in about]
+    about_field = {"about": {"type": "string", "enum": about_values}}
     kinds = []
     if ask_apps:
         kinds.append(
@@ -219,22 +277,24 @@ def schema(fleet: Fleet, *, resumable: bool = False) -> dict[str, Any]:
         {
             "type": "object",
             "properties": {
+                **about_field,
                 "steps": {
                     "type": "array",
                     "items": {"anyOf": kinds},
                     "minItems": 1,
                     "maxItems": MAX_STEPS,
-                }
+                },
             },
-            "required": ["steps"],
+            "required": ["about", "steps"],
             "additionalProperties": False,
         },
         {
             "type": "object",
             "properties": {
-                "answer": {"type": "string", "enum": ["knowledge", "decline", "self", "chat"]}
+                **about_field,
+                "answer": {"type": "string", "enum": ["knowledge", "decline", "self", "chat"]},
             },
-            "required": ["answer"],
+            "required": ["about", "answer"],
             "additionalProperties": False,
         },
     ]
@@ -242,8 +302,8 @@ def schema(fleet: Fleet, *, resumable: bool = False) -> dict[str, Any]:
         shapes.append(
             {
                 "type": "object",
-                "properties": {"resume": text},
-                "required": ["resume"],
+                "properties": {**about_field, "resume": text},
+                "required": ["about", "resume"],
                 "additionalProperties": False,
             }
         )
@@ -541,6 +601,68 @@ def about_you(plan: Plan, words: str) -> list[str]:
             '{"answer": "self"} (the narrator answers from State and the app list)'
         ]
     return []
+
+
+# What each ``about`` (#151) rules out, and what the repair says instead. Loose
+# on purpose: only a plan the field contradicts goes back.
+_ABOUT_SAYS: dict[str, str] = {
+    "an app": "something an app keeps or does is planned as its steps, never a direct answer",
+    "conductor itself": (
+        "a question about you is never general knowledge, a decline, a recall or a think: "
+        'answer {"answer": "self"} from State, or ask memory what you know about them'
+    ),
+    "general knowledge": 'general knowledge is {"answer": "knowledge"}',
+    "the outside world": (
+        "weather, news, scores, prices and devices aren't general knowledge or about you: "
+        '{"answer": "decline"}, unless an app below does it'
+    ),
+    "the waiting question": (
+        "their answer to what is waiting is a confirm, a resume, a cancel or an amend, never "
+        "general knowledge or a decline"
+    ),
+    "a running job": (
+        "a running job is stopped with cancel or changed with amend (target: its ref), never "
+        "a new ask"
+    ),
+    "small talk": 'small talk is {"answer": "chat"}',
+}
+
+
+def _agrees(about: str, plan: Plan) -> bool:
+    if isinstance(plan, Resume):
+        return about == "the waiting question"
+    if isinstance(plan, Direct):
+        allowed = {
+            "conductor itself": ("self", "chat"),
+            "general knowledge": ("knowledge",),
+            "the outside world": ("decline",),
+            "the waiting question": ("self", "chat"),
+            "a running job": ("self", "chat"),
+            "small talk": ("chat", "self"),
+        }.get(about, ())
+        return plan.answer in allowed
+    if about in ("general knowledge", "small talk"):
+        return False
+    if about == "conductor itself":
+        # What you did or said is in State: never a search or a think.
+        return any(step.do not in ("recall", "think") for step in plan.steps)
+    if about == "a running job":
+        kinds = {step.do for step in plan.steps}
+        return "ask" not in kinds or bool(kinds & {"cancel", "amend"})
+    return True
+
+
+def disagrees(about: str | None, plan: Plan) -> list[str]:
+    """The reply's ``about`` (#151) against its plan: the planner said what the
+    message is about, then planned something that can't be about that ("general
+    knowledge" with an ask, "an app" with a direct answer, "a running job" with
+    a new ask). One repair, like #134's nudges; a reply with no ``about`` passes."""
+    if about is None or about not in _ABOUT_SAYS or _agrees(about, plan):
+        return []
+    return [
+        f'you wrote "about": "{about}", but the plan is {describe(plan)}: '
+        f'{_ABOUT_SAYS[about]}. Make them agree: fix the plan, or "about" if that was wrong'
+    ]
 
 
 # "what do you remember about the fence project?" (#134): what was said or

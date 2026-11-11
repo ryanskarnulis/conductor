@@ -158,7 +158,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   to a typed plan under `json_schema` (`app/ai/plan.py`, `compiler.py`), code
   validates it, and the interpreter (`app/ai/interpreter.py`, on
   `app/ai/runtime.py`) runs every step kind and the direct answers
-  (`app/ai/speaker.py`). **No guessed action:** a plan still invalid after
+  (`app/ai/speaker.py`). Each reply opens with `about` (#151: what the
+  message is about; the running-job and waiting values only when State has
+  one), and a plan its `about` contradicts gets one repair
+  (`plan.disagrees`); it isn't stored with the plan. **No guessed action:** a plan still invalid after
   the compiler's repair, or with a `{sN}` no step can name
   (`plan.unrunnable`), gets one more round (`compiler.repair_turn`), then
   code asks which app was meant when the tries disagreed, else files a
