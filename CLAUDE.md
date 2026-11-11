@@ -161,11 +161,13 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   (`app/ai/speaker.py`). **No guessed action:** a plan still invalid after
   the compiler's repair, or with a `{sN}` no step can name
   (`plan.unrunnable`), gets one more round (`compiler.repair_turn`), then
-  code asks which app was meant when the tries disagreed, else says it
-  couldn't put that together; a model outage is a 502, never a question. A
-  control step inside a longer plan runs first as its own plan, then the
-  rest, unless it left a question waiting or the rest depended on it (then
-  not run, and said). Plans have no designed length; 12 steps is a runaway
+  code asks which app was meant when the tries disagreed, else files a
+  `think` on the person's own words (#146: nothing waiting, no try read the
+  words as a confirm, resume or control, `CONDUCTOR_THINK` on), else says it
+  couldn't put that together; a model outage is a 502, never a question or
+  a think. A control step inside a longer plan runs first as its own plan,
+  then the rest, unless it left a question waiting or the rest depended on
+  it (then not run, and said). Plans have no designed length; 12 steps is a runaway
   ceiling. A destructive
   ask to an app without `confirms` pauses on code's question; `ask_user` and
   an app's `confirm_required` pause too, and the next turn resumes the same
@@ -179,7 +181,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   The interpreter makes one plain GET (`app/fleet/glance.py`: declared path,
   no forwarded headers, 2s/5s timeouts, no redirects, no model, no delegate
   budget) and files `look_<app>` with a `looked_up` receipt built by code
-  (`app/ai/glance.py`; outside titles cleaned and marked) and no writes. It is
+  (`app/ai/glance.py`; outside titles cleaned and marked; a ref keeps its
+  other scalar fields, bounded and cleaned the same way, and a last-changed
+  time such as chess's `last_move_at` becomes a stated age on the household
+  clock, "last move 19 days ago", #161) and no writes. It is
   not a registry tool. A glance that can't
   be read asks the same app the person's words, but only for a plain question,
   a plan whose words are the request, an app with an agent and no ask to it
@@ -280,8 +285,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   `amend` can't change a running job and says so (the contract has none).
 - **`think` is a background job on the local 26B** (#78, `app/ai/think.py`,
   `app/services/thinker.py`; `CONDUCTOR_THINK` off: the think isn't run and
-  code says so). The plan ends at a think (later steps not run, and said):
-  it files a `ledger_jobs` row conductor owns
+  code says so). Code files one too when no plan could be assembled at all
+  (#146; the reply says it is thinking it over, never that anything ran;
+  off, it is the old "couldn't put that together"). The plan ends at a
+  think (later steps not run, and said): it files a `ledger_jobs` row conductor owns
   (`app = "conductor"`) with what its inputs found, and code replies at once;
   the conversation never waits. The watcher hands it to the thinker:
   gemma-4-26b-a4b, thinking on, `json_schema` on the answer, its own prompt
