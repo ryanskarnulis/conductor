@@ -26,7 +26,10 @@ placeholder-looking ones ~40% of the time. Descriptive rules don't bind the
 - a compiled plan's steps that never ran (an earlier step failed, or the data
   flow refused one, #72) are in the receipt with why, in plain words, and the
   reply says something was left undone; if not, code appends it (#113). Calls
-  code itself never sent (schema errors, the retired loop's cap, Stop) stay out;
+  code itself never sent (schema errors, the retired loop's cap, Stop) stay out.
+  When the reason is that an earlier step gave no name to pass on, the reply
+  must say that and never put it on the person ("a name was not provided",
+  #163): the narrator re-speaks once with the true reason, then code appends it;
 - a ``recall`` (#80) is conductor's own read of its ledger: the receipt
   lists the turns it found by day, with the person's words quoted and what
   the apps touched then. The reply says when (the first one's day, or a
@@ -157,6 +160,11 @@ class _Fact:
     say: str  # how code says it when the narrator didn't
     untrusted: bool = False
     alternatives: tuple[str, ...] = ()
+    # An unrun fact whose reason code guarantees (#163): the reason in plain
+    # words, and the cues (after ``_norm``) a reply uses to say it. A reply
+    # that blames the person instead doesn't count, whatever else it says.
+    reason: str = ""
+    because: tuple[str, ...] = ()
 
 
 # --- the decision: narrate, pass through, or keep the planner's words -----------
@@ -251,21 +259,12 @@ def _narrated(
     text = _shape(first, spoken)
     path: Path = "narrated"
     missing_titles = [fact for fact in _missing(text, facts) if fact.kind == "title"]
-    if missing_titles:
+    missing_reasons = [fact for fact in _missing(text, facts) if fact.reason]
+    if missing_titles or missing_reasons:
         retry = [
             *messages,
             {"role": "assistant", "content": first},
-            {
-                "role": "user",
-                "content": (
-                    "You left out "
-                    + ", ".join(
-                        " or ".join(f"“{text}”" for text in (fact.text, *fact.alternatives))
-                        for fact in missing_titles
-                    )
-                    + ". Say it again, as briefly, naming each exactly as the receipt writes it."
-                ),
-            },
+            {"role": "user", "content": _retry(missing_titles, missing_reasons)},
         ]
         try:
             calls += 1
@@ -282,6 +281,29 @@ def _narrated(
     return Narration(_quote_untrusted(reply, facts), path, appended, calls)
 
 
+def _retry(titles: Sequence[_Fact], reasons: Sequence[_Fact]) -> str:
+    """The narrator's one second chance: the names it dropped, and the true
+    reason a step didn't run when its reply left it out or blamed the person."""
+    parts = []
+    if titles:
+        parts.append(
+            "You left out "
+            + ", ".join(
+                " or ".join(f"“{text}”" for text in (fact.text, *fact.alternatives))
+                for fact in titles
+            )
+            + "."
+        )
+    for fact in reasons:
+        parts.append(
+            f"The step for {fact.text} didn't run because {fact.reason}. That is not the "
+            "person's doing: say that plainly, and don't say they left anything out or "
+            "didn't provide something."
+        )
+    parts.append("Say it again, as briefly, naming each exactly as the receipt writes it.")
+    return " ".join(parts)
+
+
 def _speak(chat: Chat, messages: list[dict[str, Any]]) -> str | None:
     """One narrator turn's text, or ``None`` if it is unusable (cut off, empty)."""
     result = chat(messages, MAX_TOKENS)
@@ -291,7 +313,12 @@ def _speak(chat: Chat, messages: list[dict[str, Any]]) -> str | None:
     return content
 
 
-def _opening(words: str, records: Sequence[ToolCallRecord], surface: str | None) -> str:
+def opening_header(surface: str | None) -> str:
+    """The user message's fixed start: the length line for the surface, then
+    the receipt's label. It is the same on every call, so it goes first with
+    the system prompt, and the server's prompt cache (reused up to the first
+    byte that differs, #163) reaches this far; the receipt and then the words,
+    which vary on every call, follow."""
     length = (
         _LENGTH["spoken"]
         if surface in SPOKEN
@@ -299,8 +326,12 @@ def _opening(words: str, records: Sequence[ToolCallRecord], surface: str | None)
         if surface == "phone"
         else _LENGTH["screen"]
     )
+    return f"{length}\n\nReceipts:\n"
+
+
+def _opening(words: str, records: Sequence[ToolCallRecord], surface: str | None) -> str:
     receipt = json.dumps({"steps": receipt_steps(records)}, indent=1, ensure_ascii=False)
-    return f"The person said: {words}\n\nReceipts:\n{receipt}\n\n{length}"
+    return f"{opening_header(surface)}{receipt}\n\nThe person said: {words}"
 
 
 def receipt_steps(records: Sequence[ToolCallRecord]) -> list[dict[str, Any]]:
@@ -626,6 +657,9 @@ def _unrun_fact(record: ToolCallRecord, reason: str) -> _Fact:
     words = tuple(
         word for word in _norm(asked).split() if len(word) >= 4 and word not in ("that", "undo")
     )
+    # The reason code knows and the model tends to garble (#163).
+    if run_record.NO_NAME_REASON in reason:
+        return _Fact("unrun", app, say, alternatives=words, reason=reason, because=_NO_NAME_CUES)
     return _Fact("unrun", app, say, alternatives=words)
 
 
@@ -637,6 +671,10 @@ def _missing(text: str, facts: Sequence[_Fact]) -> list[_Fact]:
             present = any(f" {cue} " in have for cue in _UNDONE_CUES) and any(
                 f" {_norm(word)} " in have for word in (fact.text, *fact.alternatives) if word
             )
+            if present and fact.because:
+                present = any(f" {cue} " in have for cue in fact.because) and not _BLAME.search(
+                    have
+                )
         elif fact.kind == "count":
             present = _has_number(text, have, fact.text)
         elif fact.kind == "progress":
@@ -984,6 +1022,25 @@ _UNDONE_CUES = (
     "havent",
     "hasnt",
     "isnt",
+)
+# Ways a reply says an earlier step gave no name (after ``_norm``).
+_NO_NAME_CUES = (
+    "no name",
+    "no title",
+    "nothing to pass on",
+    "never gave a name",
+    "didnt give a name",
+    "didnt give any name",
+    "didnt return a name",
+    "didnt come back with a name",
+)
+# A reply that puts a missing name on the person: "a name was not provided",
+# "you didn't give one". The receipt says the earlier step gave none (#163).
+_BLAME = re.compile(
+    r"\b(?:provided|provide|specified|specify|supplied|supply)\b"
+    r"|\byou (?:didnt|did not|havent|have not|never|forgot|failed|neglected|left)\b"
+    r"|\byour (?:request|message|words) (?:didnt|did not|lacked|had no|was missing|left)\b"
+    r"|\bnot (?:given|stated|mentioned)\b|\bwasnt (?:given|stated|mentioned)\b"
 )
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _MARKDOWN = re.compile(r"[*_#`|>]+")
