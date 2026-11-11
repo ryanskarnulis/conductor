@@ -552,6 +552,33 @@ CASES: tuple[Case, ...] = (
     ),
     Case("status-last", "what did you just do?", (none("status"),), "self", state(last=_LAST_S3)),
     Case("chat-thanks", "thanks!", (none("chat"),), "self"),
+    # What conductor said, and what it reaches (#158): about conductor, never
+    # general knowledge. The speaker answers from the ledger's facts (the last
+    # reply since #158) and the app list.
+    Case(
+        "self-said-just-now",
+        "what did you say just now?",
+        (none("status"),),
+        "self",
+        before(
+            "what did you say just now?",
+            history=[
+                {"role": "user", "content": "add a task to call the plumber on Friday"},
+                {
+                    "role": "assistant",
+                    "content": "Added “Call the plumber” for Friday.",
+                    "tool_calls": [
+                        _call(
+                            "ask_tasks",
+                            {"message": "add a task to call the plumber on Friday"},
+                            "Created task “Call the plumber”, due Friday.",
+                        ).model_dump()
+                    ],
+                },
+            ],
+        ),
+    ),
+    Case("self-apps-reach", "what apps can you reach from here?", (none("status"),), "self"),
     # --- a question about now, over a recalled answer (#127, #122's leak) --------------
     Case(
         "stale-week-recalled",
