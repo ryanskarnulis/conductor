@@ -571,6 +571,114 @@ def test_the_fallback_reply_names_the_unrun_step() -> None:
     )
 
 
+# --- the true reason a {sN} step didn't run (#163) -----------------------------------------
+#
+# The smoke run's narrator said "a specific name for the task was not provided":
+# the person left nothing out. Earlier step gave no name; code says so.
+
+BLAMES_THE_PERSON = (
+    "Queued “Honey”, but I couldn't add the task because a specific name for the task was "
+    "not provided."
+)
+TRUE_REASON = "Queued “Honey”, but the task wasn't added: the album step gave no name to pass on."
+
+
+def _queued_album() -> ToolCallRecord:
+    return ToolCallRecord(
+        tool="ask_music",
+        arguments={"message": "download the album"},
+        result="ok",
+        app_record=[
+            {
+                "tool": "queue_download",
+                "outcome": "done",
+                "touched": [{"app": "music", "kind": "download_job", "id": "1", "title": "job"}],
+                "undo": {"none": "a download can't be undone"},
+            }
+        ],
+    )
+
+
+def _skipped_task() -> ToolCallRecord:
+    return _unrun(NO_NAME, app="tasks", message="add a task to sort {s1} this weekend")
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        BLAMES_THE_PERSON,
+        "I didn't add the task, since you didn't give me a name for it.",
+        "I didn't add the task because no name was provided.",
+        "I could not add the task: the name was not specified.",
+        "I didn't add the task to sort that this weekend.",  # says it, never says why
+    ],
+)
+def test_a_reply_that_blames_or_omits_the_reason_is_respoken_with_the_true_one(reply: str) -> None:
+    records = [_queued_album(), _skipped_task()]
+    chat, seen = _scripted(reply, TRUE_REASON)
+    narration = narrator.narrate("do both", None, records, surface=None, chat=chat)
+    assert (narration.reply, narration.path, narration.model_calls) == (
+        TRUE_REASON,
+        "respoken",
+        2,
+    )
+    asked = seen[1][-1]["content"]
+    assert "an earlier part gave no name to pass on" in asked
+    assert "not the person's doing" in asked
+
+
+def test_a_reply_that_still_blames_the_person_gets_the_reason_appended() -> None:
+    records = [_queued_album(), _skipped_task()]
+    chat, _ = _scripted(BLAMES_THE_PERSON, "The task wasn't added because no name was provided.")
+    narration = narrator.narrate("do both", None, records, surface=None, chat=chat)
+    assert narration.path == "appended"
+    assert (narration.reply or "").endswith(
+        "For the record: didn't ask tasks to add a task to sort that this weekend, "
+        "since an earlier part gave no name to pass on."
+    )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        TRUE_REASON,
+        "Queued the album. The task wasn't added: the album step never gave a name for it.",
+        "Queued the album, but there was no name to pass on, so I didn't add the task.",
+        "The task didn't run since the download came back with no name.",
+    ],
+)
+def test_a_reply_that_says_the_true_reason_is_left_alone(reply: str) -> None:
+    records = [_queued_album(), _skipped_task()]
+    chat, seen = _scripted(reply)
+    narration = narrator.narrate("do both", None, records, surface=None, chat=chat)
+    assert (narration.reply, narration.path, len(seen)) == (reply, "narrated", 1)
+
+
+def test_a_spoken_reply_keeps_two_sentences_with_the_true_reason() -> None:
+    records = [_queued_album(), _skipped_task()]
+    chat, _ = _scripted(BLAMES_THE_PERSON, BLAMES_THE_PERSON)
+    narration = narrator.narrate("do both", None, records, surface="voice", chat=chat)
+    sentences = re.split(r"(?<=[.!?])\s+", narration.reply or "")
+    assert len(sentences) == 2 and "gave no name to pass on" in sentences[1]
+
+
+def test_the_fallback_reply_has_the_true_reason() -> None:
+    def broken(messages: list[dict[str, Any]], max_tokens: int) -> Any:
+        raise ProviderRequestError("llama-server timed out")
+
+    records = [_queued_album(), _skipped_task()]
+    narration = narrator.narrate("do both", None, records, surface=None, chat=broken)
+    assert "since an earlier part gave no name to pass on" in (narration.reply or "")
+
+
+def test_other_reasons_are_not_held_to_a_wording() -> None:
+    records = [_done_task(), _unrun(AFTER_FAILURE)]
+    reply = "Added “Water the plants”; say undo to trash it. I didn't delete anything."
+    chat, seen = _scripted(reply)
+    narration = narrator.narrate("add it, then delete it", None, records, surface=None, chat=chat)
+    assert (narration.reply, len(seen)) == (reply, 1)
+
+
 @pytest.mark.parametrize(
     "error",
     [

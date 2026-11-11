@@ -1181,7 +1181,7 @@ def _refusal(
 ) -> str | None:
     """Why code won't run this step with what it was given, or ``None`` (#72)."""
     if filled.missing:
-        return f"{filled.missing[0]} gave no name to pass on"
+        return f"{filled.missing[0]} {run_record.NO_NAME_REASON}"
     if not filled.untrusted:
         return None
     source = filled.untrusted[0]
