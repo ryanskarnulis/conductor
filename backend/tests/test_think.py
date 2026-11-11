@@ -262,6 +262,151 @@ def test_with_the_lane_off_a_think_is_not_run_and_said(
     assert compiled.status == "ran" and compiled.note == "think not run: the lane is off"
 
 
+# --- from code (#146) ------------------------------------------------------------------------
+
+STUCK = "sort out the garage, the bills and the dentist before the trip"
+
+
+def _unplannable() -> ScriptedProvider:
+    """The compile, its repair and the extra round (#75), none of them a plan."""
+    return ScriptedProvider([text_turn("nope"), text_turn("still nope"), text_turn("no")])
+
+
+def test_a_plan_no_round_can_assemble_is_filed_as_a_think_by_code(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    provider = _unplannable()
+    reply = run_with(provider, STUCK)
+    assert len(provider.requests) == 3  # both repair rounds ran first
+    assert reply["stop_reason"] == "completed"
+    # Honest: it is thinking about it; nothing ran, nothing was proposed.
+    assert reply["content"] == f"{interpreter.UNPLANNED_THINKS} {think.THINKING}"
+    assert [c["tool"] for c in reply["tool_calls"]] == ["think"]
+    assert world.writes() == [] and world.reads == []
+    job = _job(db_session)
+    assert (job.app, job.status, job.title, job.noted_at) == (think.APP, "submitted", STUCK, None)
+    compiled = db_session.execute(
+        select(LedgerPlan).where(LedgerPlan.source == "compiled")
+    ).scalar_one()
+    assert compiled.status == "invalid" and compiled.body is None
+    assert compiled.note is not None and "not a plan" in compiled.note
+    assert "thinking in the background" in compiled.note
+    assert [(s.kind, s.outcome) for s in compiled.steps] == [("think", "done")]
+
+
+def test_the_think_from_code_proposes_untried_and_waits_for_a_yes(
+    run_with: Any,
+    world: World,
+    fleet: Fleet,
+    session_factory: sessionmaker[Session],
+) -> None:
+    run_with(_unplannable(), STUCK)
+    watcher, _, provider = _thinker(session_factory, fleet, GOOD)
+    assert watcher.sweep(force=True) == 1
+    (note,) = _notes(run_with)
+    assert note["stop_reason"] == think.PROPOSAL
+    assert STUCK in provider.requests[0]["messages"][1]["content"]
+    assert world.writes() == []  # a proposal, tainted: nothing runs without a yes
+    reply = run_with(
+        ScriptedProvider([plan_turn(confirm("yes")), text_turn("Added three garage tasks.")]),
+        "yes",
+    )
+    assert [c["tool"] for c in reply["tool_calls"]] == ["ask_tasks"]
+    assert len([r for r in world.receipts if r.kind == "create"]) == 3
+
+
+def test_a_plan_that_stays_unrunnable_is_filed_too(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    looked = plan_turn(steps({"do": "look", "app": "tasks"}, ask("tasks", "move {s1} to friday")))
+    reply = run_with(ScriptedProvider([looked, looked]), "move what's due to friday")
+    assert reply["content"].endswith(think.THINKING)
+    assert world.writes() == [] and world.reads == []
+    assert _job(db_session).title == "move what's due to friday"
+
+
+def test_tries_that_disagree_on_the_app_keep_the_quick_question(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    def misnumbered(app_name: str, request: str) -> ChatResult:
+        return text_turn(json.dumps({"steps": [{"id": "s2", **ask(app_name, request)}]}))
+
+    provider = ScriptedProvider(
+        [
+            misnumbered("music", "grab Odessa"),
+            misnumbered("tasks", "add Odessa"),
+            misnumbered("music", "grab Odessa"),
+        ]
+    )
+    reply = run_with(provider, "Odessa")
+    assert reply["content"] == 'Do you mean "grab Odessa" in music, or "add Odessa" in tasks?'
+    assert db_session.execute(select(LedgerJob)).first() is None
+
+
+def test_with_the_lane_off_an_unplannable_turn_is_as_it_always_was(
+    run_with: Any, world: World, monkeypatch: pytest.MonkeyPatch, db_session: Session
+) -> None:
+    monkeypatch.setattr(get_settings(), "conductor_think", False)
+    reply = run_with(_unplannable(), STUCK)
+    assert reply["content"] == interpreter.UNPLANNED
+    assert reply["tool_calls"] is None
+    db_session.expire_all()
+    assert db_session.execute(select(LedgerJob)).first() is None
+    compiled = db_session.execute(select(LedgerPlan)).scalar_one()
+    assert compiled.status == "invalid" and compiled.steps == []
+
+
+def test_a_dead_model_is_a_502_never_a_think(
+    client: TestClient, fleet: Fleet, db_session: Session
+) -> None:
+    conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
+    provider = ScriptedProvider([ProviderRequestError("llama-server unreachable")])
+    app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(provider, fleet)
+    response = client.post(
+        f"/api/agent/conversations/{conversation}/messages", json={"content": STUCK}
+    )
+    assert response.status_code == 502
+    db_session.expire_all()
+    assert db_session.execute(select(LedgerJob)).first() is None
+
+
+def test_a_yes_with_nothing_waiting_is_not_worth_thinking_over(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    # The planner read it as an answer to a question that isn't there (the
+    # validator refuses it every round): there is no problem to think over.
+    yes = plan_turn(confirm("yes"))
+    reply = run_with(ScriptedProvider([yes, yes, yes]), "yes")
+    assert reply["content"] == interpreter.UNPLANNED
+    db_session.expire_all()
+    assert db_session.execute(select(LedgerJob)).first() is None
+
+
+def test_an_answer_to_a_waiting_question_is_never_filed_as_a_think(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    waiting = steps(ask("tasks", "delete the groceries task", destructive=True))
+    asked = run_with(ScriptedProvider([plan_turn(waiting)]), "delete the groceries task")
+    assert asked["content"] == 'Trash "groceries"?'
+    reply = run_with(_unplannable(), "hmm, how about the other one")
+    assert reply["content"] == interpreter.UNPLANNED
+    db_session.expire_all()
+    assert db_session.execute(select(LedgerJob)).first() is None
+
+
+def test_only_a_request_the_planner_could_not_shape_is_worth_a_think() -> None:
+    def raw(body: dict[str, Any]) -> str:
+        return json.dumps(body)
+
+    cancel = {"do": "cancel", "target": "that"}
+    assert interpreter.answering([raw(confirm("yes")), "nope"]) is True
+    assert interpreter.answering(["nope", raw(steps(ask("tasks", "x"), cancel))]) is True
+    assert interpreter.answering([raw({"resume": "the first"})]) is True
+    assert interpreter.answering(["nope", raw(steps(ask("tasks", "x")))]) is False
+    assert interpreter.answering(["nope", raw({"answer": "chat"})]) is False
+    assert interpreter.answering(["nope", "still nope"]) is False
+
+
 # --- the proposal ----------------------------------------------------------------------------
 
 
