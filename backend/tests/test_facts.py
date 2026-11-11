@@ -66,6 +66,7 @@ SUNDAYS = "I sort music on Sundays"
         ("don't forget the spare key is under the blue pot", "remember", "the spare key is under the blue pot"),
         ("go with the 30-inch brackets, remember that", "remember", "go with the 30-inch brackets"),
         ("keep in mind: focus time is 9 to 11", "remember", "focus time is 9 to 11"),
+        ("the gate code is 4417, keep that in mind", "remember", "the gate code is 4417"),
         ("forget that", "forget", ""),
         ("forget it", "forget", ""),
         ("forget that I sort music on Sundays", "forget", SUNDAYS),
@@ -93,6 +94,79 @@ def test_a_fact_is_kept_in_the_persons_own_words() -> None:
     assert facts.own_words("remember that", "remember that") is None
     assert facts.literal("sort  MUSIC", "I sort music on Sundays") == "sort music"
     assert facts.same("I sort music.", "i sort  music")
+
+
+# #159: the planner sometimes writes its prompt's example as the request.
+COPIED = "remember I sort music on Sundays"
+VEGETARIAN = "my brother is vegetarian"
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        f"keep in mind that {VEGETARIAN}",
+        f"by the way, keep in mind that {VEGETARIAN}",
+        f"I need you to keep in mind that {VEGETARIAN}.",
+        f"{VEGETARIAN}, keep that in mind",
+        f"add a task to buy tofu and keep in mind that {VEGETARIAN}",
+        f"keep in mind that {VEGETARIAN} and add a task to buy tofu",
+        f"keep in mind that {VEGETARIAN}, then add a task to buy tofu",
+        f"Remember that {VEGETARIAN}. Also add a task to buy tofu",
+        f"don't forget {VEGETARIAN}; and could you add tofu to the list",
+    ],
+)
+def test_a_copied_example_never_changes_what_is_saved(words: str) -> None:
+    """The fact is the person's: cut from their words after their own
+    "remember" or "keep in mind", up to the end of that sentence or the next
+    ask, whatever the plan's request says."""
+    assert facts.own_words(COPIED, words) == VEGETARIAN
+
+
+def test_the_planners_cut_of_a_longer_sentence_stands_when_it_is_their_words() -> None:
+    # The planner split off the second ask; its fact is in their sentence.
+    words = "remember I walk the dog at 7 and play chess on Fridays"
+    assert facts.own_words("remember I walk the dog at 7", words) == "I walk the dog at 7"
+    # Copied, so code cuts: "and play" isn't another ask it knows, so it stays.
+    assert facts.own_words(COPIED, words) == "I walk the dog at 7 and play chess on Fridays"
+    # Words of theirs outside what follows their "remember" aren't the fact.
+    words = f"add a task to buy tofu and remember {VEGETARIAN}"
+    assert facts.own_words("remember a task to buy tofu", words) == VEGETARIAN
+
+
+def test_a_fact_needs_their_own_remember_unless_the_plans_words_are_theirs() -> None:
+    # No remember of theirs: the planner's version only if they said it.
+    assert facts.own_words(f"remember {VEGETARIAN}", f"{VEGETARIAN}, fyi") == VEGETARIAN
+    assert facts.own_words(COPIED, f"{VEGETARIAN}, fyi") is None
+    # A remember they negate or ask about holds no fact.
+    assert facts.own_words(COPIED, "I can't remember where the spare key is") is None
+    assert facts.own_words(COPIED, "do you keep in mind what I tell you?") is None
+    assert facts.own_words(COPIED, f"{VEGETARIAN}. Remember that.") is None
+    assert facts.own_words(f"remember {VEGETARIAN}", f"{VEGETARIAN}. Remember that.") == (
+        VEGETARIAN
+    )
+
+
+def test_the_memory_eval_cases_read_the_fact_code_saves() -> None:
+    from tests.plan_cases import CASES
+
+    case = next(case for case in CASES if case.id == "memory-keep-in-mind")
+    copied = plans.load(steps(ask("memory", COPIED)))
+    theirs = plans.load(steps(ask("memory", "remember I'm allergic to shellfish")))
+    question = plans.load(steps(ask("memory", "what am I allergic to?")))
+    assert any(shape.matches(copied) for shape in case.expect)  # #159: theirs is saved
+    assert any(shape.matches(theirs) for shape in case.expect)
+    assert not any(shape.matches(question) for shape in case.expect)
+    both = next(case for case in CASES if case.id == "memory-remember-and-ask")
+    split = plans.load(
+        steps(ask("tasks", "add a task to book the vet"), ask("memory", COPIED)),
+    )
+    assert any(shape.matches(split) for shape in both.expect)
+
+
+def test_the_facts_their_words_hold_come_in_order() -> None:
+    words = f"remember {VEGETARIAN}, and keep in mind that the spare key is under the blue pot"
+    assert facts.said(words) == [VEGETARIAN, "the spare key is under the blue pot"]
+    assert facts.said("what do you know about me?") == []
 
 
 def test_what_to_forget_comes_from_the_persons_words() -> None:
@@ -343,6 +417,24 @@ def test_outside_text_never_becomes_a_fact(
     )
     db_session.expire_all()
     assert facts_service.live(db_session) == []
+
+
+def test_a_plan_that_copies_the_prompts_example_saves_what_the_person_said(
+    talk: Talk,  # noqa: F811
+    db_session: Session,
+) -> None:
+    """#159: the memory step's request is the prompt's example; the fact
+    saved is the person's, cut from their words after their "keep in mind"."""
+    words = f"add a task to buy tofu and keep in mind that {VEGETARIAN}"
+    reply, _ = talk.say(
+        words,
+        plan_turn(steps(ask("tasks", "add a task to buy tofu"), ask("memory", COPIED))),
+        text_turn(f"Added the task and remembered “{VEGETARIAN}”."),
+    )
+    memory_call = next(call for call in reply["tool_calls"] if call["tool"] == "ask_memory")
+    assert memory_call["app_record"][0]["outcome"] == "done"
+    db_session.expire_all()
+    assert [row.text for row in facts_service.live(db_session)] == [VEGETARIAN]
 
 
 def test_memory_with_no_app_fails_the_step_honestly(fleet: Fleet, world: World) -> None:  # noqa: F811

@@ -1218,3 +1218,203 @@ What the table shows besides:
   in the last two runs, the same code.
 
 Session evals were not run: no default changed.
+
+### A remembered fact comes from the person's words; one memory-line A/B (#159, #138, 2026-11-10)
+
+The planner prompt, step kinds, compiler and validator are unchanged.
+`facts.own_words` changed: the fact is cut from the person's own
+"remember", "keep in mind" or "don't forget" anywhere in what they said,
+up to the end of that sentence or the next ask. The planner's version
+stands only when it sits word for word inside that cut. Before this, code
+only read a "remember" at the start of the person's words. If the plan
+copied the prompt's example, "by the way, keep in mind that …", "…, keep
+that in mind" and "add a task … and keep in mind that …" saved nothing,
+and "keep in mind that X and add a task …" saved the second ask's words
+along with the fact. A plain "keep in mind that X" was already right.
+
+New `memory` cases, fresh wordings with facts that aren't the prompt's
+example: `memory-keep-in-mind`, `memory-remember-place`,
+`memory-dont-forget`, `memory-remember-and-ask` (a second ask in the same
+message) and `memory-forget-just-saved` ("forget that" right after saving,
+as M2 says it). The remember cases check the fact code would save
+(`M.saves`), not the request text.
+
+Plan evals at n=20 on gemma-4-12b, this branch on `8bf298a`. The main
+column is the #142 run above (same prompt and compile path):
+
+| group | floor | main | first-try | this change | first-try |
+|---|---|---|---|---|---|
+| golden | 0.8 | 394/420 | 377/420 | 385/420 | 378/420 |
+| cross | 0.8 | 140/140 | 123/140 | 139/140 | 120/140 |
+| ref | 0.85 | 76/80 | 76/80 | 75/80 | 75/80 |
+| control | 0.8 | 80/100 | 80/100 | 80/100 | 80/100 |
+| memory | 0.8 | 139/140 | 116/140 | 238/240 (12 cases) | 212/240 |
+| knowledge | 0.65 | 60/60 | 60/60 | 60/60 | 60/60 |
+| hard | 0.5 | 20/20 | 20/20 | 18/20 | 18/20 |
+| self | 0.55 | 59/60 | 31/60 | 58/60 | 37/60 |
+| mixed | 0.85 | 190/200 | 170/200 | 185/200 | 165/200 |
+| long | 0.7 | 154/160 | 143/160 | 156/160 | 150/160 |
+| stale | 0.8 | 80/80 | 60/80 | 80/80 | 60/80 |
+
+- Every group passed its gate, and every plan was valid. The steady misses
+  are as before: `amend-job` 0/20, `ho-amend` 5/20 and `chess-analysis`
+  0/20 (`look:chess`).
+- The new cases were 20/20 each. None of the 100 remember samples copied the
+  example, so main's `own_words` saves the same facts on these plans. The
+  fix shows in the unit tests, on phrasings the plan cases didn't produce.
+- The copying #138 describes shows in `memory-forget-just-saved`: 17/20
+  plans wrote "forget that I sort music on Sundays", and `memory-forget-that`
+  3/20. Both still pass, because what to forget comes from the person's
+  words (#134).
+
+Session evals, gate tier at 5 and frontier at 5: every gate scenario passed.
+S6 and M3 were 4/5, the rest 5/5 (M1 and M2 5/5). The S6 miss never filed
+Odessa. In the M3 miss, the planner wrote "on Sunday" into the ask itself,
+so no fact went along; the fact saved was right. Frontier: S3, S10, S11 and
+S12 were 5/5, S14 4/5, S13 0/5 (the brief, as before) and S15 1/5. Claims
+were 117/117 backed. No infra misses.
+
+**One memory-line A/B, dropped.** The examples became placeholders:
+`"remember <the fact, as they said it>"` and `"forget that <the fact>"`.
+This was measured at n=20 against the shipped line, same code, one arm per
+GPU hold:
+
+| group | shipped | first-try | placeholders | first-try |
+|---|---|---|---|---|
+| golden | 385/420 | 378/420 | 396/420 | 389/420 |
+| memory | 238/240 | 212/240 | 240/240 | 227/240 |
+| self | **58/60** | **37/60** | **51/60** | **31/60** |
+| plans copying the example | 20/240 | | 0/240 | |
+
+- The rewording took copying to zero, with no literal placeholder in any
+  plan. It also lifted `memory-about-me` first-try from 2/20 to 20/20.
+- `self` fell: `status-last` gave `answer:chat` 9 times in 20 against 2.
+  The rule was at least as good in every group, so the line stays as
+  shipped. #134 also found the line fragile.
+
+## Fleet smoke (#143)
+
+`backend/tests/test_fleet_smoke.py`: S2, S3, S9 and S15 through conductor
+against the **real** PCC and music agents, the seam session evals fake. Opt-in,
+never a CI or PR gate; measured first, gated later if it holds steady.
+
+```bash
+cd backend
+CONDUCTOR_FLEET_SMOKE=1 .venv/bin/pytest tests/test_fleet_smoke.py -v -s
+```
+
+The harness (`tests/fleet_harness.py`) starts each app's backend from its
+sibling checkout with that checkout's own `.venv` (code used read-only), on a
+free loopback port (never 8000/8100/8200/8300/8500 or a dev port), a scratch
+SQLite migrated with the app's `alembic upgrade head`, and scratch library and
+trace files, all in one pytest temp folder. Each sample restarts both apps on
+fresh databases; PCC is seeded through its REST API (fake_world's projects and
+tasks). Conductor discovers them the normal way: the siblings' `app.yaml`
+copied into `fleet_manifest_dir` with `upstream` rewritten (chess pointed at a
+dead port, so the planner prompt is production's). Its delegate client, glance
+and job cancel are wrapped to refuse any other upstream.
+
+Nothing leaves loopback: music's yt-dlp is a fake (`YT_DLP_BIN`, music's own
+test seam) that writes a silent mp3 and logs its argv; MusicBrainz and the
+likes poller are off; Genius, Spotify and SoundCloud are unset; every proxy
+variable points at a dead port. The subprocesses run from the temp folder with
+a minimal environment, so no checkout's `.env` is read. A watcher samples the
+apps' sockets (`ss`) and open files (`/proc`) throughout and fails the module
+on a peer off loopback or a database, audio or trace file outside the temp
+folder (checked against a positive control). Checks read each app's end state
+through its own API, and the replies are held to the apps' real receipts.
+
+`CONDUCTOR_FLEET_RUNS` (3) samples per scenario; `CONDUCTOR_FLEET_REPORT=path`
+appends a JSON line per sample; `CONDUCTOR_FLEET_COST=1` adds #155's
+measurement below.
+
+### First measurement, 2026-11-10, gemma-4-12b, `8bf298a`
+
+A measurement, not a floor. 3 samples each; watch: 492 samples, 0 sockets off
+loopback, 0 files outside the temp folder, 8 fake yt-dlp calls.
+
+| scenario | pass | turn time |
+|---|---|---|
+| S2 add a task | 3/3 | 3.6–7.3 s |
+| S3 album, then a task named for it | 0/3 | 4.1–5.9 s |
+| S9 wipe Kitchen, yes | 3/3 | 1.8–2.5 s per turn |
+| S15 S3, then "do the same for their other album" | 0/3 | 3.8–6.2 s per turn |
+
+What the apps received (conductor's `ask` words, verbatim):
+
+- S2: tasks heard "add a task to water the plants tomorrow" and called
+  `create_task {title: "water the plants", due_date: tomorrow}` every time.
+- S9: tasks heard "wipe the kitchen project" (`destructive: true`), asked
+  "Trash project "Kitchen" and its 3 tasks?" itself, and the `confirm` step
+  trashed it. Conductor's gate stayed out of the way, as `confirms: true` says.
+- S3: music heard "download the new Caribou album" and queued
+  `download_playlist {query: "Caribou album"}` (2/3; once it answered that it
+  needed a link and did nothing). The tasks step, "add a task to sort {s1}
+  this weekend" (once "… sort the album {s1} …"), never ran: "s1 gave no name
+  to pass on".
+- S15 turn 2: twice `recall` ("what was the other album the person
+  mentioned?", "what other album did they mention?") then "download the new
+  {s1} album" / "download the album {s1}", not run; once the plan dropped the
+  music step and tasks heard "add a task to sort the other Caribou album this
+  weekend" (created, due Sunday, but not "Suddenly").
+
+Why S3 and S15 fail against the real music, where the fake passes:
+
+- **Music's receipt names no album.** `download_playlist`'s record touches
+  only a `download_job` ref, titled with the query the 12B wrote ("Caribou
+  album"). `dataflow.from_record` skips job refs by design, so `{s1}` is
+  empty. The fake world adds an `album` ref titled "Honey"; the real app
+  never resolves an album name (no catalog, MusicBrainz is tagging-only).
+- **The fake knows Caribou's discography; music doesn't.** "Their other
+  album" has nothing to resolve against in any real app.
+- **Music's job runs `ytsearch1:Caribou album` with `--yes-playlist`**: real
+  yt-dlp would fetch one search hit, not an album (a music finding).
+- The narrator blames the person: "I could not add the task … because a
+  specific name for the task was not provided."
+
+S2 and S9 behave as the fake predicts; the writes, receipts, confirm token
+and replies all line up.
+
+### A delegated write end to end (#155, 2026-11-10)
+
+Same run, all three traced (`CONDUCTOR_TRACE_PATH`, `PCC_TRACE_PATH`,
+`MUSIC_TRACE_PATH`) and every model call through the harness's meter, a
+pass-through to llama-swap recording llama-server's own `usage`/`timings`
+(music's trace keeps no cache numbers). Neither app records `X-Agent-Turn`,
+so a hop is joined to its app run by thread (`conversation_id` = the hop's
+`thread_id`) inside the turn's window. 3 runs each, back to back, fresh
+databases and a new delegate thread per run; the 12B stayed loaded, so no
+run includes a model load. "Cold" below is the first run after a different
+utterance (the planner's prefix differs past the state block).
+
+"add a task to water the plants tomorrow" (4 calls every run; turn 3694, 4300,
+4217 ms, median 4217):
+
+| call | ms | prompt | cached | prefill ms |
+|---|---|---|---|---|
+| conductor planner | 689 / 1314 / 1282 | 1860 | 1833 / 1652 / 1652 | 109 / 782 / 760 |
+| PCC tool turn | 1484 / 1482 / 1480 | 3977 | 3614 | ~910 |
+| PCC closing turn | 559 / 550 / 553 | 4067 | 3973 | ~168 |
+| conductor narrator | 885 / 879 / 820 | 772 | 471 | ~472 |
+
+"download the song Odessa by Caribou" (yt-dlp faked, so this is the model
+calls; 4 calls every run; turn 3490, 2443, 2315 ms, median 2443):
+
+| call | ms | prompt | cached | prefill ms |
+|---|---|---|---|---|
+| conductor planner | 1358 / 627 / 611 | 1859 | 1652 / 1858 / 1858 | 778 / 49 / 32 |
+| music tool turn | 877 / 290 / 290 | 3147 | 3052 / 3143 / 3143 | 632 / 45 / 46 |
+| music closing turn | 461 / 683 / 571 | 3223 | 3143 | ~156 |
+| conductor narrator | 708 / 762 / 762 | 769 | 471 | ~472 |
+
+Read:
+
+- Four sequential model calls per delegated write, as the issue counted, and
+  they are nearly the whole turn: 3.6–4.2 s of 3.7–4.3 s for a task, 2.4–3.4 s
+  of 2.4–3.5 s for a song.
+- The narrator's prefix stops matching at token 471 on every call, so ~300
+  tokens are re-read each turn (~470 ms, half its time).
+- PCC's tool turn re-reads ~360 tokens every run (~910 ms prefill) even when
+  warm; its closing turn rides the tool turn's cache.
+- The planner's prefix is cached to ~1650 of 1860 after a different
+  utterance (~770 ms prefill) and fully when the words repeat (~40 ms).
