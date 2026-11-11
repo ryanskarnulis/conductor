@@ -5,6 +5,8 @@ import type {
   JobCancelResult,
   MessageExchange,
   Surface,
+  ThreadClosed,
+  ThreadInfo,
   Timeline,
   TurnActivity,
 } from '../types/agent'
@@ -86,4 +88,38 @@ export async function cancelJob(conversationId: number, app: string, ref: string
     body: JSON.stringify({ app, ref }),
   })
   return (await res.json()) as JobCancelResult
+}
+
+/** The side threads still open (#139), oldest first. */
+export async function listThreads(): Promise<ThreadInfo[]> {
+  const res = await apiClient('/api/agent/threads')
+  return (await res.json()) as ThreadInfo[]
+}
+
+/** Start a side thread carrying what the timeline's window touched and saved.
+ * No model runs. Incognito keeps no name. */
+export async function startThread(title: string | null, incognito = false): Promise<ThreadInfo> {
+  const res = await apiClient('/api/agent/threads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...(title ? { title } : {}), ...(incognito ? { incognito: true } : {}) }),
+  })
+  return (await res.json()) as ThreadInfo
+}
+
+export async function getThread(id: number): Promise<ThreadInfo> {
+  const res = await apiClient(`/api/agent/threads/${id}`)
+  return (await res.json()) as ThreadInfo
+}
+
+/** Close a side thread: its result, narrated from its receipts, is posted
+ * into the timeline. The narrator runs, so this waits like a turn. */
+export async function closeThread(id: number, surface?: Surface): Promise<ThreadClosed> {
+  const res = await apiClient(`/api/agent/threads/${id}/close`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(surface ? { surface } : {}),
+    timeoutMs: AGENT_RUN_TIMEOUT_MS,
+  })
+  return (await res.json()) as ThreadClosed
 }

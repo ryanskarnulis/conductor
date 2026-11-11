@@ -10,6 +10,8 @@ import { AgentPage } from './AgentPage'
 
 vi.mock('../../api/sort', () => ({ getWorklist: vi.fn(), openGroup: vi.fn(), fileSongs: vi.fn() }))
 vi.mock('../../api/agent', () => ({
+  // Side threads (#139): none open.
+  listThreads: vi.fn(() => Promise.resolve([])),
   cancelJob: vi.fn(),
   cancelTurn: vi.fn(),
   getConversation: vi.fn(),

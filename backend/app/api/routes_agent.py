@@ -44,6 +44,7 @@ from app.ai import (
     job_control,
     narrator,
     think,
+    thread_note,
     turn_context,
     turn_events,
 )
@@ -73,6 +74,7 @@ from app.schemas.conversations import (
     MessageCreate,
     MessageExchange,
     MessageRead,
+    NoteThreadRead,
     RunCancelRead,
     TimelineDetail,
     TimelineHit,
@@ -83,6 +85,7 @@ from app.services import conversations as conversations_service
 from app.services import facts as facts_service
 from app.services import ledger
 from app.services import memory as memory_service
+from app.services import threads as threads_service
 from app.services import timeline as timeline_service
 
 logger = structlog.get_logger(__name__)
@@ -180,7 +183,15 @@ def _messages(db: Session, conversation: Conversation) -> list[MessageRead]:
         db, conversation.id, newest=conversations_service.TIMELINE_MESSAGES
     )
     tags = timeline_service.message_tags(db, (row.id for row in rows))
-    return [_read(row, tags.get(row.id)) for row in rows]
+    # A side thread's result note (#139) names the thread it came from.
+    noted = threads_service.note_threads(
+        db, [row.id for row in rows if row.stop_reason == thread_note.THREAD_NOTE]
+    )
+    reads = [_read(row, tags.get(row.id)) for row in rows]
+    for read in reads:
+        if read.id in noted:
+            read.thread = NoteThreadRead(id=noted[read.id].id, title=noted[read.id].title)
+    return reads
 
 
 def _read(message: ConversationMessage, tag: timeline_service.Tag | None) -> MessageRead:
@@ -208,6 +219,15 @@ def _get_or_404(db: Session, conversation_id: int) -> Conversation:
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
     return conversation
+
+
+def _writable_or_409(conversation: Conversation) -> None:
+    """A closed side thread (#139) takes no more turns or notes."""
+    if threads_service.is_thread(conversation) and threads_service.is_closed(conversation):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="this side thread is closed; its result is in the timeline",
+        )
 
 
 @router.get("/conversations", response_model=list[ConversationRead])
@@ -535,6 +555,7 @@ def post_note(
     the one thing a truthful transcript cannot do.
     """
     conversation = _get_or_404(db, conversation_id)
+    _writable_or_409(conversation)
     note = conversations_service.append_user_message(
         db, conversation, data.content, hidden=data.incognito
     )
@@ -591,10 +612,13 @@ def _post_message(
     thread_store: ThreadStore,
 ) -> MessageExchange:
     conversation = _get_or_404(db, conversation_id)
+    _writable_or_409(conversation)
     hidden = data.incognito
-    # "This conversation" is the timeline since its quiet gap (#82); older
-    # turns reach the planner only as cross-day recall, labelled by day.
-    since = _window(db, conversation.id)
+    # A side thread (#139) is read whole, with what it carries in from the
+    # timeline; the timeline is "this conversation" since its quiet gap
+    # (#82), and older turns reach the planner only as cross-day recall.
+    thread = conversation if threads_service.is_thread(conversation) else None
+    since = None if thread is not None else _window(db, conversation.id)
     turns = _stored_turns(db, conversation.id, since)
     turn_opening = turn_context.build(
         clock.local_today(),
@@ -602,10 +626,18 @@ def _post_message(
         data.content,
         history=lambda: turns,
         earlier=lambda: conversations_service.earlier_calls(db, conversation.id, since=since),
-        entities=lambda: ledger.recent_entities(db, conversation.id, since=since),
+        entities=lambda: (
+            threads_service.turn_entities(db, thread)
+            if thread is not None
+            else ledger.recent_entities(db, conversation.id, since=since)
+        ),
         jobs=lambda: ledger.running_job_lines(db, conversation.id),
         matches=lambda: memory_service.matches(db, data.content, conversation.id, since=since),
-        facts=lambda: facts_service.for_state(db, data.content),
+        facts=lambda: (
+            threads_service.turn_facts(db, thread, data.content)
+            if thread is not None
+            else facts_service.for_state(db, data.content)
+        ),
     )
     user_message = conversations_service.append_user_message(
         db, conversation, data.content, hidden=hidden

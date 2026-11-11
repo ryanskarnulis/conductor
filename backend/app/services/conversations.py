@@ -10,7 +10,8 @@ created on first use (:func:`timeline`). Conversations from before it are
 ``legacy``: gone from the listing and the API, reachable only through recall
 (#58 (c)). The planner's "this conversation" is the timeline since its last
 quiet gap (:data:`QUIET_GAP`, :func:`window_since`); anything older reaches it
-only as cross-day recall, labelled with its day.
+only as cross-day recall, labelled with its day. A side thread (#139,
+:mod:`app.services.threads`) is a conversation of its own, read whole.
 
 **Incognito** (#82, :mod:`app.ai.incognito`): an incognito turn's words and
 reply are stored as the placeholder, its calls without their words; what
@@ -32,7 +33,7 @@ import structlog
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.ai import confirmation, facts, incognito, narrator
+from app.ai import confirmation, facts, incognito, narrator, thread_note
 from app.ai.runtime import AgentRunResult, ToolCallRecord
 from app.ai.recall import EarlierCall
 from app.db.models import (
@@ -66,6 +67,9 @@ WINDOW_SCANNED = 400
 TIMELINE_MESSAGES = 500
 
 _SHOWN_KINDS = (ConversationKind.timeline.value, ConversationKind.thread.value)
+# Notes posted into a conversation that aren't exchanges: they never lapse a
+# waiting question or break a quiet gap.
+_NOTES = (narrator.JOB_NOTE, thread_note.THREAD_NOTE)
 
 
 def list_conversations(db: Session, *, limit: int = 50) -> Sequence[Conversation]:
@@ -128,7 +132,8 @@ def window_since(
     after the last quiet gap (:data:`QUIET_GAP`), as a UTC timestamp. Messages
     at or after it are in the window. ``now`` itself counts: when the newest
     message is a gap old, the window is empty (it starts now). ``None``: every
-    scanned message is in it (no gap found). Jobs' notes never break a gap."""
+    scanned message is in it (no gap found). Jobs' and threads' notes never break
+    a gap."""
     now = now or utcnow()
     stamps = (
         db.execute(
@@ -137,7 +142,7 @@ def window_since(
                 ConversationMessage.conversation_id == conversation_id,
                 or_(
                     ConversationMessage.stop_reason.is_(None),
-                    ConversationMessage.stop_reason != narrator.JOB_NOTE,
+                    ConversationMessage.stop_reason.not_in(_NOTES),
                 ),
             )
             .order_by(ConversationMessage.id.desc())
@@ -229,9 +234,10 @@ def stored_turns(
     hidden = incognito_messages(db, conversation_id)
     turns = []
     for message in list_messages(db, conversation_id, since=since, newest=WINDOW_SCANNED):
-        # A job's note (#76) is not an exchange: it never voids the question
-        # the last turn left, and the ledger keeps what the job did.
-        if message.stop_reason == narrator.JOB_NOTE:
+        # A job's note (#76) or a side thread's result (#139) is not an
+        # exchange: it never voids the question the last turn left, and the
+        # ledger keeps what the job or thread did.
+        if message.stop_reason in _NOTES:
             continue
         content: str | None
         calls: list[dict[str, Any]] | None
