@@ -161,7 +161,9 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   (`app/ai/speaker.py`). Each reply opens with `about` (#151: what the
   message is about; the running-job and waiting values only when State has
   one), and a plan its `about` contradicts gets one repair
-  (`plan.disagrees`); it isn't stored with the plan. **No guessed action:** a plan still invalid after
+  (`plan.disagrees`); it isn't stored with the plan. Words that change
+  something State doesn't show get one repair to an amend, never a new ask
+  (`plan.points_at_nothing`, #176). **No guessed action:** a plan still invalid after
   the compiler's repair, or with a `{sN}` no step can name
   (`plan.unrunnable`), gets one more round (`compiler.repair_turn`), then
   code asks which app was meant when the tries disagreed, else files a

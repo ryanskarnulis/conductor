@@ -521,9 +521,8 @@ def test_anything_else_lets_the_proposal_lapse(
     assert ledger.paused_plan(db_session, run_with.conversation) is None
     # A later yes has nothing to answer: the validator refuses a confirm.
     checks = plans.Checks(fleet=fleet, confirmable=False)
-    assert "confirm with nothing waiting on the person" in plans.problems(
-        plans.StepPlan.model_validate(confirm("yes")), checks
-    )
+    (found,) = plans.problems(plans.StepPlan.model_validate(confirm("yes")), checks)
+    assert found.startswith("confirm with nothing waiting on the person")
     assert world.receipts == []
 
 

@@ -1872,3 +1872,47 @@ T2 5/5; S5 4/5; M2 12/15 (three "forgot nothing": turn 2 ran no step);
 S11 4/5; S14 3/5 (one "wrote before the plan was confirmed"); S13 0/5 (the
 brief, as before); S15 0/5 (as in the batch run). Infra 0/12, claims backed
 138/140. Nothing is significantly below the batch run.
+
+## Empty-state guards back, first-try losses, "forget that" (#176, #180, #183; 2026-11-11)
+
+Measured on `205a50a` (#179's tip) at n=20, gemma-4-12b. Per-case first
+replies come from `CONDUCTOR_EVAL_REPORT` (the `about` and the first plan of
+each sample), from this branch's runs and the #151, #160 and #179 reports.
+
+### #176: the empty-state guards
+
+What the first reply was, main against the pre-#151 run:
+
+| case | pre-#151 | main | main's first reply → final plan |
+|---|---|---|---|
+| `yes-nothing-waiting` | 18/20 (0) | 4/20 (0) | `the outside world` + confirm 20 → decline 16, chat 4 |
+| `amend-nothing-waiting` | 16/20 (13) | 4/20 (4) | ask tasks 14 (`an app` 7, `the outside world` 7), amend 4, think 2 |
+| `self-said-just-now` | 18/20 (7) | 15/20 (12) | self 12; recall 8 → recall 5, self 3 |
+
+Before #151 the first replies were the same mistakes (confirm, knowledge)
+and the repair answered chat or self. With `about` first, the 12B labels a
+bare "yes" `the outside world` and keeps it through the confirm's repair, so
+the repair is a decline; "make it the first ten instead" is `an app` and a
+new ask to tasks; and `plan.disagrees` sends back a recall for "what did you
+say just now?", but the repair kept it 5 times in 8. Three validator changes,
+no prompt change:
+
+- The confirm's objection, when nothing waits at all (no question to confirm
+  or resume, no waiting line), adds that a yes or no answers nothing and is
+  small talk, `{"about": "small talk", "answer": "chat"}`.
+- `plan.points_at_nothing` (a nudge): words that change something ("instead",
+  not "instead of"; "make/change/move it") while State shows nothing they
+  could change (no running job, nothing waiting, no recent entities, matches
+  or earlier turns) and a plan that asks, looks, opens, searches or thinks,
+  goes back once for an amend, which code answers "There's nothing waiting
+  to change." Chat, self and control steps pass. Among the plan cases only
+  `amend-nothing-waiting` meets it.
+- `plan.about_you` also sends back a plan of only recalls or thinks when the
+  words ask what conductor just did or said ("… just now", "… just do"); a
+  recall searches earlier conversations, not the last reply.
+
+| case | main | this change (first-try) |
+|---|---|---|
+| `yes-nothing-waiting` | 4/20 | **20/20** (0: the first reply is still a confirm; every repair is chat) |
+| `amend-nothing-waiting` | 4/20 | **18/20** (8): 10 repairs to amend; misses are 2 cancels |
+| `self-said-just-now` | 15/20 | **20/20** (12): the 8 recalls all repaired to self |

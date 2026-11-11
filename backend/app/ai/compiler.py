@@ -206,16 +206,19 @@ def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Check
     """Repairs that read the person's words against State (#134): a
     remembered topic nothing saved is about, a lookup of a fact State lists,
     a question about you filed as general knowledge; a plan its own
-    ``about`` contradicts (#151); and a new ask for a running job the words
-    narrow (#160). The first plan gets them once; a repaired
-    plan that keeps its choice still runs, since each of these plans can run
-    and a turn that answers beats code's "couldn't put that together"."""
+    ``about`` contradicts (#151); a new ask for a running job the words
+    narrow (#160); and a new ask, search or think for words that change
+    something when State shows nothing they could change (#176). The first
+    plan gets them once; a repaired plan that keeps its choice still runs,
+    since each of these plans can run and a turn that answers beats code's
+    "couldn't put that together"."""
     return (
         plans.remembered_topic(plan, words, checks.context)
         + plans.looked_up_fact(plan, words, checks.context)
         + plans.about_you(plan, words)
         + plans.disagrees(about, plan)
         + plans.narrows_job(plan, words, checks.context)
+        + plans.points_at_nothing(plan, words, checks)
     )
 
 

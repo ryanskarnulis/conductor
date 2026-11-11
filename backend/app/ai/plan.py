@@ -196,17 +196,22 @@ def offered_about(checks: Checks) -> tuple[str, ...]:
     only when State lists one, "the waiting question" only when something
     waits on the person. Offered always, both drew plans for things that
     weren't there ("undo that" as a running job, "yes" with nothing waiting)."""
-    lines = checks.context.splitlines()
-    jobs = any(line.startswith(_RUNNING_HEADER) for line in lines)
-    waiting = (
-        checks.confirmable
-        or checks.resumable
-        or any(line.startswith(_WAITING_HEADER) for line in lines)
-    )
+    jobs = any(line.startswith(_RUNNING_HEADER) for line in checks.context.splitlines())
+    waiting = _waits(checks)
     return tuple(
         value
         for value in ABOUT
         if (value != "a running job" or jobs) and (value != "the waiting question" or waiting)
+    )
+
+
+def _waits(checks: Checks) -> bool:
+    """Whether something waits on the person: a question a confirm or a
+    resume answers, or the state block's waiting line."""
+    return (
+        checks.confirmable
+        or checks.resumable
+        or any(line.startswith(_WAITING_HEADER) for line in checks.context.splitlines())
     )
 
 
@@ -329,6 +334,14 @@ class Checks:
     context: str = ""
 
 
+# A confirm's repair when nothing waits at all (#176): since #151's `about` the
+# 12B repaired "yes" into a decline; before it, into chat.
+_NO_QUESTION = (
+    ": State shows no question, so a yes or no answers nothing; when that is all they said, "
+    'it is small talk: {"about": "small talk", "answer": "chat"}'
+)
+
+
 def problems(plan: Plan, checks: Checks) -> list[str]:
     """What code refuses to run, in words the planner can repair from."""
     if isinstance(plan, Direct):
@@ -386,7 +399,10 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
             if index != 0:
                 found.append("confirm must be the first step")
             if not checks.confirmable:
-                found.append("confirm with nothing waiting on the person")
+                found.append(
+                    "confirm with nothing waiting on the person"
+                    + ("" if _waits(checks) else _NO_QUESTION)
+                )
         seen.add(step.id)
     for app_name, count in asks.items():
         if count > checks.calls_per_app:
@@ -582,12 +598,31 @@ _ABOUT_ME = re.compile(
 )
 
 
+# "… just now", "… a moment ago": the last exchange, which State shows (#176).
+_JUST = re.compile(r"\b(?:just|now|a\s+(?:moment|minute|second)\s+ago)\b", re.IGNORECASE)
+
+
 def about_you(plan: Plan, words: str) -> list[str]:
     """A ``knowledge`` answer to a question about conductor itself ("what can
     you do?") or what it keeps about the person ("what do you know about
     me?"): since #81's memory line the 12B files these as general knowledge
     about half the time. Knowledge doesn't know conductor; the repair points
-    at the answer that does. Only these few phrasings; ``chat`` stays."""
+    at the answer that does. Only these few phrasings; ``chat`` stays.
+
+    Since #151 "what did you say just now?" is filed as a recall instead
+    (#176), which searches earlier conversations, not the last reply: a plan
+    of only searches or thinks for what it just did or said goes back too."""
+    if (
+        isinstance(plan, StepPlan)
+        and all(step.do in ("recall", "think") for step in plan.steps)
+        and _ABOUT_YOU.search(words)
+        and _JUST.search(words)
+    ):
+        return [
+            "they asked what you just did or said, which State and the last exchange show; a "
+            'recall searches earlier conversations, not your last reply: answer {"answer": '
+            '"self"}'
+        ]
     if not isinstance(plan, Direct) or plan.answer != "knowledge":
         return []
     if _ABOUT_ME.search(words):
@@ -759,6 +794,53 @@ def narrows_job(plan: Plan, words: str, context: str) -> list[str]:
             f'"{ref}", change: their words), never a new ask to {step.app}'
         ]
     return []
+
+
+# Words that change something already said or under way (#176): "make it the
+# first ten instead", "change that to Friday". "Instead of …" names its own
+# thing ("add milk instead of eggs"), so it isn't one.
+_CHANGES = re.compile(
+    r"\binstead\b(?!\s+of\b)|"
+    r"\b(?:make|change|switch|turn|move|push|bump)\s+(?:it|that|this|them|those)\b",
+    re.IGNORECASE,
+)
+# The state block's lines that give such words something to point at: a job,
+# a question, what this conversation touched or said, an earlier lead.
+_SOMETHING = (
+    _RUNNING_HEADER,
+    _WAITING_HEADER,
+    "Recent entities",
+    "Last plan",
+    "Matches for words",
+    "Before this turn",
+)
+# What acts on, reads or searches for a thing: everything but a control step,
+# chat or self.
+_INVENTS = frozenset({"ask", "look", "open", "ask_user", "recall", "think"})
+
+
+def points_at_nothing(plan: Plan, words: str, checks: Checks) -> list[str]:
+    """Words that change something under way ("actually make it the first ten
+    instead") when State shows nothing they could change: no running job,
+    nothing waiting, nothing this conversation did or said (#176; #140's
+    guard). Since #151 the 12B filed these as a new ask to tasks, inventing
+    the work; an amend has code say there is nothing to change. A control
+    step, chat or self passes."""
+    if not _CHANGES.search(words) or _waits(checks):
+        return []
+    if any(line.startswith(_SOMETHING) for line in checks.context.splitlines()):
+        return []
+    if isinstance(plan, Direct):
+        if plan.answer in ("chat", "self"):
+            return []
+    elif isinstance(plan, Resume) or not any(step.do in _INVENTS for step in plan.steps):
+        return []
+    return [
+        "their words change something already under way, but State shows nothing running, "
+        "waiting or done in this conversation for them to change, so never invent it with a "
+        'new ask, a search or a think: plan one amend step (target: "last", change: their '
+        "words), and code tells them there is nothing to change"
+    ]
 
 
 def looked_up_fact(plan: Plan, words: str, context: str) -> list[str]:

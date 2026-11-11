@@ -101,9 +101,9 @@ def test_the_validator_refuses_what_code_wont_run(fleet: Fleet) -> None:
     assert _problems(
         steps(ask("tasks", "x"), {"do": "ask_user", "question": "which?", "options": []}), fleet
     ) == ["ask_user must be the first step"]
-    assert _problems(steps({"do": "confirm", "answer": "yes"}), fleet) == [
-        "confirm with nothing waiting on the person"
-    ]
+    assert _problems(
+        steps({"do": "confirm", "answer": "yes"}), fleet, context="Waiting on the person: x"
+    ) == ["confirm with nothing waiting on the person"]
     assert _problems(steps({"do": "confirm", "answer": "yes"}), fleet, confirmable=True) == []
     assert "at most 3 per turn" in _problems(steps(*[ask("tasks", "x")] * 4), fleet)[0]
     invented = steps({"do": "ask_user", "question": "which?", "options": ["Call Dennis"]})
@@ -494,6 +494,152 @@ def test_words_that_narrow_a_running_job_get_an_amend_repair(
         return
     (objection,) = found
     assert f'amend it (target: "{ref}"' in objection and "never a new ask" in objection
+
+
+def test_a_yes_with_no_question_anywhere_is_sent_back_as_small_talk(fleet: Fleet) -> None:
+    # #176: since #151 the confirm's repair answered a decline; with nothing
+    # waiting at all, the repair now says a bare yes or no is chat.
+    from tests.plan_cases import state
+
+    yes = steps({"do": "confirm", "answer": "yes"})
+    (found,) = _problems(yes, fleet, context=state())
+    assert found.startswith("confirm with nothing waiting on the person: ")
+    assert '{"about": "small talk", "answer": "chat"}' in found
+    # A question the person can still answer: the confirm is wrong, chat isn't the fix.
+    for waiting in (
+        {"context": state(waiting='your last reply asked "Which one?"')},
+        {"context": state(), "resumable": True},
+    ):
+        assert _problems(yes, fleet, **waiting) == ["confirm with nothing waiting on the person"]
+
+
+@pytest.mark.parametrize(
+    ("words", "parts", "body", "sent_back"),
+    [
+        # #176: nothing in State for "it" to be, so the ask invents the work.
+        ("actually make it the first ten instead", {}, steps(ask("tasks", "make it ten")), True),
+        ("make it the first ten instead", {}, steps({"do": "think", "problem": "x", "inputs": []}), True),
+        ("change that to Friday", {}, steps({"do": "recall", "query": "that"}), True),
+        ("actually make it the first ten instead", {}, {"answer": "decline"}, True),
+        ("move it to Sunday", {}, steps({"do": "ask_user", "question": "?", "options": []}), True),
+        # A control step, chat or self acts on nothing: they pass.
+        ("make it the first ten instead", {}, steps({"do": "amend", "target": "last", "change": "ten"}), False),
+        ("make it the first ten instead", {}, {"answer": "chat"}, False),
+        ("make it the first ten instead", {}, {"answer": "self"}, False),
+        # Something it can point at: a job, a question, what was done, a lead.
+        ("make it the first twenty instead", {"jobs": "music:job:31 downloading (running)"}, steps(ask("music", "first twenty")), False),
+        ("make it Friday instead", {"waiting": 'your last reply asked "When?"'}, steps(ask("tasks", "Friday")), False),
+        ("make it Friday instead", {"recent": 'tasks task "Call Dennis" (pcc:task:9)'}, steps(ask("tasks", "move Call Dennis to Friday")), False),
+        ("change it to Friday", {"last": "s1 ask tasks"}, steps(ask("tasks", "Friday")), False),
+        ("make it Friday instead", {"matches": 'tasks: "Call Dennis"'}, steps(ask("tasks", "Friday")), False),
+        # Words that name their own thing.
+        ("add milk instead of eggs", {}, steps(ask("tasks", "add milk instead of eggs")), False),
+        ("just add milk to the list", {}, steps(ask("tasks", "add milk to the list")), False),
+        ("make a task to call the plumber", {}, steps(ask("tasks", "call the plumber")), False),
+    ],
+)  # fmt: skip
+def test_words_that_change_what_state_doesnt_show_get_an_amend_repair(
+    fleet: Fleet, words: str, parts: dict[str, str], body: dict[str, Any], sent_back: bool
+) -> None:
+    from tests.plan_cases import state
+
+    checks = plans.Checks(fleet=fleet, context=state(**parts))
+    found = plans.points_at_nothing(plans.load(body), words, checks)
+    assert bool(found) is sent_back
+    if found:
+        assert "nothing to change" in found[0] and "plan one amend step" in found[0]
+
+
+def test_words_that_change_something_pass_when_a_question_waits(fleet: Fleet) -> None:
+    from tests.plan_cases import state
+
+    body = plans.load(steps(ask("tasks", "make it ten")))
+    for waits in ({"confirmable": True}, {"resumable": True}):
+        checks = plans.Checks(fleet=fleet, context=state(), **waits)
+        assert plans.points_at_nothing(body, "make it ten instead", checks) == []
+    # Before this turn: this conversation said something "it" can be.
+    context = state() + '\n\nBefore this turn:\n\nThe last exchange: "add milk"'
+    checks = plans.Checks(fleet=fleet, context=context)
+    assert plans.points_at_nothing(body, "make it ten instead", checks) == []
+
+
+@pytest.mark.parametrize(
+    ("words", "body", "sent_back"),
+    [
+        # #176: "what did you say just now?" filed as a recall since #151.
+        ("what did you say just now?", steps({"do": "recall", "query": "what did you say"}), True),
+        ("what did you just do?", steps({"do": "think", "problem": "x", "inputs": []}), True),
+        ("so what are you doing now?", steps({"do": "recall", "query": "doing"}), True),
+        # What it did before is a recall; their own words are too.
+        ("what did you do last week about the fence?", steps({"do": "recall", "query": "fence"}), False),
+        ("what did I just say?", steps({"do": "recall", "query": "what I said"}), False),
+        # A plan that reads or asks something passes.
+        ("what did you just do?", steps({"do": "look", "app": "tasks"}), False),
+        ("what did you say just now?", {"answer": "self"}, False),
+    ],
+)  # fmt: skip
+def test_what_you_just_said_is_never_a_search(
+    words: str, body: dict[str, Any], sent_back: bool
+) -> None:
+    found = plans.about_you(plans.load(body), words)
+    assert bool(found) is sent_back
+    if found:
+        assert '{"answer": "self"}' in found[0] and "not your last reply" in found[0]
+
+
+def test_the_empty_state_cases_get_their_repairs_from_the_compiler(fleet: Fleet) -> None:
+    # #176: the plan cases' own words and State, through the compiler.
+    from tests.plan_cases import CASES, empty_state
+
+    def compiled_from(case_id: str, replies: list[dict[str, Any]]) -> tuple[Any, str]:
+        case = next(case for case in CASES if case.id == case_id)
+        sent: list[list[dict[str, Any]]] = []
+        queue = [json.dumps(reply) for reply in replies]
+
+        def chat(messages: list[dict[str, Any]], _max: int, _fmt: dict[str, Any]) -> ChatResult:
+            sent.append(list(messages))
+            return text_turn(queue.pop(0))
+
+        context = case.state or empty_state()
+        compiled = compiler.compile_turn(
+            chat,
+            system_prompt=compiler.planner_prompt(fleet),
+            context=context,
+            words=case.text,
+            fleet=fleet,
+            checks=plans.Checks(fleet=fleet, context=context, confirmable=case.confirmable),
+        )
+        assert compiled.repaired and compiled.plan is not None
+        assert any(shape.matches(compiled.plan) for shape in case.expect)
+        return compiled, sent[1][-1]["content"]
+
+    _, said = compiled_from(
+        "yes-nothing-waiting",
+        [
+            {"about": "the outside world", **steps({"do": "confirm", "answer": "yes"})},
+            {"about": "small talk", "answer": "chat"},
+        ],
+    )
+    assert '"answer": "chat"' in said
+    _, said = compiled_from(
+        "amend-nothing-waiting",
+        [
+            {"about": "an app", **steps(ask("tasks", "make it the first ten instead"))},
+            {
+                "about": "an app",
+                **steps({"do": "amend", "target": "last", "change": "the first ten"}),
+            },
+        ],
+    )
+    assert "nothing to change" in said
+    _, said = compiled_from(
+        "self-said-just-now",
+        [
+            {"about": "conductor itself", **steps({"do": "recall", "query": "what you said"})},
+            {"about": "conductor itself", "answer": "self"},
+        ],
+    )
+    assert "not your last reply" in said
 
 
 def test_the_amend_job_case_gets_its_repair_from_the_compiler(fleet: Fleet) -> None:
