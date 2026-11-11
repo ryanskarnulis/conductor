@@ -1301,3 +1301,47 @@ Why S3 and S15 fail against the real music, where the fake passes:
 
 S2 and S9 behave as the fake predicts; the writes, receipts, confirm token
 and replies all line up.
+
+### A delegated write end to end (#155, 2026-11-10)
+
+Same run, all three traced (`CONDUCTOR_TRACE_PATH`, `PCC_TRACE_PATH`,
+`MUSIC_TRACE_PATH`) and every model call through the harness's meter, a
+pass-through to llama-swap recording llama-server's own `usage`/`timings`
+(music's trace keeps no cache numbers). Neither app records `X-Agent-Turn`,
+so a hop is joined to its app run by thread (`conversation_id` = the hop's
+`thread_id`) inside the turn's window. 3 runs each, back to back, fresh
+databases and a new delegate thread per run; the 12B stayed loaded, so no
+run includes a model load. "Cold" below is the first run after a different
+utterance (the planner's prefix differs past the state block).
+
+"add a task to water the plants tomorrow" (4 calls every run; turn 3694, 4300,
+4217 ms, median 4217):
+
+| call | ms | prompt | cached | prefill ms |
+|---|---|---|---|---|
+| conductor planner | 689 / 1314 / 1282 | 1860 | 1833 / 1652 / 1652 | 109 / 782 / 760 |
+| PCC tool turn | 1484 / 1482 / 1480 | 3977 | 3614 | ~910 |
+| PCC closing turn | 559 / 550 / 553 | 4067 | 3973 | ~168 |
+| conductor narrator | 885 / 879 / 820 | 772 | 471 | ~472 |
+
+"download the song Odessa by Caribou" (yt-dlp faked, so this is the model
+calls; 4 calls every run; turn 3490, 2443, 2315 ms, median 2443):
+
+| call | ms | prompt | cached | prefill ms |
+|---|---|---|---|---|
+| conductor planner | 1358 / 627 / 611 | 1859 | 1652 / 1858 / 1858 | 778 / 49 / 32 |
+| music tool turn | 877 / 290 / 290 | 3147 | 3052 / 3143 / 3143 | 632 / 45 / 46 |
+| music closing turn | 461 / 683 / 571 | 3223 | 3143 | ~156 |
+| conductor narrator | 708 / 762 / 762 | 769 | 471 | ~472 |
+
+Read:
+
+- Four sequential model calls per delegated write, as the issue counted, and
+  they are nearly the whole turn: 3.6–4.2 s of 3.7–4.3 s for a task, 2.4–3.4 s
+  of 2.4–3.5 s for a song.
+- The narrator's prefix stops matching at token 471 on every call, so ~300
+  tokens are re-read each turn (~470 ms, half its time).
+- PCC's tool turn re-reads ~360 tokens every run (~910 ms prefill) even when
+  warm; its closing turn rides the tool turn's cache.
+- The planner's prefix is cached to ~1650 of 1860 after a different
+  utterance (~770 ms prefill) and fully when the words repeat (~40 ms).
