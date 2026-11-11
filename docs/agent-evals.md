@@ -1817,3 +1817,58 @@ S3, S10, S11, S12 5/5, S14 4/5, S15 3/5, S13 0/5.
   the brief.
 - Narrator cost (#161/#163): not re-measured here (`CONDUCTOR_FLEET_COST`
   not run).
+
+## A fact the plan wrote into the ask still goes with it (#179, 2026-11-11)
+
+The batch run's M3 1/5 is #138's. M3 alone at n=20 on `d082065`, gemma-4-12b:
+
+| arm | M3 | asks that wrote the day in place of "my music sorting day" |
+|---|---|---|
+| main (three runs of 20) | 42/60 (14, 12, 16) | 18/60, every miss |
+| main with #138's line reverted | **20/20** | 0/20 |
+| this change | 19/20 | 8/20, each still carried the fact |
+
+By #150's rule main is significantly below the revert (upper 0.787 against
+lower 0.881). M3's saved fact is the old memory line's own example, "I sort
+music on Sundays"; with the example gone the planner reads the fact in State
+and writes "Sunday" itself ("add a task for Sunday to clean the record
+player"), so the request shares one term with the fact and `facts.related`
+sent nothing. The batch's 1/5 was a low draw on a ~70% rate.
+
+The line stays as #138 shipped it (copying the example stays at 0/40).
+Instead `facts.related` also reads the person's words when they are the
+request: a fact goes with an ask when their words share two of its terms
+and the request says something of the fact they didn't (here "Sunday",
+weekdays counted). That is the planner using the fact in this ask, so the
+app gets it as the person said it. An ask in the same plan that says nothing
+of the fact gets nothing, and a resumed plan matches on the request alone.
+The planner prompt is unchanged, so plan inputs are byte-identical to main.
+The one miss is the narrator's ("I have saved … to your memory list" read as
+an unbacked queue claim, the mode recorded under #141).
+
+Plan evals at n=20 against the batch run (each cell passed, then first-try);
+no group is significantly below it on either rate:
+
+| group | batch run | this change |
+|---|---|---|
+| golden | 400, 400 /420 | 400, 400 |
+| cross | 131, 101 /140 | 133, 96 |
+| ref | 73, 73 /80 | 79, 79 |
+| control | 147, 144 /180 | 148, 142 |
+| memory | 319, 283 /320 | 315, 276 |
+| knowledge | 60, 60 /60 | 60, 60 |
+| hard | 20, 20 /20 | 20, 19 |
+| self | 94, 90 /100 | 98, 95 |
+| mixed | 198, 178 /200 | 196, 176 |
+| long | 153, 134 /160 | 153, 133 |
+| stale | 100, 100 /100 | 100, 100 |
+
+`cross` first-try 96/140 is below #160's 117/140 by the rule (upper 0.746
+against 0.778), as the batch run nearly was; the planner's input is main's.
+
+Session evals, gate tier: S1, S1v, S2, S2r, S4, S6, S7, S8, S9, S16, M1, T1,
+T2 5/5; S5 4/5; M2 12/15 (three "forgot nothing": turn 2 ran no step);
+**M3 4/5** (the narrator miss above). Frontier: S3, S10, S12, TH1, TH2 5/5;
+S11 4/5; S14 3/5 (one "wrote before the plan was confirmed"); S13 0/5 (the
+brief, as before); S15 0/5 (as in the batch run). Infra 0/12, claims backed
+138/140. Nothing is significantly below the batch run.

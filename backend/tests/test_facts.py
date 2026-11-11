@@ -492,6 +492,37 @@ def test_a_fact_goes_with_an_ask_only_on_real_overlap(
     assert facts.related(request_text, saved) == attached
 
 
+@pytest.mark.parametrize(
+    ("request_text", "words", "attached"),
+    [
+        # The plan wrote the day the fact says in place of the words that
+        # pointed at it (#179): the fact still goes, as the person said it.
+        ("add a task for Sunday to clean the record player", SORTING_DAY, [SUNDAYS]),
+        ("add a task to clean the record player on Sundays", SORTING_DAY, [SUNDAYS]),
+        ("add a task to clean the record player this Sunday", SORTING_DAY, [SUNDAYS]),
+        # The words point at it, but this ask says nothing of it: another ask's.
+        ("add a task to clean the record player", SORTING_DAY, []),
+        ("download the new Caribou album", f"download the new Caribou album, {SORTING_DAY}", []),
+        # The day is no evidence when their words don't point at the fact (one
+        # shared term, "music"), nor when they said the day themselves.
+        ("add a task for Sunday to buy music stands", "add a task to buy music stands", []),
+        (
+            "add a task for Sunday to clean the record player",
+            "add a task for Sunday for my music sorting day to clean the record player",
+            [],
+        ),
+        # Nothing of theirs (a resumed plan was told "yes"): the request alone.
+        ("add a task for Sunday to clean the record player", "", []),
+        # The request already says the fact: not sent again.
+        (f"add a task: {SUNDAYS.lower()}", SORTING_DAY, []),
+    ],
+)  # fmt: skip
+def test_a_fact_the_plan_wrote_into_the_ask_goes_with_it(
+    request_text: str, words: str, attached: list[str]
+) -> None:
+    assert facts.related(request_text, [SUNDAYS], words) == attached
+
+
 def test_attached_facts_are_quoted_after_the_words_as_context() -> None:
     sent = facts.attach(SORTING_DAY, [SUNDAYS])
     # The person's words come first, untouched; the fact follows on its own line.
@@ -556,6 +587,20 @@ def test_an_ask_carries_the_fact_its_words_point_at(
     ((task),) = [t for t in world.tasks.values() if "record player" in t.title]
     assert task.due is not None and task.due.weekday() == 6
     assert "Context" not in task.title and "Sundays" not in task.title
+
+
+def test_an_ask_the_plan_wrote_the_fact_into_still_carries_it(
+    talk: Talk,  # noqa: F811
+    world: World,  # noqa: F811
+) -> None:
+    # #179: the planner read the fact in State and wrote the day in place of
+    # "my music sorting day"; the app still gets the fact as they said it.
+    _remember(talk)
+    talk.new()
+    request = "add a task for Sunday to clean the record player"
+    reply = _sorting_day(talk, request)
+    assert reply["tool_calls"][0]["arguments"] == {"message": request, facts.ARGUMENT: [SUNDAYS]}
+    assert world.sent[-1] == ("tasks", facts.attach(request, [SUNDAYS]))
 
 
 def test_an_ask_with_no_fact_to_point_at_goes_as_the_plan_wrote_it(
