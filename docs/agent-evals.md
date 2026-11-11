@@ -1218,3 +1218,86 @@ What the table shows besides:
   in the last two runs, the same code.
 
 Session evals were not run: no default changed.
+
+## Fleet smoke (#143)
+
+`backend/tests/test_fleet_smoke.py`: S2, S3, S9 and S15 through conductor
+against the **real** PCC and music agents, the seam session evals fake. Opt-in,
+never a CI or PR gate; measured first, gated later if it holds steady.
+
+```bash
+cd backend
+CONDUCTOR_FLEET_SMOKE=1 .venv/bin/pytest tests/test_fleet_smoke.py -v -s
+```
+
+The harness (`tests/fleet_harness.py`) starts each app's backend from its
+sibling checkout with that checkout's own `.venv` (code used read-only), on a
+free loopback port (never 8000/8100/8200/8300/8500 or a dev port), a scratch
+SQLite migrated with the app's `alembic upgrade head`, and scratch library and
+trace files, all in one pytest temp folder. Each sample restarts both apps on
+fresh databases; PCC is seeded through its REST API (fake_world's projects and
+tasks). Conductor discovers them the normal way: the siblings' `app.yaml`
+copied into `fleet_manifest_dir` with `upstream` rewritten (chess pointed at a
+dead port, so the planner prompt is production's). Its delegate client, glance
+and job cancel are wrapped to refuse any other upstream.
+
+Nothing leaves loopback: music's yt-dlp is a fake (`YT_DLP_BIN`, music's own
+test seam) that writes a silent mp3 and logs its argv; MusicBrainz and the
+likes poller are off; Genius, Spotify and SoundCloud are unset; every proxy
+variable points at a dead port. The subprocesses run from the temp folder with
+a minimal environment, so no checkout's `.env` is read. A watcher samples the
+apps' sockets (`ss`) and open files (`/proc`) throughout and fails the module
+on a peer off loopback or a database, audio or trace file outside the temp
+folder (checked against a positive control). Checks read each app's end state
+through its own API, and the replies are held to the apps' real receipts.
+
+`CONDUCTOR_FLEET_RUNS` (3) samples per scenario; `CONDUCTOR_FLEET_REPORT=path`
+appends a JSON line per sample; `CONDUCTOR_FLEET_COST=1` adds #155's
+measurement below.
+
+### First measurement, 2026-11-10, gemma-4-12b, `8bf298a`
+
+A measurement, not a floor. 3 samples each; watch: 492 samples, 0 sockets off
+loopback, 0 files outside the temp folder, 8 fake yt-dlp calls.
+
+| scenario | pass | turn time |
+|---|---|---|
+| S2 add a task | 3/3 | 3.6–7.3 s |
+| S3 album, then a task named for it | 0/3 | 4.1–5.9 s |
+| S9 wipe Kitchen, yes | 3/3 | 1.8–2.5 s per turn |
+| S15 S3, then "do the same for their other album" | 0/3 | 3.8–6.2 s per turn |
+
+What the apps received (conductor's `ask` words, verbatim):
+
+- S2: tasks heard "add a task to water the plants tomorrow" and called
+  `create_task {title: "water the plants", due_date: tomorrow}` every time.
+- S9: tasks heard "wipe the kitchen project" (`destructive: true`), asked
+  "Trash project "Kitchen" and its 3 tasks?" itself, and the `confirm` step
+  trashed it. Conductor's gate stayed out of the way, as `confirms: true` says.
+- S3: music heard "download the new Caribou album" and queued
+  `download_playlist {query: "Caribou album"}` (2/3; once it answered that it
+  needed a link and did nothing). The tasks step, "add a task to sort {s1}
+  this weekend" (once "… sort the album {s1} …"), never ran: "s1 gave no name
+  to pass on".
+- S15 turn 2: twice `recall` ("what was the other album the person
+  mentioned?", "what other album did they mention?") then "download the new
+  {s1} album" / "download the album {s1}", not run; once the plan dropped the
+  music step and tasks heard "add a task to sort the other Caribou album this
+  weekend" (created, due Sunday, but not "Suddenly").
+
+Why S3 and S15 fail against the real music, where the fake passes:
+
+- **Music's receipt names no album.** `download_playlist`'s record touches
+  only a `download_job` ref, titled with the query the 12B wrote ("Caribou
+  album"). `dataflow.from_record` skips job refs by design, so `{s1}` is
+  empty. The fake world adds an `album` ref titled "Honey"; the real app
+  never resolves an album name (no catalog, MusicBrainz is tagging-only).
+- **The fake knows Caribou's discography; music doesn't.** "Their other
+  album" has nothing to resolve against in any real app.
+- **Music's job runs `ytsearch1:Caribou album` with `--yes-playlist`**: real
+  yt-dlp would fetch one search hit, not an album (a music finding).
+- The narrator blames the person: "I could not add the task … because a
+  specific name for the task was not provided."
+
+S2 and S9 behave as the fake predicts; the writes, receipts, confirm token
+and replies all line up.
