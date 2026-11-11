@@ -1219,6 +1219,79 @@ What the table shows besides:
 
 Session evals were not run: no default changed.
 
+### A remembered fact comes from the person's words; one memory-line A/B (#159, #138, 2026-11-10)
+
+The planner prompt, step kinds, compiler and validator are unchanged.
+`facts.own_words` changed: the fact is cut from the person's own
+"remember", "keep in mind" or "don't forget" anywhere in what they said,
+up to the end of that sentence or the next ask. The planner's version
+stands only when it sits word for word inside that cut. Before this, code
+only read a "remember" at the start of the person's words. If the plan
+copied the prompt's example, "by the way, keep in mind that …", "…, keep
+that in mind" and "add a task … and keep in mind that …" saved nothing,
+and "keep in mind that X and add a task …" saved the second ask's words
+along with the fact. A plain "keep in mind that X" was already right.
+
+New `memory` cases, fresh wordings with facts that aren't the prompt's
+example: `memory-keep-in-mind`, `memory-remember-place`,
+`memory-dont-forget`, `memory-remember-and-ask` (a second ask in the same
+message) and `memory-forget-just-saved` ("forget that" right after saving,
+as M2 says it). The remember cases check the fact code would save
+(`M.saves`), not the request text.
+
+Plan evals at n=20 on gemma-4-12b, this branch on `8bf298a`. The main
+column is the #142 run above (same prompt and compile path):
+
+| group | floor | main | first-try | this change | first-try |
+|---|---|---|---|---|---|
+| golden | 0.8 | 394/420 | 377/420 | 385/420 | 378/420 |
+| cross | 0.8 | 140/140 | 123/140 | 139/140 | 120/140 |
+| ref | 0.85 | 76/80 | 76/80 | 75/80 | 75/80 |
+| control | 0.8 | 80/100 | 80/100 | 80/100 | 80/100 |
+| memory | 0.8 | 139/140 | 116/140 | 238/240 (12 cases) | 212/240 |
+| knowledge | 0.65 | 60/60 | 60/60 | 60/60 | 60/60 |
+| hard | 0.5 | 20/20 | 20/20 | 18/20 | 18/20 |
+| self | 0.55 | 59/60 | 31/60 | 58/60 | 37/60 |
+| mixed | 0.85 | 190/200 | 170/200 | 185/200 | 165/200 |
+| long | 0.7 | 154/160 | 143/160 | 156/160 | 150/160 |
+| stale | 0.8 | 80/80 | 60/80 | 80/80 | 60/80 |
+
+- Every group passed its gate, and every plan was valid. The steady misses
+  are as before: `amend-job` 0/20, `ho-amend` 5/20 and `chess-analysis`
+  0/20 (`look:chess`).
+- The new cases were 20/20 each. None of the 100 remember samples copied the
+  example, so main's `own_words` saves the same facts on these plans. The
+  fix shows in the unit tests, on phrasings the plan cases didn't produce.
+- The copying #138 describes shows in `memory-forget-just-saved`: 17/20
+  plans wrote "forget that I sort music on Sundays", and `memory-forget-that`
+  3/20. Both still pass, because what to forget comes from the person's
+  words (#134).
+
+Session evals, gate tier at 5 and frontier at 5: every gate scenario passed.
+S6 and M3 were 4/5, the rest 5/5 (M1 and M2 5/5). The S6 miss never filed
+Odessa. In the M3 miss, the planner wrote "on Sunday" into the ask itself,
+so no fact went along; the fact saved was right. Frontier: S3, S10, S11 and
+S12 were 5/5, S14 4/5, S13 0/5 (the brief, as before) and S15 1/5. Claims
+were 117/117 backed. No infra misses.
+
+**One memory-line A/B, dropped.** The examples became placeholders:
+`"remember <the fact, as they said it>"` and `"forget that <the fact>"`.
+This was measured at n=20 against the shipped line, same code, one arm per
+GPU hold:
+
+| group | shipped | first-try | placeholders | first-try |
+|---|---|---|---|---|
+| golden | 385/420 | 378/420 | 396/420 | 389/420 |
+| memory | 238/240 | 212/240 | 240/240 | 227/240 |
+| self | **58/60** | **37/60** | **51/60** | **31/60** |
+| plans copying the example | 20/240 | | 0/240 | |
+
+- The rewording took copying to zero, with no literal placeholder in any
+  plan. It also lifted `memory-about-me` first-try from 2/20 to 20/20.
+- `self` fell: `status-last` gave `answer:chat` 9 times in 20 against 2.
+  The rule was at least as good in every group, so the line stays as
+  shipped. #134 also found the line fragile.
+
 ## Fleet smoke (#143)
 
 `backend/tests/test_fleet_smoke.py`: S2, S3, S9 and S15 through conductor
@@ -1345,76 +1418,3 @@ Read:
   warm; its closing turn rides the tool turn's cache.
 - The planner's prefix is cached to ~1650 of 1860 after a different
   utterance (~770 ms prefill) and fully when the words repeat (~40 ms).
-
-### A remembered fact comes from the person's words; one memory-line A/B (#159, #138, 2026-11-10)
-
-The planner prompt, step kinds, compiler and validator are unchanged.
-`facts.own_words` changed: the fact is cut from the person's own
-"remember", "keep in mind" or "don't forget" anywhere in what they said,
-up to the end of that sentence or the next ask. The planner's version
-stands only when it sits word for word inside that cut. Before this, code
-only read a "remember" at the start of the person's words. If the plan
-copied the prompt's example, "by the way, keep in mind that …", "…, keep
-that in mind" and "add a task … and keep in mind that …" saved nothing,
-and "keep in mind that X and add a task …" saved the second ask's words
-along with the fact. A plain "keep in mind that X" was already right.
-
-New `memory` cases, fresh wordings with facts that aren't the prompt's
-example: `memory-keep-in-mind`, `memory-remember-place`,
-`memory-dont-forget`, `memory-remember-and-ask` (a second ask in the same
-message) and `memory-forget-just-saved` ("forget that" right after saving,
-as M2 says it). The remember cases check the fact code would save
-(`M.saves`), not the request text.
-
-Plan evals at n=20 on gemma-4-12b, this branch on `8bf298a`. The main
-column is the #142 run above (same prompt and compile path):
-
-| group | floor | main | first-try | this change | first-try |
-|---|---|---|---|---|---|
-| golden | 0.8 | 394/420 | 377/420 | 385/420 | 378/420 |
-| cross | 0.8 | 140/140 | 123/140 | 139/140 | 120/140 |
-| ref | 0.85 | 76/80 | 76/80 | 75/80 | 75/80 |
-| control | 0.8 | 80/100 | 80/100 | 80/100 | 80/100 |
-| memory | 0.8 | 139/140 | 116/140 | 238/240 (12 cases) | 212/240 |
-| knowledge | 0.65 | 60/60 | 60/60 | 60/60 | 60/60 |
-| hard | 0.5 | 20/20 | 20/20 | 18/20 | 18/20 |
-| self | 0.55 | 59/60 | 31/60 | 58/60 | 37/60 |
-| mixed | 0.85 | 190/200 | 170/200 | 185/200 | 165/200 |
-| long | 0.7 | 154/160 | 143/160 | 156/160 | 150/160 |
-| stale | 0.8 | 80/80 | 60/80 | 80/80 | 60/80 |
-
-- Every group passed its gate, and every plan was valid. The steady misses
-  are as before: `amend-job` 0/20, `ho-amend` 5/20 and `chess-analysis`
-  0/20 (`look:chess`).
-- The new cases were 20/20 each. None of the 100 remember samples copied the
-  example, so main's `own_words` saves the same facts on these plans. The
-  fix shows in the unit tests, on phrasings the plan cases didn't produce.
-- The copying #138 describes shows in `memory-forget-just-saved`: 17/20
-  plans wrote "forget that I sort music on Sundays", and `memory-forget-that`
-  3/20. Both still pass, because what to forget comes from the person's
-  words (#134).
-
-Session evals, gate tier at 5 and frontier at 5: every gate scenario passed.
-S6 and M3 were 4/5, the rest 5/5 (M1 and M2 5/5). The S6 miss never filed
-Odessa. In the M3 miss, the planner wrote "on Sunday" into the ask itself,
-so no fact went along; the fact saved was right. Frontier: S3, S10, S11 and
-S12 were 5/5, S14 4/5, S13 0/5 (the brief, as before) and S15 1/5. Claims
-were 117/117 backed. No infra misses.
-
-**One memory-line A/B, dropped.** The examples became placeholders:
-`"remember <the fact, as they said it>"` and `"forget that <the fact>"`.
-This was measured at n=20 against the shipped line, same code, one arm per
-GPU hold:
-
-| group | shipped | first-try | placeholders | first-try |
-|---|---|---|---|---|
-| golden | 385/420 | 378/420 | 396/420 | 389/420 |
-| memory | 238/240 | 212/240 | 240/240 | 227/240 |
-| self | **58/60** | **37/60** | **51/60** | **31/60** |
-| plans copying the example | 20/240 | | 0/240 | |
-
-- The rewording took copying to zero, with no literal placeholder in any
-  plan. It also lifted `memory-about-me` first-try from 2/20 to 20/20.
-- `self` fell: `status-last` gave `answer:chat` 9 times in 20 against 2.
-  The rule was at least as good in every group, so the line stays as
-  shipped. #134 also found the line fragile.
