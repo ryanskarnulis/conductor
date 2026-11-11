@@ -205,6 +205,10 @@ def test_memory_is_one_ask_enum_value_and_one_prompt_line(fleet: Fleet) -> None:
     assert len(kinds) == 10  # the step kinds don't change
     prompt = compiler.planner_prompt(fleet)
     assert prompt.count("- memory (ask):") == 1 and '"forget that"' in prompt
+    # #138: the examples name no fact, so "forget that" has none to copy.
+    assert '"remember <the fact, as they said it>"' in facts.PROMPT_LINE
+    assert '"forget that <the fact>"' in facts.PROMPT_LINE
+    assert "Sundays" not in facts.PROMPT_LINE
     plan = plans.load(steps(ask("memory", "remember I sort music on Sundays")))
     assert plans.problems(plan, plans.Checks(fleet=fleet)) == []
     assert plans.unrunnable(plan) == []

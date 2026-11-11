@@ -61,8 +61,8 @@ MAX_LISTED = 8
 PROMPT_LINE = (
     f"- {APP} (ask): What the person asked you to remember about them, kept in their own "
     "words; they can see and change the list.\n"
-    '  Asks that go here: "remember I sort music on Sundays"; "what do you know about '
-    'me?"; "forget that"; "forget that I sort music on Sundays"'
+    '  Asks that go here: "remember <the fact, as they said it>"; "what do you know about '
+    'me?"; "forget that"; "forget that <the fact>"'
 )
 
 NO_UNDO_REMEMBER = "say “forget that” to take it back"
