@@ -22,7 +22,7 @@ from typing import Any
 
 import structlog
 
-from app.ai import facts
+from app.ai import facts, turn_context
 from app.ai import plan as plans
 from app.ai.provider import ChatResult
 from app.fleet.manifests import Fleet
@@ -168,9 +168,13 @@ class Compiled:
 
 
 def user_message(context: str | None, words: str) -> str:
-    """The turn's one planner message: State (and recall), then the words."""
+    """The turn's one planner message: State (and recall), then the words.
+    An earlier request in the same words is left out of what the planner
+    reads (#141, :func:`app.ai.turn_context.for_planner`); the validator's
+    ``checks.context`` keeps it."""
     said = f"The person said: {words}"
-    return f"{context}\n\n{said}" if context else said
+    shown = turn_context.for_planner(context, words) if context else context
+    return f"{shown}\n\n{said}" if shown else said
 
 
 def _problems(plan: plans.Plan, words: str, checks: plans.Checks) -> list[str]:

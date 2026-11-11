@@ -57,6 +57,12 @@ MAX_CHARS = (
 )
 
 REPLY_LABEL = "What you said then (your words, not a record)"
+# Each part's first line, which :func:`app.ai.turn_context.for_planner` reads.
+HEADING = "Before this turn:"
+RECORD_HEADING = "The record of earlier turns in this conversation"
+REQUESTS_HEADING = "What the person asked earlier, in their own words"
+LAST_HEADING = "The last exchange:"
+HITS_HEADING = "Possibly what the person is pointing back at, from earlier conversations"
 
 
 @dataclass(frozen=True)
@@ -88,13 +94,13 @@ class Recall:
         parts = []
         if self.record:
             parts.append(
-                "The record of earlier turns in this conversation (what the apps did and "
+                f"{RECORD_HEADING} (what the apps did and "
                 "answered then, oldest first; an answer is as of then, not now):\n"
                 + "\n".join(f"- {line}" for line in self.record)
             )
         if self.requests:
             parts.append(
-                "What the person asked earlier, in their own words, oldest first:\n"
+                f"{REQUESTS_HEADING}, oldest first:\n"
                 + "\n".join(f"- {r}" if r.startswith("(") else f'- "{r}"' for r in self.requests)
             )
         if self.last is not None:
@@ -105,7 +111,7 @@ class Recall:
                 else f"{REPLY_LABEL}: nothing."
             )
             parts.append(
-                "The last exchange:\n"
+                f"{LAST_HEADING}\n"
                 f'The person said: "{_truncate(_flat(said), LAST_EXCHANGE_CHARS)}"\n{line}'
             )
         return "\n\n".join(parts)
@@ -151,14 +157,14 @@ def section(recall: Recall, earlier: Sequence[str] = ()) -> str | None:
     parts = [recall.render()]
     if earlier:
         parts.append(
-            "Possibly what the person is pointing back at, from earlier conversations, "
+            f"{HITS_HEADING}, "
             "as of then. Leads for naming it to the app, not facts about now: use the name "
             "in your message to the app, and never tell the person something is done or "
             "exists from these lines alone. An answer here was true that day; a question "
             "about now still looks or asks the app:\n" + "\n".join(f"- {line}" for line in earlier)
         )
     rendered = "\n\n".join(part for part in parts if part)
-    return f"Before this turn:\n\n{rendered}" if rendered else None
+    return f"{HEADING}\n\n{rendered}" if rendered else None
 
 
 # --- parts -------------------------------------------------------------------------

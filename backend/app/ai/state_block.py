@@ -60,6 +60,7 @@ FACTS_MAX_CHARS = MAX_FACTS * (MAX_FACT_CHARS + 40) + 90
 MAX_CHARS = 2400 + MATCHES_MAX_CHARS + FACTS_MAX_CHARS
 
 _HEADER = "[State at the start of this turn — written by conductor, not the person]"
+MATCHES_HEADING = "Matches for words in the message, from earlier conversations (as of then):"
 _FOOTER = "[End of state]"
 
 _SURFACE_LINES: dict[str, str] = {
@@ -179,7 +180,7 @@ def render(
         lines.append("Recent entities (newest first, as of then):")
         lines += [f"- {_entity(entity)}" for entity in recent]
     if matches:
-        lines.append("Matches for words in the message, from earlier conversations (as of then):")
+        lines.append(MATCHES_HEADING)
         lines += [f"- {_match(match)}" for match in matches[:MAX_MATCHES]]
     if facts:
         lines.append("Facts the person asked you to remember (their words, as of when saved):")

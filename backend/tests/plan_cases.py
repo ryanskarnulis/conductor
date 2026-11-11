@@ -552,6 +552,38 @@ CASES: tuple[Case, ...] = (
             ],
         ),
     ),
+    # #141: the same question earlier in the thread, with another exchange since.
+    Case(
+        "stale-due-earlier-in-thread",
+        _DUE,
+        (one(READ_TASKS),),
+        "stale",
+        before(
+            _DUE,
+            history=[
+                {"role": "user", "content": _DUE},
+                {
+                    "role": "assistant",
+                    "content": "Nothing's due today.",
+                    "tool_calls": [
+                        _call("ask_tasks", {"message": _DUE}, "No tasks due today.").model_dump()
+                    ],
+                },
+                {"role": "user", "content": "add a task to call mom tomorrow"},
+                {
+                    "role": "assistant",
+                    "content": "Added “call mom” for tomorrow.",
+                    "tool_calls": [
+                        _call(
+                            "ask_tasks",
+                            {"message": "add a task to call mom tomorrow"},
+                            "Created task “call mom”, due tomorrow.",
+                        ).model_dump()
+                    ],
+                },
+            ],
+        ),
+    ),
     Case(
         "stale-playlist-recalled",
         _PLAYLIST_NOW,

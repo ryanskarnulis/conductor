@@ -193,7 +193,7 @@ def test_an_answer_from_a_recalled_reply_gets_the_repair(fleet: Fleet) -> None:
 
     stale = {case.id: case for case in CASES if case.group == "stale"}
     knowledge = plans.Direct(answer="knowledge")
-    for case_id in ("stale-due-same-thread", "stale-week-recalled"):
+    for case_id in ("stale-due-same-thread", "stale-due-earlier-in-thread", "stale-week-recalled"):
         case = stale[case_id]
         (objection,) = plans.recalled_answer(knowledge, case.text, case.state)
         assert objection.startswith(f'they asked "{case.text}" before and an app answered it')
@@ -226,6 +226,9 @@ def test_an_answer_from_a_recalled_reply_gets_the_repair(fleet: Fleet) -> None:
     )
     assert compiled.repaired and isinstance(compiled.plan, plans.StepPlan)
     assert "that answer is as of then" in sent[1][-1]["content"]
+    # #141: the planner never saw the earlier request; the validator did.
+    assert case.state is not None and "Before this turn:" in case.state
+    assert "Before this turn:" not in sent[0][1]["content"]
 
 
 def test_what_you_remember_about_a_thing_nothing_saved_names_gets_a_recall(
