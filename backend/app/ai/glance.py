@@ -143,7 +143,7 @@ def _extras(node: dict[str, Any], flagged: bool) -> dict[str, Any]:
 
 
 def _age(value: Any, what: str) -> str | None:
-    """"last move 19 days ago": days between the household's calendar day of
+    """ "last move 19 days ago": days between the household's calendar day of
     ``value`` (ISO 8601, UTC unless it says otherwise) and its today (#130).
     ``None`` when it isn't a readable time."""
     if not isinstance(value, str):

@@ -660,7 +660,7 @@ def test_an_untrusted_refs_extras_are_cleaned_and_marked_like_its_title() -> Non
     )
     assert view["outside_text"] is True and "untrusted" not in view
     assert view["note"] == view["title"]  # the same cleaning, the same clip
-    assert not any(char in view["note"] for char in "\"{}\n")
+    assert not any(char in view["note"] for char in '"{}\n')
     assert len(view["note"]) <= narrator.MAX_TITLE_CHARS
 
 
@@ -692,9 +692,7 @@ def test_a_refs_age_is_stated_as_a_plain_fact_in_household_days(pin_clock: None)
         ("2026-11-12T12:00:00Z", "last move today"),
     ],
 )
-def test_the_age_counts_days_on_the_households_clock(
-    pin_clock: None, stamp: str, age: str
-) -> None:
+def test_the_age_counts_days_on_the_households_clock(pin_clock: None, stamp: str, age: str) -> None:
     assert _chess_view({**CHESS_GAME, "last_move_at": stamp})["age"] == age
 
 
