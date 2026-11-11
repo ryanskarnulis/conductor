@@ -450,6 +450,36 @@ CASES: tuple[Case, ...] = (
         state(last=_LAST_S3),
         frozenset({"pcc:task:301", "music:album:55", "last"}),
     ),
+    # The same words with nothing for them (#140): nothing waits, runs or was
+    # done. A cancel, amend or undo is right (code then says there's nothing
+    # to act on), and so is a chat or self answer: neither acts. A confirm
+    # with nothing waiting is the validator's to send back, so "yes" passes
+    # on its repair. A guard against a plan that invents work for an empty
+    # State (#140's narrowed schema did, and wasn't shipped).
+    Case(
+        "yes-nothing-waiting",
+        "yes",
+        (one(M("confirm")), none("chat"), none("status")),
+        "control",
+    ),
+    Case(
+        "cancel-nothing-running",
+        "cancel that",
+        (one(M("cancel")), none("chat"), none("status")),
+        "control",
+    ),
+    Case(
+        "amend-nothing-waiting",
+        "actually make it the first ten instead",
+        (one(M("amend")), none("chat"), none("status")),
+        "control",
+    ),
+    Case(
+        "undo-nothing-done",
+        "undo that",
+        (one(M("undo")), none("chat"), none("status")),
+        "control",
+    ),
     # --- memory ----------------------------------------------------------------------
     Case(
         "s5-garage",
