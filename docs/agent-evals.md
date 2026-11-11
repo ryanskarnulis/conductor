@@ -1496,6 +1496,46 @@ What moved, v3 against main:
 Session evals were not run with this change; they are still owed before it
 merges.
 
+### A running job the words narrow is amended (#160, 2026-11-11)
+
+`amend-job` ("actually just grab the first ten songs", a music download
+running) was 0/20 on main, an ask to music every time. #151's `about` took
+it to 16/20 on its own; its four misses were `an app` and an ask to music (3)
+and a cancel then an ask (1). Now `plan.narrows_job` is one more nudge: when
+State lists a running job for the app an ask goes to, the person's words
+narrow something under way ("just", "only", "instead", "the first ten",
+"stop after …") and no step amends, the plan goes back once to amend that job
+(target `app:job:ref`). The jobs contract has no amend for a running job, so
+the amend then says it can't change it; that is expected. Of the plan cases,
+only `amend-job` and `ho-amend` meet the rule; every other case compiles as
+on #151.
+
+Plan evals at n=20 on gemma-4-12b, this branch on #151's commit, against
+#151's v3 run and main's above:
+
+| group | floor | main | #151 | this change | first-try |
+|---|---|---|---|---|---|
+| golden | 0.8 | 392/420 | 400/420 | 401/420 | 401/420 |
+| cross | 0.8 | 138/140 | 138/140 | 136/140 | 117/140 |
+| ref | 0.85 | 76/80 | 76/80 | 75/80 | 75/80 |
+| control | 0.8 | 154/180 | 143/180 | 148/180 | 142/180 |
+| memory | 0.8 | 239/240 | 239/240 | 239/240 | 234/240 |
+| knowledge | 0.65 | 60/60 | 60/60 | 60/60 | 60/60 |
+| hard | 0.5 | 20/20 | 19/20 | 19/20 | 19/20 |
+| self | 0.55 | 97/100 | 90/100 | 91/100 | 89/100 |
+| mixed | 0.85 | 183/200 | 198/200 | 199/200 | 179/200 |
+| long | 0.7 | 153/160 | 155/160 | 159/160 | 141/160 |
+| stale | 0.8 | 100/100 | 100/100 | 100/100 | 100/100 |
+
+- `amend-job` **20/20** (18 first-try; 2 were the repair, both from `an app`
+  and an ask to music). `ho-amend` 20/20 as on #151.
+- No group is Wilson-significantly below main or #151 (#150's rule).
+- **The `control` floor stays 0.8.** Its first five cases are now 100/100
+  (Wilson 0.97–1.00), but the group is 148/180 (0.82, Wilson 0.77–0.86):
+  #140's empty-state guards fell with #151 (`yes-nothing-waiting` 4/20,
+  `amend-nothing-waiting` 4/20, against 18 and 16 on main), so the group's
+  rate sits just above 0.8 and leaves nothing to raise it into.
+
 ## Fleet smoke (#143)
 
 `backend/tests/test_fleet_smoke.py`: S2, S3, S9 and S15 through conductor

@@ -700,6 +700,67 @@ def remembered_topic(plan: Plan, words: str, context: str) -> list[str]:
     ]
 
 
+# Words that narrow what is already under way (#160): "just the first ten",
+# "make it the first twenty instead", "only five", "stop after ten".
+_NUMBER = (
+    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|"
+    r"twenty|thirty|forty|fifty|hundred|few|half)"
+)
+_NARROWS = re.compile(
+    r"\b(?:just|only|instead|no\s+more\s+than|at\s+most|stop\s+(?:at|after))\b|"
+    rf"\b(?:first|last)\s+(?:\w+\s+)?{_NUMBER}\b|\b{_NUMBER}\s+of\s+them\b",
+    re.IGNORECASE,
+)
+# A running job as the state block lists it: "music:job:17 …" (the eval
+# cases), "music job 31, …" (the ledger) or "music ask_music (job 9): …".
+_JOB_LINE = re.compile(
+    r"^- (?P<app>[a-z0-9_-]+)(?::job:|\s+job\s+|\s+\S+\s+\(job\s+)(?P<ref>[\w-]+)"
+)
+
+
+def running_in(context: str) -> list[tuple[str, str]]:
+    """The running jobs State listed (#76), as ``(app, ref)``, in its order."""
+    found: list[tuple[str, str]] = []
+    inside = False
+    for line in context.splitlines():
+        if line.startswith(_RUNNING_HEADER):
+            inside = True
+            continue
+        if not inside:
+            continue
+        match = _JOB_LINE.match(line)
+        if match is None:
+            break
+        found.append((match.group("app"), match.group("ref")))
+    return found
+
+
+def narrows_job(plan: Plan, words: str, context: str) -> list[str]:
+    """A new ask to an app whose job State lists as running, when the
+    person's words narrow what is under way ("just grab the first ten songs",
+    #160: an ask to music every time on main). That changes the job, so the
+    repair asks for an amend of it. The jobs contract has no amend for a
+    running job, so the amend then says it can't change it; a new ask would
+    start a second download. A plan that already amends passes."""
+    if not isinstance(plan, StepPlan) or not _NARROWS.search(words):
+        return []
+    if any(step.do == "amend" for step in plan.steps):
+        return []
+    jobs = running_in(context)
+    for step in plan.steps:
+        if not isinstance(step, Ask):
+            continue
+        job = next(((app, ref) for app, ref in jobs if app == step.app), None)
+        if job is None:
+            continue
+        ref = f"{job[0]}:job:{job[1]}"
+        return [
+            f"{ref} is still running, and their words change it: amend it (target: "
+            f'"{ref}", change: their words), never a new ask to {step.app}'
+        ]
+    return []
+
+
 def looked_up_fact(plan: Plan, words: str, context: str) -> list[str]:
     """A plan that first looks up a saved fact State already lists, to feed
     another app's ask ("add a task for my music sorting day": recall or ask
