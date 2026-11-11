@@ -1741,3 +1741,79 @@ followed it did, and so did the receipt. What was fixed text after them
 (the length line, the label) now leads, so the cacheable prefix grows by
 tens of tokens, not the ~300 that remain per turn. Re-measure it with
 `CONDUCTOR_FLEET_COST=1` after the batch.
+
+## Batch run on `37ea9c2` (2026-11-11)
+
+First model-backed run since #146, #161/#163, #147, #139, #151, #160 and #138
+merged (the planner changes were measured at n=20 on older mains, never on
+this one; session evals never ran with any of them). gemma-4-12b, embeddings
+service up, `CONDUCTOR_EVAL_FLEET_DIR=~/Documents/workspace`, nothing tuned,
+held-out set not run. Plan evals 1695 s (13 passed, 1 skipped); session evals
+930 s, infra 0/12, claims backed 136/136. Baselines: #160's n=20 run above
+(`control`, `cross`, `long` and the rest), the session run in #158's section.
+
+Plan evals at n=20, each cell passed then first-try, against #160:
+
+| group | floor | #160 | now |
+|---|---|---|---|
+| golden | 0.8 | 401, 401 /420 | 400, 400 |
+| cross | 0.8 | 136, 117 /140 | 131, **101** |
+| ref | 0.85 | 75, 75 /80 | 73, 73 |
+| control | 0.8 | 148, 142 /180 | 147, 144 |
+| memory | 0.8 | 239, 234 /240 | 319, 283 /320 |
+| knowledge | 0.65 | 60, 60 /60 | 60, 60 |
+| hard | 0.5 | 19, 19 /20 | 20, 20 |
+| self | 0.55 | 91, 89 /100 | 94, 90 |
+| mixed | 0.85 | 199, 179 /200 | 198, 178 |
+| long | 0.7 | 159, 141 /160 | 153, 134 |
+| stale | 0.8 | 100, 100 /100 | 100, 100 |
+
+Every group is above its floor. By #150's rule (new upper bound under the
+baseline's lower bound, 1.645) no score is significantly below #160. First-try:
+`memory` is, 283/320 (upper 0.911 against 0.952), the only one. `memory` now
+has 16 cases (#147 added four), so that is not like for like; the log has no
+per-case first-try, so which cases it fell on is unmeasured. `cross` first-try
+101/140 (upper 0.779 against #160's lower 0.778) is one point from the rule.
+
+New, never run before, on `memory`: `memory-paraphrase-carport` 20/20,
+`memory-paraphrase-tune` 19/20 (one `recall | ask:music`),
+`memory-control-treehouse` 20/20, `memory-control-passport` 20/20. The other
+twelve memory cases are 20/20 each.
+
+Cases below 20/20:
+
+| case | now | note |
+|---|---|---|
+| `yes-nothing-waiting` | 0/20 | `answer:decline` every time; #160 4/20, #151 2/20 |
+| `amend-nothing-waiting` | 7/20 | ask tasks 10, think 2, ask_user 1; #160 4/20 |
+| `self-said-just-now` | 14/20 | recall 4, ask tasks 1, invalid 1; #151 10/20 |
+| `chess-analysis` | 0/20 | `look:chess` 19, look then open 1; known miss |
+| `s15-same-again` | 10/20 | `recall, ask music, ask tasks` 8 |
+| `s7-dennis` | 14/20 | `ask:tasks` 6 |
+| `long-cleanup` | 11/20 | `ask tasks, ask tasks, cancel` 7 |
+| `ref-task-from-song`, `ho-lyrics-task` | 19/20, 18/20 | one `ask music, ask tasks` miss; two |
+
+Tracked in #176: the first two and `self-said-just-now`. None of them is
+significantly lower than the last recorded rate.
+
+Session evals, gate tier at 5 (floor 0.8): S1, S1v, S2, S2r, S4, S5, S7, S8,
+S9, M1, T1, T2 5/5; S6, S16, M2 4/5; **M3 1/5**. Frontier: S3, S10, S12, S14,
+TH1, TH2 5/5; S11 3/5 (undecided); S13 0/5 (the brief, as before); **S15
+0/5**. Last recorded run (#158): all gate 5/5 but S6 and M3 (4/5 each is fine);
+S3, S10, S11, S12 5/5, S14 4/5, S15 3/5, S13 0/5.
+
+- **M3 fails the gate**, 1/5 (upper bound 0.56 under the 0.65 of a 5/5): tasks
+  never got the fact "I sort music on Sundays" in four runs; the ask reads "…
+  the record player on Sundays" (the plan writes the day itself, so
+  `facts.related` attaches nothing, the failure mode recorded under #141).
+  Recorded 5/5 (#158) and 15/20 (#141); #138's memory-line change is
+  the one that touched it today, but nothing here shows it is the cause.
+- **S3 5/5, S15 0/5** are the first on the fake that matches real music
+  (#163); the old rates aren't comparable. S15 turn 2: three runs "didn't name
+  the albums to pick from or ask which one", two wrote files and a task
+  "sort sort Honey" though music couldn't say which album.
+- **TH1, TH2 (#139) pass 5/5 each.** S11's two misses are "the task wasn't
+  undone". S13: the three overdue tasks, or the five songs to sort, aren't in
+  the brief.
+- Narrator cost (#161/#163): not re-measured here (`CONDUCTOR_FLEET_COST`
+  not run).
