@@ -1699,3 +1699,45 @@ Read:
   warm; its closing turn rides the tool turn's cache.
 - The planner's prefix is cached to ~1650 of 1860 after a different
   utterance (~770 ms prefill) and fully when the words repeat (~40 ms).
+
+## S3 and S15 after the fake matched real music (#163, 2026-11-11)
+
+**Every S3 and S15 score above measured the fake.** The baseline table, #72's
+10/10 and 9/10, the 5/5 and n=20 pairs and the "Suddenly" misses are
+conductor against `fake_world.py`'s music, which knew more than real music:
+an `album` ref with an id of its own, "Their other album" resolved against a
+discography (`year >= 2015`, minus what was already queued). The fleet smoke
+above is the same two scenarios against the real app: 0/3 each.
+
+The fake now returns what real music will once ryanskarnulis/music#96 lands:
+
+- One album resolved ("download the new Caribou album", a title, or an
+  artist with one album): the record touches an `album` entity ref
+  (`kind: "album"`, `id`: a MusicBrainz release-group id, `title`) beside the
+  `download_job` ref.
+- Not resolved to one ("the Caribou album", "the other album by Caribou"):
+  nothing written, nothing touched, and the reply names the candidates and
+  asks for one, or a link. Music keeps no idea which album is "the other".
+
+So S15's turn 2 can no longer end in "Suddenly": music names the candidates,
+the tasks step has no `{s1}` and doesn't run, and the check is that nothing
+was written and the reply asks which one. S3's check also requires the queued
+download to name its album. The old scores are not comparable with the first
+run after this: both rows restart from it.
+
+**Not run.** The model-backed evals (plan, session, fleet smoke) were left
+unrun here; the GPU was reserved. The eval gate runs once after the batch
+that changes the narrator and the glance view merges (#161, #163):
+
+- the glance view keeps a ref's other scalar fields and states its age, so
+  every `look` receipt changes;
+- the narrator's user message is reordered (the surface's length line, the
+  receipt, then the person's words; was words first) and a reply that blames
+  the person for a missing name is re-spoken or appended to.
+
+The narrator's cache prefix (471 tokens above) is exactly its system prompt,
+which is the same on every call, so nothing varied inside it: the words that
+followed it did, and so did the receipt. What was fixed text after them
+(the length line, the label) now leads, so the cacheable prefix grows by
+tens of tokens, not the ~300 that remain per turn. Re-measure it with
+`CONDUCTOR_FLEET_COST=1` after the batch.

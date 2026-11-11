@@ -14,6 +14,10 @@ import {
   Receipts,
   SideThread,
   StatusPill,
+  ThreadHead,
+  ThreadNote,
+  ThreadStart,
+  ThreadTabs,
   Utterance,
 } from './components'
 import { STEP_WORD, type StepState } from './status'
@@ -147,5 +151,58 @@ describe('design system components', () => {
     expect(screen.getByText('step 1 running').closest('li')).toHaveAttribute('aria-current', 'true')
     expect(screen.getByText('1 call · timed out').closest('details')).toHaveAttribute('data-state', 'failed')
     expect(screen.getByText('skip chess club until December')).toBeInTheDocument()
+  })
+
+  describe('side threads (#139)', () => {
+    it('heads an open thread with what it carries, outside titles quoted, and closes on Done', () => {
+      const onDone = vi.fn()
+      render(<ThreadHead title="Garage" carries={[{ label: 'Order brackets' }, { label: 'A web title', outside: true }]} onDone={onDone} onBack={vi.fn()} />)
+      const head = screen.getByRole('region', { name: 'Side thread: Garage' })
+      expect(head).toHaveTextContent('Carries')
+      expect(screen.getByText('Order brackets')).toBeInTheDocument()
+      expect(screen.getByText('“A web title”')).toHaveAttribute('data-outside', 'true')
+      fireEvent.click(screen.getByRole('button', { name: 'Done · back to the timeline' }))
+      expect(onDone).toHaveBeenCalledOnce()
+    })
+
+    it('says closing while the result is written, and closed only with the result', () => {
+      const { rerender } = render(<ThreadHead title="Garage" carries={[]} closing onDone={vi.fn()} onBack={vi.fn()} />)
+      expect(screen.getByRole('button', { name: 'Closing…' })).toBeDisabled()
+      expect(screen.getByText('nothing: it started empty')).toBeInTheDocument()
+      expect(screen.queryByText(/What flowed back/)).not.toBeInTheDocument()
+      const onBack = vi.fn()
+      rerender(<ThreadHead title="Garage" carries={[]} result="Added “Order brackets”." onBack={onBack} />)
+      expect(screen.getByText('Closed. What flowed back: Added “Order brackets”.')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Back to the timeline' }))
+      expect(onBack).toHaveBeenCalledOnce()
+    })
+
+    it('shows a result note in the timeline that opens its thread', () => {
+      const onOpen = vi.fn()
+      render(<ThreadNote title="Garage" text="Added “Order brackets”." onOpen={onOpen} />)
+      const note = screen.getByRole('group', { name: 'Side thread result: Garage' })
+      expect(note).toHaveTextContent('side thread')
+      expect(note).toHaveTextContent('Garage · Added “Order brackets”.')
+      fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+      expect(onOpen).toHaveBeenCalledOnce()
+    })
+
+    it('tabs between the timeline and each open thread', () => {
+      const onSelect = vi.fn()
+      render(<ThreadTabs threads={[{ id: 7, title: 'Garage' }, { id: 8, title: 'Party' }]} active={8} onSelect={onSelect} />)
+      expect(screen.getByRole('button', { name: 'Party' })).toHaveAttribute('aria-current', 'page')
+      expect(screen.getByRole('button', { name: 'Timeline' })).not.toHaveAttribute('aria-current')
+      fireEvent.click(screen.getByRole('button', { name: 'Timeline' }))
+      expect(onSelect).toHaveBeenCalledWith(null)
+    })
+
+    it('asks for no name while incognito', () => {
+      const onStart = vi.fn()
+      render(<ThreadStart name="" incognito busy={false} onName={vi.fn()} onStart={onStart} onCancel={vi.fn()} />)
+      expect(screen.queryByLabelText('Name (optional)')).not.toBeInTheDocument()
+      expect(screen.getByText('Incognito is on, so its name isn’t kept.')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+      expect(onStart).toHaveBeenCalledOnce()
+    })
   })
 })

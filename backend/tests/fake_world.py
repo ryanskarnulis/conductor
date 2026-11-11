@@ -36,6 +36,7 @@ import difflib
 import re
 import textwrap
 import threading
+import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -269,6 +270,16 @@ class Album:
     tracks: tuple[str, ...]
     genre: str
 
+    @property
+    def mbid(self) -> str:
+        """A MusicBrainz release-group id: what real music names an album by
+        (music#96). Stable per album, and not a job's id."""
+        return str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL, f"musicbrainz.test/release-group/{self.artist}/{self.title}"
+            )
+        )
+
 
 @dataclass
 class Job:
@@ -281,6 +292,8 @@ class Job:
     state: str = "queued"  # queued | finished | cancelled
     # The tracks that never matched, by title (outside text), once it finished.
     misses: tuple[str, ...] = ()
+    # The album the job fetches, when one was resolved (a MusicBrainz id).
+    album_id: str | None = None
 
 
 # The two playlist tracks that never match (S4): titles from outside.
@@ -590,7 +603,10 @@ def _ref_json(ref: EntityRef) -> dict[str, Any]:
 
 
 def _job_ref(job: Job) -> EntityRef:
-    return EntityRef(app="music", kind=job.kind, id=str(job.id), title=job.title, untrusted=True)
+    """What a job is, as its final report names it: the album it resolved to
+    (by its release-group id), else the job's own id."""
+    ident = job.album_id or str(job.id)
+    return EntityRef(app="music", kind=job.kind, id=ident, title=job.title, untrusted=True)
 
 
 def _looked_up(tool: str, refs: list[EntityRef]) -> RecordEntry:
@@ -628,8 +644,12 @@ def _write_entry(receipt: Receipt) -> RecordEntry:
         ref = EntityRef(app="music", kind="song", id=ident, title=receipt.title, untrusted=True)
         return RecordEntry(tool="download_song", outcome="done", touched=[ref], undo=no_undo)
     job_kind = str(receipt.detail.get("job_kind", "album"))
+    # An album music resolved is an entity ref beside its job (music#96): its
+    # MusicBrainz release-group id and title, outside text like any title it
+    # didn't write. The job is bookkeeping, named by the kind of request.
+    subject = str(receipt.detail.get("album_id") or ident)
     refs = [
-        EntityRef(app="music", kind=job_kind, id=ident, title=receipt.title, untrusted=True),
+        EntityRef(app="music", kind=job_kind, id=subject, title=receipt.title, untrusted=True),
         EntityRef(app="music", kind="download_job", id=ident, title=f"{job_kind} download"),
     ]
     # A queued download is a job (delegate-api "Jobs"): accepted now, done later.
@@ -1058,26 +1078,30 @@ class MusicApp:
         named = [
             a for a in self.world.catalog if re.search(rf"\b{re.escape(a.title.lower())}\b", text)
         ]
-        if named:
+        # What real music (MusicBrainz, no conversation) can resolve to one
+        # album: a title it was given, the newest of an artist's, or an artist
+        # with just one. It has no idea which album is "the other": it doesn't
+        # know what the person already has or means, so it names the candidates.
+        if len(named) == 1:
             album = named[0]
+        elif len(artist_albums) == 1:
+            album = artist_albums[0]
         elif artist_albums and re.search(r"\b(new|newest|latest|recent)\b", text):
             album = max(artist_albums, key=lambda a: a.year)
-        elif artist_albums and re.search(r"\b(other|another)\b", text):
-            queued = {job.title for job in self.world.jobs.values()}
-            rest = [a for a in artist_albums if a.title not in queued and a.year >= 2015]
-            if len(rest) != 1:
-                titles = ", ".join(a.title for a in artist_albums)
-                return AppReply(f"Which album? {artist_albums[0].artist} has: {titles}.")
-            album = rest[0]
         elif artist_albums:
             titles = ", ".join(f"{a.title} ({a.year})" for a in artist_albums)
-            return AppReply(f"Which one? {artist_albums[0].artist} has: {titles}.")
+            return AppReply(
+                f"Which album? I found these by {artist_albums[0].artist}: {titles}. "
+                "Nothing queued; tell me which, or send a link."
+            )
         else:
             return AppReply("I couldn't find that. Give me a link, or the artist and title.")
-        return self._queue_job("album", album.title, len(album.tracks), artist=album.artist)
+        return self._queue_job(
+            "album", album.title, len(album.tracks), artist=album.artist, album_id=album.mbid
+        )
 
     def _queue_job(self, kind: str, title: str, total: int, **detail: Any) -> AppReply:
-        job = Job(len(self.world.jobs) + 1, kind, title, total)
+        job = Job(len(self.world.jobs) + 1, kind, title, total, album_id=detail.get("album_id"))
         self.world.jobs[job.id] = job
         self.world.record(
             "music", "queue", f"job:{job.id}", title, job_kind=kind, total=total, **detail

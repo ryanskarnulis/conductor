@@ -105,8 +105,9 @@ def search(db: Session, conversation_id: int, query: str, *, limit: int = MAX_HI
     titles = _titles(db, [turn.id for turn, _, _ in rows])
     hits: list[Hit] = []
     for turn, said_text, reply_text in rows:
-        # A job's turn has code's words, not the person's: only its note is shown.
-        said = None if turn.kind == "job" else (said_text or turn.words)
+        # A job's turn has code's words, not the person's, and a side thread's
+        # result (#139) is a note, not something said: only the note is shown.
+        said = None if turn.kind in ("job", "thread") else (said_text or turn.words)
         reply = reply_text
         own = titles.get(turn.id, [])
         fields = {

@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, UniqueConstraint, func
+from sqlalchemy import JSON, ForeignKey, LargeBinary, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from app import clock
@@ -48,7 +48,7 @@ class ConversationKind(enum.StrEnum):
     ``timeline``: the one endless conversation every surface writes to,
     created on first use. ``legacy``: a conversation from before the
     timeline, reachable only through recall (#58 (c)). ``thread``: a side
-    thread (#139; its columns exist, nothing writes one yet).
+    thread the person started from the page (#139, ``app.services.threads``).
     """
 
     timeline = "timeline"
@@ -77,8 +77,9 @@ class Conversation(Base, TimestampMixin, SoftDeleteMixin):
         server_default=ConversationKind.legacy.value,
         index=True,
     )
-    # A side thread's small context, when it closed and what it flowed back
-    # into the timeline (#139): unused until then.
+    # A side thread's small context (the timeline window's entities and saved
+    # facts it carries in, as data), when it closed and the result it posted
+    # into the timeline (#139).
     carries: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
     closed_at: Mapped[datetime | None] = mapped_column(default=None)
     result: Mapped[str | None] = mapped_column(default=None)
@@ -262,7 +263,8 @@ class LedgerReceipt(Base, TimestampMixin):
     v1.1), or conductor's own ``unknown`` when an app ran and said nothing it
     could read (a v1 app, or a call that stopped partway).
 
-    ``source`` is ``app`` or ``conductor``. ``outcome`` is the app's
+    ``source`` is ``app`` or ``conductor`` (or ``thread``: a copy a side
+    thread's result posted to the timeline, #139). ``outcome`` is the app's
     (``done``/``refused``/``looked_up``/``not_run``) or ``unknown``, which
     counts as a possible write: the person can check and undo it, never
     "nothing changed". The undo handle is opaque and only its app reads it;
@@ -341,6 +343,20 @@ class LedgerTopic(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     terms: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
     turns: Mapped[int] = mapped_column(default=0)
+
+
+class LedgerTurnVector(Base, TimestampMixin):
+    """A turn's meaning (#147): the embeddings service's vector for the words
+    memory indexed it on, so recall and matches can rank by meaning beside
+    shared words. Built by code once the turn closes; never for an incognito
+    or forgotten turn, and deleted when a turn is forgotten. ``vector`` is
+    little-endian float32; ``model`` is the one the service said made it."""
+
+    __tablename__ = "ledger_turn_vectors"
+
+    turn_id: Mapped[int] = mapped_column(ForeignKey("ledger_turns.id"), primary_key=True)
+    model: Mapped[str]
+    vector: Mapped[bytes] = mapped_column(LargeBinary)
 
 
 class LedgerTouch(Base):

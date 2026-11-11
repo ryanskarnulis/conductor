@@ -392,3 +392,21 @@ describe('pauses and resumes', () => {
     expect(live(streamOf([['turn_started', beat], ['plan', plan]])).announce).toBe('Plan: 2 steps, none started')
   })
 })
+
+describe('a side thread’s result in the timeline (#139)', () => {
+  const note = msg({ id: 5, role: 'assistant', content: 'Side thread “Garage”: added “Order brackets”.', stop_reason: 'thread_note', thread: { id: 7, title: 'Garage' } })
+
+  it('never lapses the question the last turn left waiting', () => {
+    const messages = [msg({ id: 1 }), msg({ id: 2, role: 'assistant', tool_calls: [askTasks({ app_confirm: confirm })] }), note]
+    expect(pendingConfirm(messages)?.question).toBe(confirm.question)
+  })
+
+  it('is its own entry naming its thread, never a reply to what was said', () => {
+    // A note turn of the person's (no reply) followed by the result: the
+    // result doesn't become the note's answer.
+    const turns = buildTurns([msg({ id: 1, content: 'Filed it from the panel' }), note], null, null)
+    expect(turns).toHaveLength(2)
+    expect(turns[0]).toMatchObject({ note: true, reply: null, threadNote: null })
+    expect(turns[1]).toMatchObject({ said: '', reply: note.content, threadNote: { id: 7, title: 'Garage' }, stopReason: null })
+  })
+})

@@ -8,6 +8,7 @@ narrator's turns. The scratch tools stand in for the fixture fleet's apps. The l
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Generator
 from pathlib import Path
@@ -149,7 +150,7 @@ def test_the_narrator_speaks_from_the_receipt_with_no_tools(fleet: _Fleet) -> No
     assert narrating["tools"] == [] and narrating["response_format"] is None
     assert narrating["messages"][0]["content"] == narrator.SYSTEM_PROMPT
     opening = narrating["messages"][1]["content"]
-    assert opening.startswith(f"The person said: {SONG}")
+    assert opening.endswith(f"The person said: {SONG}")
     steps = json.loads(opening.split("Receipts:\n", 1)[1].split("\n\n")[0])["steps"]
     [step] = steps
     assert step["did"][0]["items"] == [{"kind": "song", "title": "Odessa", "outside_text": True}]
@@ -571,6 +572,114 @@ def test_the_fallback_reply_names_the_unrun_step() -> None:
     )
 
 
+# --- the true reason a {sN} step didn't run (#163) -----------------------------------------
+#
+# The smoke run's narrator said "a specific name for the task was not provided":
+# the person left nothing out. Earlier step gave no name; code says so.
+
+BLAMES_THE_PERSON = (
+    "Queued “Honey”, but I couldn't add the task because a specific name for the task was "
+    "not provided."
+)
+TRUE_REASON = "Queued “Honey”, but the task wasn't added: the album step gave no name to pass on."
+
+
+def _queued_album() -> ToolCallRecord:
+    return ToolCallRecord(
+        tool="ask_music",
+        arguments={"message": "download the album"},
+        result="ok",
+        app_record=[
+            {
+                "tool": "queue_download",
+                "outcome": "done",
+                "touched": [{"app": "music", "kind": "download_job", "id": "1", "title": "job"}],
+                "undo": {"none": "a download can't be undone"},
+            }
+        ],
+    )
+
+
+def _skipped_task() -> ToolCallRecord:
+    return _unrun(NO_NAME, app="tasks", message="add a task to sort {s1} this weekend")
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        BLAMES_THE_PERSON,
+        "I didn't add the task, since you didn't give me a name for it.",
+        "I didn't add the task because no name was provided.",
+        "I could not add the task: the name was not specified.",
+        "I didn't add the task to sort that this weekend.",  # says it, never says why
+    ],
+)
+def test_a_reply_that_blames_or_omits_the_reason_is_respoken_with_the_true_one(reply: str) -> None:
+    records = [_queued_album(), _skipped_task()]
+    chat, seen = _scripted(reply, TRUE_REASON)
+    narration = narrator.narrate("do both", None, records, surface=None, chat=chat)
+    assert (narration.reply, narration.path, narration.model_calls) == (
+        TRUE_REASON,
+        "respoken",
+        2,
+    )
+    asked = seen[1][-1]["content"]
+    assert "an earlier part gave no name to pass on" in asked
+    assert "not the person's doing" in asked
+
+
+def test_a_reply_that_still_blames_the_person_gets_the_reason_appended() -> None:
+    records = [_queued_album(), _skipped_task()]
+    chat, _ = _scripted(BLAMES_THE_PERSON, "The task wasn't added because no name was provided.")
+    narration = narrator.narrate("do both", None, records, surface=None, chat=chat)
+    assert narration.path == "appended"
+    assert (narration.reply or "").endswith(
+        "For the record: didn't ask tasks to add a task to sort that this weekend, "
+        "since an earlier part gave no name to pass on."
+    )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        TRUE_REASON,
+        "Queued the album. The task wasn't added: the album step never gave a name for it.",
+        "Queued the album, but there was no name to pass on, so I didn't add the task.",
+        "The task didn't run since the download came back with no name.",
+    ],
+)
+def test_a_reply_that_says_the_true_reason_is_left_alone(reply: str) -> None:
+    records = [_queued_album(), _skipped_task()]
+    chat, seen = _scripted(reply)
+    narration = narrator.narrate("do both", None, records, surface=None, chat=chat)
+    assert (narration.reply, narration.path, len(seen)) == (reply, "narrated", 1)
+
+
+def test_a_spoken_reply_keeps_two_sentences_with_the_true_reason() -> None:
+    records = [_queued_album(), _skipped_task()]
+    chat, _ = _scripted(BLAMES_THE_PERSON, BLAMES_THE_PERSON)
+    narration = narrator.narrate("do both", None, records, surface="voice", chat=chat)
+    sentences = re.split(r"(?<=[.!?])\s+", narration.reply or "")
+    assert len(sentences) == 2 and "gave no name to pass on" in sentences[1]
+
+
+def test_the_fallback_reply_has_the_true_reason() -> None:
+    def broken(messages: list[dict[str, Any]], max_tokens: int) -> Any:
+        raise ProviderRequestError("llama-server timed out")
+
+    records = [_queued_album(), _skipped_task()]
+    narration = narrator.narrate("do both", None, records, surface=None, chat=broken)
+    assert "since an earlier part gave no name to pass on" in (narration.reply or "")
+
+
+def test_other_reasons_are_not_held_to_a_wording() -> None:
+    records = [_done_task(), _unrun(AFTER_FAILURE)]
+    reply = "Added “Water the plants”; say undo to trash it. I didn't delete anything."
+    chat, seen = _scripted(reply)
+    narration = narrator.narrate("add it, then delete it", None, records, surface=None, chat=chat)
+    assert (narration.reply, len(seen)) == (reply, 1)
+
+
 @pytest.mark.parametrize(
     "error",
     [
@@ -588,3 +697,54 @@ def test_calls_the_loop_never_sent_stay_out(error: str) -> None:
     narration = narrator.narrate("add it", None, records, surface=None, chat=chat)
     assert len(_receipt(seen[0])) == 1
     assert (narration.reply, narration.path) == (reply, "narrated")
+
+
+# --- the prompt prefix the server can reuse (#163) -----------------------------------------
+#
+# llama-server reuses a prompt's cache up to the first byte that differs from
+# the last one. The narrator's system prompt is the same on every call; the
+# person's words used to open the user message, so everything after them (the
+# receipt's labels and the length line) was read again each turn. What is the
+# same on every call now comes first, and what varies (the receipt, then the
+# words) last.
+
+
+def _opening_of(words: str, records: list[ToolCallRecord], surface: str | None) -> str:
+    chat, seen = _scripted("Done.")
+    narrator.narrate(words, None, records, surface=surface, chat=chat)
+    assert seen[0][0]["content"] == narrator.SYSTEM_PROMPT
+    return str(seen[0][1]["content"])
+
+
+def test_two_different_receipts_share_the_prompt_up_to_the_part_that_varies() -> None:
+    one = _opening_of("add it", [_done_task("Water the plants")], None)
+    two = _opening_of("and then what did the dentist say?", [_done_task("Call the vet")], None)
+    assert one != two
+    shared = os.path.commonprefix([one, two])
+    header = narrator.opening_header(None)
+    assert shared.startswith(header) and len(shared) > len(header)
+    # Neither the person's words nor a title is in what the server can reuse.
+    for varying in ("add it", "dentist", "Water the plants", "Call the vet"):
+        assert varying not in shared
+    assert narrator.SYSTEM_PROMPT not in header  # the system prompt is its own message
+
+
+def test_the_words_come_after_the_receipt_and_the_length_line_before_it() -> None:
+    opening = _opening_of("add it", [_done_task()], "phone")
+    assert opening.startswith(narrator.opening_header("phone"))
+    assert opening.index("Receipts:") < opening.index("The person said: add it")
+    assert opening.endswith("The person said: add it")
+    assert opening.index("They read it on a phone") < opening.index("Receipts:")
+
+
+def test_the_header_is_the_same_for_every_call_on_a_surface() -> None:
+    heads = {narrator.opening_header(surface) for surface in (None, "desktop", "phone", "voice")}
+    assert len(heads) == 3  # screen, phone and spoken lines; desktop is the screen's
+    assert narrator.opening_header("voice") == narrator.opening_header("room_speaker")
+
+
+def test_the_retry_keeps_the_first_prompt_as_its_prefix() -> None:
+    records = [_done_task(), _unrun(NO_NAME)]
+    chat, seen = _scripted("Added it.", "Added it; the delete never ran, no name to pass on.")
+    narrator.narrate("add it, then delete it", None, records, surface=None, chat=chat)
+    assert seen[1][:2] == seen[0][:2]  # the second call extends the first
