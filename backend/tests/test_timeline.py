@@ -322,6 +322,29 @@ def test_incognito_words_never_reach_recall_the_plan_or_search(timeline: Timelin
     assert timeline.client.get("/api/agent/timeline/search", params={"q": "Odessa"}).json() == []
 
 
+def test_what_you_just_said_reaches_the_speaker_unless_incognito(timeline: Timeline) -> None:
+    # #158: a self answer can repeat the last reply, from the stored message.
+    _grab(timeline)
+    _, provider = timeline.say(
+        "what did you just say?",
+        plan_turn({"answer": "self"}),
+        text_turn("That I saved “Odessa”."),
+    )
+    facts = str(provider.requests[1]["messages"][-1]["content"])
+    assert '- you said: "Saved “Odessa” by Caribou."' in facts
+    # An incognito reply was never kept, so it can't be repeated, and no
+    # older reply stands in for it.
+    _grab(timeline, SECRET, incognito=True)
+    _, provider = timeline.say(
+        "what did you just say?",
+        plan_turn({"answer": "self"}),
+        text_turn("I don't know."),
+    )
+    facts = str(provider.requests[1]["messages"][-1]["content"])
+    assert "you said" not in facts and "surprise" not in facts
+    assert "An incognito turn" in facts
+
+
 def test_an_incognito_turn_remembers_no_fact_and_attaches_none(timeline: Timeline) -> None:
     exchange, _ = timeline.say(
         "remember I sort music on Sundays",
