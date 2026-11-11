@@ -27,12 +27,14 @@ from app.ai.recall import EarlierCall
 from app.ai.state_block import Entity, Match, Now
 from app.api import routes_agent
 from app.config import get_settings
+from app.ai.embeddings import document_text
 from app.db.models import (
     Conversation,
     LedgerEntity,
     LedgerStep,
     LedgerTopic,
     LedgerTurn,
+    LedgerTurnVector,
 )
 from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
 from app.fleet.manifests import Fleet, discover_fleet
@@ -43,6 +45,8 @@ from app.services import conversations as conversations_service
 from app.services.conversations import QUIET_GAP
 from app.services import memory as memory_service
 from tests.eval_db import age
+from tests.fake_embedder import FakeEmbedder
+from tests.fake_embedder import use as use_embedder
 from tests.fake_world import FakeGlances, World, client_factory, write_fixture_fleet
 from tests.scripted_provider import ScriptedProvider, text_turn
 
@@ -550,3 +554,82 @@ def test_recall_with_no_memory_reader_fails_the_step_honestly(fleet: Fleet, worl
         result = conductor.run("what did we say?")
     assert result.stop_reason == "completed"
     assert result.tool_calls[0].error == "couldn't look back: memory isn't available here"
+
+
+# --- by meaning (#147), with a fake embedder ----------------------------------------------------
+
+
+def _chatted(talk: Talk, *said: str) -> None:
+    for words in said:
+        talk.say(
+            words, plan_turn({"answer": "chat"}), text_turn('{"about_you": false, "reply": "Ok."}')
+        )
+
+
+def test_a_closed_turn_is_embedded_and_a_paraphrase_is_matched_by_meaning(
+    talk: Talk, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = use_embedder(monkeypatch, FakeEmbedder({"fetched": "grab", "montreal": "caribou"}))
+    _grab_odessa(talk)
+    # Each turn is embedded as it closes: the person's words and what it touched.
+    assert fake.sent == [document_text("grab Odessa by Caribou. Odessa")]
+    _chatted(
+        talk, "the fence needs two coats", "dentist on Thursday", "buy milk and eggs", "chess?"
+    )
+    vectors = db_session.execute(select(LedgerTurnVector)).scalars().all()
+    assert len(vectors) == 5
+    talk.new()
+    timeline = talk.conversation
+    window = conversations_service.window_since(db_session, timeline)
+    words = "put that tune I fetched from the Montreal artist in the house folder"
+    # No shared word: the registry alone has nothing.
+    monkeypatch.setattr(get_settings(), "conductor_embeddings", False)
+    assert memory_service.matches(db_session, words, timeline, since=window) == []
+    monkeypatch.setattr(get_settings(), "conductor_embeddings", True)
+    found = memory_service.matches(db_session, words, timeline, since=window)
+    assert [m.entity.title for m in found] == ["Odessa"]
+    assert found[0].said == "grab Odessa by Caribou"
+    # Recall cites the turn, but a hit by meaning alone resolves nothing for {sN}.
+    recalled = memory_service.recall(db_session, "the tune fetched from the Montreal artist")
+    assert [hit.words for hit in recalled.hits] == ["grab Odessa by Caribou"]
+    assert recalled.best is None
+
+
+def test_an_unrelated_lead_is_never_matched_by_meaning(
+    talk: Talk, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_embedder(monkeypatch, FakeEmbedder({"fetched": "grab", "montreal": "caribou"}))
+    _grab_odessa(talk)
+    _chatted(
+        talk, "the fence needs two coats", "dentist on Thursday", "buy milk and eggs", "chess?"
+    )
+    talk.new()
+    timeline = talk.conversation
+    window = conversations_service.window_since(db_session, timeline)
+    assert (
+        memory_service.matches(db_session, "that boat trailer hitch", timeline, since=window) == []
+    )
+
+
+def test_an_incognito_turn_never_reaches_the_service(
+    talk: Talk, client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = use_embedder(monkeypatch, FakeEmbedder())
+    _chatted(
+        talk, "the fence needs two coats", "dentist on Thursday", "buy milk", "chess?", "steel"
+    )
+    app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+        ScriptedProvider(
+            [plan_turn({"answer": "chat"}), text_turn('{"about_you": false, "reply": "Ok."}')]
+        ),
+        talk.fleet,
+        narrate=True,
+        glance=FakeGlances(),
+    )
+    response = client.post(
+        f"/api/agent/conversations/{talk.conversation}/messages",
+        json={"content": "that gate code is 4417", "incognito": True},
+    )
+    assert response.status_code == 200, response.text
+    assert not fake.said("4417") and not fake.said("gate")
+    assert len(db_session.execute(select(LedgerTurnVector)).scalars().all()) == 5

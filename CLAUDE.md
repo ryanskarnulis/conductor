@@ -187,7 +187,16 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   the apps' receipts, never conductor's replies or plan text. Each ended turn
   is indexed (words, the entities it touched, a quiet topic: shared words or
   entities, else the turn before), oldest first, as turns close. Topics are
-  never shown or managed. `recall` cites turns from every live conversation by
+  never shown or managed. Recall and matches also rank by meaning (#147,
+  `app/services/turn_vectors.py`): each indexed turn is embedded once as it
+  closes by the CPU embeddings service (`CONDUCTOR_EMBEDDINGS`,
+  `EMBEDDINGS_BASE_URL`), both searches are fused, and a hit by meaning alone
+  must lift `memory.LIFT_ALONE` over the median cosine (set from
+  `tests/recall_cases.py`'s paraphrases and controls). Meaning only ranks:
+  `{sN}` and `facts.related` stay on words. Incognito and forgotten turns are
+  never sent (forgetting deletes the vector); a service down or slow means
+  words alone, never a failed or waiting turn; `scripts/embed_turns.py`
+  backfills. `recall` cites turns from every live conversation by
   day and conversation, scoped by matching topics, as a `conductor` receipt
   (`fact`, `cites_turn_id`); `{sN}` on it is the one entity that clearly
   answers (a tie names nothing), with its trust. Nothing found is said, never
