@@ -746,9 +746,15 @@ class Interpreter:
         """An app ask's arguments: the request as the plan wrote it (refs
         filled), and the saved facts its words clearly point at (#134), which
         the ask tool sends after it as quoted context. Matched on the plan's
-        own words, never on a title a ref put in."""
+        own words, never on a title a ref put in, and on the person's words
+        when they are the request (#179: the plan may write what the fact
+        says instead of the words that pointed at it)."""
         arguments: dict[str, Any] = {"message": message}
-        attached = facts.related(plans.REF.sub(" ", step.request), self._saved(state))
+        attached = facts.related(
+            plans.REF.sub(" ", step.request),
+            self._saved(state),
+            state.words if state.restate else "",
+        )
         if attached:
             arguments[facts.ARGUMENT] = attached
             logger.info("plan_facts_attached", step=step.id, app=step.app, count=len(attached))

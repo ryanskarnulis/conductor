@@ -401,22 +401,42 @@ def _match_terms(text: str) -> set[str]:
     return {_root(word) for word in terms(text)} - _GENERIC
 
 
-def related(request: str, saved: Sequence[str]) -> list[str]:
+def related(request: str, saved: Sequence[str], words: str = "") -> list[str]:
     """The saved facts an app's request clearly points at, best first, at
     most :data:`MAX_ATTACHED`. Conservative: a fact needs two of its own terms
     in the request, so one shared word, a stop word or a weekday never pulls
     one in. A fact the request already says isn't sent again. ``saved`` is
-    newest first; a tie keeps that order."""
+    newest first; a tie keeps that order.
+
+    ``words`` are the person's own words, when they are the request (#179).
+    The planner reads the facts in State and sometimes writes what one says
+    in place of the words that pointed at it: "add a task for my music
+    sorting day …" became "add a task for Sunday …". So a fact also goes when
+    the person's words share two of its terms and the request says something
+    of the fact's they didn't (here "Sunday"): the plan used that fact in
+    this ask, and the app gets it as they said it. Another ask in the same
+    plan that says nothing of the fact gets nothing."""
     wanted = _match_terms(request)
-    if len(wanted) < MIN_SHARED:
-        return []
+    pointed = _match_terms(words)
+    written = _fact_words(request) - _fact_words(words)
     scored: list[tuple[int, int, str]] = []
     for order, fact in enumerate(saved):
-        shared = len(_match_terms(fact) & wanted)
-        if shared < MIN_SHARED or literal(fact, request):
+        if literal(fact, request):
             continue
+        own = _match_terms(fact)
+        shared = len(own & wanted)
+        if shared < MIN_SHARED:
+            if len(own & pointed) < MIN_SHARED or not _fact_words(fact) & written:
+                continue
+            shared = len(own & (wanted | pointed))
         scored.append((-shared, order, fact))
     return [fact for _, _, fact in sorted(scored)[:MAX_ATTACHED]]
+
+
+def _fact_words(text: str) -> set[str]:
+    """What a text says of a fact, weekdays included ("Sunday" names one):
+    the evidence that a plan wrote a fact into its request."""
+    return {_root(word) for word in words_of(text)} - _GENERIC
 
 
 def quotable(fact: str) -> str:

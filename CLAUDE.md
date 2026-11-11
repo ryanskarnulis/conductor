@@ -237,7 +237,9 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   memory list (`/api/memory/facts`, a lazy UI chunk) shows each fact's
   source; its edits and forgets are the person's note turns. An app ask
   whose request shares two terms with a saved fact carries it (#134,
-  `facts.related`, at most two): code sends it after the request, quoted and
+  `facts.related`, at most two), and so does one whose request writes
+  something of the fact the person didn't say ("Sunday") when their own
+  words share two terms with it (#179): code sends it after the request, quoted and
   marked as context, never rewriting the words; the step's `facts` argument
   records it, and the record lines models read leave it out. Three
   validator nudges (one repair, then the plan runs as compiled) keep plans
