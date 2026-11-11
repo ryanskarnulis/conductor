@@ -348,6 +348,115 @@ def test_a_question_about_you_is_never_general_knowledge(words: str, says: str |
         assert plans.about_you(plans.load(other), words) == []
 
 
+def test_every_shape_opens_with_what_the_message_is_about(fleet: Fleet) -> None:
+    # #151: the planner's first key is `about`, so the plan's shape isn't its
+    # first decision; llama-server's grammar writes keys in `properties` order.
+    for shape in plans.schema(fleet, resumable=True)["anyOf"]:
+        assert next(iter(shape["properties"])) == "about"
+        assert shape["required"][0] == "about"
+        assert shape["properties"]["about"]["enum"] == list(plans.ABOUT)
+    for about in plans.ABOUT:
+        assert f'- "{about}": ' in compiler.planner_prompt(fleet)
+    # It rides beside the plan, never in it: the stored body is unchanged.
+    raw = json.dumps({"about": "an app", **steps(ask("tasks", "add milk"))})
+    assert plans.about_of(raw) == "an app"
+    assert "about" not in plans.dump(plans.parse(raw))
+    assert plans.about_of(json.dumps({"answer": "chat"})) is None
+    assert plans.about_of(json.dumps({"about": "nonsense", "answer": "chat"})) is None
+    assert plans.about_of("not json") is None
+
+
+def test_a_running_job_or_a_waiting_question_is_offered_only_when_state_has_one(
+    fleet: Fleet,
+) -> None:
+    from tests.plan_cases import state
+
+    def offered(context: str, **checks: Any) -> tuple[str, ...]:
+        return plans.offered_about(plans.Checks(fleet=fleet, context=context, **checks))
+
+    def enum(context: str, **checks: Any) -> list[str]:
+        about = plans.offered_about(plans.Checks(fleet=fleet, context=context, **checks))
+        shape = plans.schema(fleet, about=about)["anyOf"][0]
+        return list(shape["properties"]["about"]["enum"])
+
+    always = ("an app", "conductor itself", "general knowledge", "the outside world", "small talk")
+    assert offered(state()) == always
+    assert enum(state()) == list(always)
+    job = state(jobs="music job 17, the playlist “Road Trip”: running, 6 of 40")
+    assert "a running job" in offered(job) and "the waiting question" not in offered(job)
+    assert "a running job" in enum(job)
+    asked = state(waiting='your last reply asked "Which one?"')
+    assert "the waiting question" in offered(asked)
+    assert "the waiting question" in offered(state(), confirmable=True)
+    assert "the waiting question" in offered(state(), resumable=True)
+    assert offered("") == always
+
+
+@pytest.mark.parametrize(
+    ("about", "body", "agrees"),
+    [
+        ("an app", steps(ask("tasks", "add milk")), True),
+        ("an app", {"answer": "knowledge"}, False),
+        ("general knowledge", {"answer": "knowledge"}, True),
+        ("general knowledge", steps(ask("tasks", "how long to boil an egg")), False),
+        ("general knowledge", {"answer": "decline"}, False),
+        ("the outside world", {"answer": "decline"}, True),
+        ("the outside world", steps(ask("music", "play some jazz")), True),
+        ("the outside world", {"answer": "knowledge"}, False),
+        ("conductor itself", {"answer": "self"}, True),
+        ("conductor itself", steps(ask("memory", "what do you know about me?")), True),
+        ("conductor itself", {"answer": "knowledge"}, False),
+        # What it just did or said is in State: never a search or a think.
+        ("conductor itself", steps({"do": "recall", "query": "what I just said"}), False),
+        (
+            "conductor itself",
+            steps({"do": "think", "problem": "what did I say", "inputs": []}),
+            False,
+        ),
+        ("conductor itself", steps({"do": "look", "app": "tasks"}), True),
+        ("the waiting question", steps({"do": "confirm", "answer": "yes"}), True),
+        ("the waiting question", {"resume": "the first"}, True),
+        ("an app", {"resume": "the first"}, False),
+        ("the waiting question", {"answer": "decline"}, False),
+        ("a running job", steps({"do": "amend", "target": "music:17", "change": "ten"}), True),
+        ("a running job", steps({"do": "look", "app": "music"}), True),
+        ("a running job", {"answer": "self"}, True),
+        ("a running job", steps(ask("music", "just grab the first ten songs")), False),
+        ("small talk", {"answer": "chat"}, True),
+        ("small talk", steps(ask("tasks", "thanks")), False),
+        (None, {"answer": "knowledge"}, True),
+    ],
+)
+def test_the_plan_must_agree_with_what_it_said_the_message_is_about(
+    about: str | None, body: dict[str, Any], agrees: bool
+) -> None:
+    found = plans.disagrees(about, plans.load(body))
+    assert (found == []) is agrees
+    if found:
+        assert found[0].startswith(f'you wrote "about": "{about}", but the plan is ')
+
+
+def test_a_plan_its_about_contradicts_gets_one_repair(fleet: Fleet) -> None:
+    job = steps(ask("music", "just grab the first ten songs"))
+    amend = steps({"do": "amend", "target": "music:job:17", "change": "the first ten songs"})
+    compiled, sent = _compile(
+        fleet,
+        json.dumps({"about": "a running job", **job}),
+        json.dumps({"about": "a running job", **amend}),
+    )
+    assert compiled.repaired and plans.describe(compiled.plan) == "amend"  # type: ignore[arg-type]
+    assert compiled.about == "a running job"
+    assert "never a new ask" in sent[1][-1]["content"]
+    # Like #134's nudges, only the first plan is sent back: a repair that
+    # keeps the contradiction still runs.
+    compiled, _ = _compile(
+        fleet,
+        json.dumps({"about": "a running job", **job}),
+        json.dumps({"about": "a running job", **job}),
+    )
+    assert compiled.repaired and plans.describe(compiled.plan) == "ask:music"  # type: ignore[arg-type]
+
+
 def test_the_planner_prompt_lists_the_fleet_and_never_caps_steps(fleet: Fleet) -> None:
     prompt = compiler.planner_prompt(fleet)
     assert "- tasks (ask, look): Manages projects and tasks." in prompt

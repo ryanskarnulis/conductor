@@ -1416,6 +1416,86 @@ knowledge 60/60, hard 20/20, self 99/100 first-try 47, mixed 185/200, long
 M3 and S6 both 5/5; frontier S3, S10, S11, S12 5/5, S14 and S15 4/5, S13 0/5
 (as before); claims 124/125 backed.
 
+### A leading `about` field (#151, 2026-11-11)
+
+Each planner reply now opens with `about`, what the message is about, before
+the plan's shape: `an app`, `conductor itself`, `general knowledge`, `the
+outside world`, `the waiting question`, `a running job` or `small talk`.
+`a running job` and `the waiting question` are in the schema's enum only when
+State lists a running job or something waits on the person
+(`plan.offered_about`). The prompt gains one block describing the
+values, and its JSON examples carry the field. `plan.disagrees` is one more
+nudge (one repair, then the plan runs): it sends back a plan its own `about`
+contradicts, such as `general knowledge` with an ask, `an app` with a direct
+answer, `a running job` with a new ask and no cancel or amend, or `conductor
+itself` with only a recall or a think. The field isn't stored with the plan;
+the eval report records it per reply.
+
+Plan evals at n=20 on gemma-4-12b, main (`70476ea`) and three variants, one
+arm per GPU hold in this order, each cell passed then first-try:
+
+| group | floor | main | v1 | v2 | **v3 (shipped)** |
+|---|---|---|---|---|---|
+| golden | 0.8 | 392, 385 /420 | 401, 400 | 400, 400 | 400, 400 |
+| cross | 0.8 | 138, 127 /140 | 136, **112** | 139, 122 | 138, 114 |
+| ref | 0.85 | 76, 76 /80 | **64, 64** | 74, 74 | 76, 76 |
+| control (9 cases) | 0.8 | 154, 133 /180 | 168, 159 | 152, 152 | 143, 141 |
+| memory | 0.8 | 239, 220 /240 | 236, 228 | 237, 237 | 239, 238 |
+| knowledge | 0.65 | 60, 60 /60 | 60, 60 | 60, 60 | 60, 60 |
+| hard | 0.5 | 20, 20 /20 | **7, 7** | **7, 7** | 19, 18 |
+| self | 0.55 | 97, 46 /100 | **80**, 80 | **80**, 80 | 90, 90 |
+| mixed | 0.85 | 183, 163 /200 | 199, 180 | 200, 180 | 198, 178 |
+| long | 0.7 | 153, 146 /160 | 155, **129** | 153, 137 | 155, 140 |
+| stale | 0.8 | 100, 100 /100 | 100, 99 | 100, 100 | 100, 100 |
+| **all** | | 1612, 1476 /1700 | 1606, 1518 | 1602, 1549 | 1618, 1555 |
+
+Bold is Wilson-significantly below main by #150's rule (the arm's upper bound
+under main's lower bound, 1.645), on the score or the first-try rate.
+
+- **v1**: all seven values always offered. `a running job` drew "undo that",
+  "cancel that" and "push the dennis thing to friday" (an amend of a task, so
+  `s7-dennis` 6/20), "yes" with nothing waiting anchored on `the waiting
+  question` (12 of 20 invalid), "plan my week" became `an app` and an ask to
+  tasks (`s14-plan-week` 7/20), and "what did you say just now?" became a
+  recall (`self-said-just-now` 0/20).
+- **v2**: the job and waiting values only when State has one, and `an app`
+  no longer says "plan its steps". `ref`, `cross` and `long` came back;
+  `s14-plan-week` (7/20) and `self-said-just-now` (0/20, recall 14, think 6)
+  did not.
+- **v3**: `an app` says planning around it ends in a think, `conductor
+  itself` says what you did or said is a self answer and what you know about
+  them is memory's, `small talk` covers a yes or no with nothing waiting, and
+  `conductor itself` with only a recall or think goes back. No group is below
+  main by the rule, on either rate, so it ships.
+
+What moved, v3 against main:
+
+| case | main | v3 (first-try) |
+|---|---|---|
+| `amend-job` | 0/20 | 16/20 (16) |
+| `ho-amend` | 3/20 | 20/20 (20) |
+| `status-now`, `status-last`, `self-apps-reach`, `local-capabilities` first-try | 7, 7, 5, 12 /20 | 20 each |
+| `memory-about-me`, `memory-used` first-try | 9, 11 /20 | 20 each |
+| `chess-resign`, `refuse-playback`, `s6-that-song` | 17 each | 20 each |
+| `self-said-just-now` | 18/20 (7) | **10/20** (10): recall 9 times, kept through the repair |
+| `amend-nothing-waiting` | 16/20 (13) | **5/20**: ask tasks "make it the first ten instead" 12 times |
+| `yes-nothing-waiting` | 18/20 (0) | **2/20**: confirm, then decline after the repair, 18 times |
+| `s3-album-task`, `cross-playlist-task` first-try | 14, 15 /20 | 7, 9 (the lost-ref repair; 20/20 each) |
+
+- Read these with care. The `self` score (97 to 90) and `cross` first-try
+  (127 to 114) would be significant on a pooled two-proportion test (z −2.0
+  and −2.2), just not by #150's rule; the empty-state guards (#140's) lost
+  most: with no waiting or job value to pick, "yes" and "make it the first
+  ten" land on `the outside world` or `an app`.
+- The other nudges barely fire. On main's first replies `plan.about_you`
+  (#134, #158) fired 67 times in 1700 and `plan.looked_up_fact` 9; on v3's,
+  neither fired once. `plan.disagrees` fired 11 times (9 of them
+  `self-said-just-now`, kept as recall). `remembered_topic` still catches
+  `ho-recall` 20 times in both.
+
+Session evals were not run with this change; they are still owed before it
+merges.
+
 ## Fleet smoke (#143)
 
 `backend/tests/test_fleet_smoke.py`: S2, S3, S9 and S15 through conductor

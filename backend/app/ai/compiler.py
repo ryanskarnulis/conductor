@@ -82,6 +82,23 @@ never talk to the person. You turn what they just said into a plan; code checks 
 the plan and runs it, and a separate narrator speaks to them afterwards from \
 what actually happened. Plan only what the person asked for.
 
+Every reply starts with "about": what their message is about, decided before \
+the plan, and the plan must agree with it:
+- "an app": something the apps below keep or do; planning a week or weighing \
+options around it ends in a think.
+- "conductor itself": you: what you can do or are doing, what you just did or \
+said (State shows it: {"answer": "self"}), or what you know about them (ask \
+memory).
+- "general knowledge": facts that don't change; {"answer": "knowledge"}.
+- "the outside world": weather, news, scores, prices, lights; nothing here \
+keeps them, so {"answer": "decline"} unless an app below does it.
+- "the waiting question": their answer to what State shows waiting on them \
+(offered only when something waits).
+- "a running job": a job State lists as running (offered only then); cancel \
+or amend it, never a new ask.
+- "small talk": thanks, greetings, or a yes or no with nothing waiting; \
+{"answer": "chat"}.
+
 A plan is steps with ids s1, s2, ... in order, as many as the request needs. \
 The step kinds:
 - ask: hand a request to an app's agent, as one self-contained message in the \
@@ -125,15 +142,15 @@ it found). Use it whenever a later step needs something only an earlier step \
 will find out. If State already names the thing, write its name; use recall \
 only for things State doesn't name.
 Example: "download the new Bonobo album and remind me Sunday to listen to it" \
--> {"steps": [{"id": "s1", "do": "ask", "app": "music", "request": "download \
-the new Bonobo album", "destructive": false}, {"id": "s2", "do": "ask", "app": \
-"tasks", "request": "add a task for Sunday to listen to {s1}", "destructive": \
-false}]}. Never write "the new album" where {s1} belongs: only the earlier step \
+-> {"about": "an app", "steps": [{"id": "s1", "do": "ask", "app": "music", \
+"request": "download the new Bonobo album", "destructive": false}, {"id": "s2", \
+"do": "ask", "app": "tasks", "request": "add a task for Sunday to listen to \
+{s1}", "destructive": false}]}. Never write "the new album" where {s1} belongs: only the earlier step \
 will know its real title.
 
 When State shows something "Waiting on the person" and their message says yes \
-or no to it, the plan is {"steps": [{"id": "s1", "do": "confirm", "answer": \
-"yes" or "no"}]}, never an answer.
+or no to it, the plan is {"about": "the waiting question", "steps": [{"id": \
+"s1", "do": "confirm", "answer": "yes" or "no"}]}, never an answer.
 
 When nothing needs to run, reply {"answer": ...} instead of steps:
 - knowledge: general knowledge that doesn't change (cooking times, \
@@ -146,8 +163,8 @@ narrator answers from State and the app list.
 - chat: thanks, greetings, small talk.
 
 When State says your last reply asked them a question and their message \
-answers it, reply {"resume": "<their answer, in their words>"} and the waiting \
-plan carries on.
+answers it, reply {"about": "the waiting question", "resume": "<their answer, \
+in their words>"} and the waiting plan carries on.
 
 The apps:
 {apps}
@@ -165,6 +182,8 @@ class Compiled:
     # The validator's objections to the last plan (or why there is no plan).
     problems: list[str] = field(default_factory=list)
     repaired: bool = False
+    # What the last reply said the message is about (#151), if it said.
+    about: str | None = None
 
 
 def user_message(context: str | None, words: str) -> str:
@@ -183,17 +202,18 @@ def _problems(plan: plans.Plan, words: str, checks: plans.Checks) -> list[str]:
     return plans.problems(plan, checks) + plans.recalled_answer(plan, words, checks.context)
 
 
-def _nudges(plan: plans.Plan, words: str, checks: plans.Checks) -> list[str]:
+def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Checks) -> list[str]:
     """Repairs that read the person's words against State (#134): a
     remembered topic nothing saved is about, a lookup of a fact State lists,
-    a question about you filed as general knowledge. The first plan gets
-    them once; a repaired plan that keeps its choice still runs, since each
-    of these plans can run and a turn that answers beats code's "couldn't
-    put that together"."""
+    a question about you filed as general knowledge; and a plan its own
+    ``about`` contradicts (#151). The first plan gets them once; a repaired
+    plan that keeps its choice still runs, since each of these plans can run
+    and a turn that answers beats code's "couldn't put that together"."""
     return (
         plans.remembered_topic(plan, words, checks.context)
         + plans.looked_up_fact(plan, words, checks.context)
         + plans.about_you(plan, words)
+        + plans.disagrees(about, plan)
     )
 
 
@@ -215,7 +235,9 @@ def compile_turn(
         "json_schema": {
             "name": "plan",
             "strict": True,
-            "schema": plans.schema(fleet, resumable=checks.resumable),
+            "schema": plans.schema(
+                fleet, resumable=checks.resumable, about=plans.offered_about(checks)
+            ),
         },
     }
     messages: list[dict[str, Any]] = [
@@ -227,6 +249,7 @@ def compile_turn(
         result = chat(messages, MAX_TOKENS, response_format)
         raw = result.content or ""
         compiled.raw.append(raw)
+        compiled.about = plans.about_of(raw)
         plan: plans.Plan | None
         try:
             plan = plans.parse(raw)
@@ -236,7 +259,7 @@ def compile_turn(
         if plan is not None:
             found = _problems(plan, words, checks)
             if attempt == 0:
-                found += _nudges(plan, words, checks)
+                found += _nudges(plan, compiled.about, words, checks)
         compiled.problems = found
         if plan is not None and not found:
             compiled.plan = plan
@@ -283,7 +306,9 @@ def repair_turn(
         "json_schema": {
             "name": "plan",
             "strict": True,
-            "schema": plans.schema(fleet, resumable=checks.resumable),
+            "schema": plans.schema(
+                fleet, resumable=checks.resumable, about=plans.offered_about(checks)
+            ),
         },
     }
     messages: list[dict[str, Any]] = [
@@ -305,6 +330,7 @@ def repair_turn(
     result = chat(messages, MAX_TOKENS, response_format)
     raw = result.content or ""
     previous.raw.append(raw)
+    previous.about = plans.about_of(raw)
     previous.repaired = True
     previous.plan = None
     plan: plans.Plan | None

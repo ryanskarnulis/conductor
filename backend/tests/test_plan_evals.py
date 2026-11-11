@@ -190,6 +190,8 @@ def _sample(case: Case, fleet: Fleet, prompt: str) -> dict[str, Any]:
         "calls": len(compiled.raw),
         "steps": len(plan.steps) if isinstance(plan, plans.StepPlan) else 0,
         "plan": plans.describe(plan) if plan is not None else None,
+        # What each reply said the message is about (#151).
+        "about": [plans.about_of(raw) for raw in compiled.raw],
         "problems": compiled.problems,
         "seconds": round(seconds, 2),
         "raw": compiled.raw,
