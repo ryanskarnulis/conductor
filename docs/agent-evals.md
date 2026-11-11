@@ -1218,3 +1218,54 @@ What the table shows besides:
   in the last two runs, the same code.
 
 Session evals were not run: no default changed.
+
+### A repeated question, without its earlier request (#141, 2026-11-10)
+
+Asked "what's due today?" again, the planner's first compile answered
+`knowledge` every time, and every pass was `plan.recalled_answer`'s repair (a
+second planner call). The trigger is the earlier request in the same words,
+not the app's answer: stripping the answers (tried 2026-11-09, not shipped)
+moved nothing, and a record of a different question read the app 20/20. Now
+the planner's message (`compiler.user_message`, through
+`turn_context.for_planner`) leaves out an earlier request whose terms equal
+the person's words, the terms `recalled_answer` matches on: its record lines,
+an earlier conversation's hit, the earlier requests, a registry match it
+touched, and the last exchange when it was that request. The validator still
+reads the whole opening, so the repair stays the backstop. The planner prompt
+is unchanged. Of the 98 plan and held-out cases, only four `stale` ones get a
+different planner message; every other case's input is byte-identical. New
+case: `stale-due-earlier-in-thread` (the same question two exchanges back).
+
+Plan evals at n=20 on gemma-4-12b, this branch on `8bf298a`. `stale` was
+paired with main on the same cases; the other groups are read against the
+#142 table above:
+
+| group | floor | score | first-try |
+|---|---|---|---|
+| golden | 0.8 | 397/420 | 389/420 |
+| cross | 0.8 | 139/140 | 126/140 |
+| ref | 0.85 | 76/80 | 76/80 |
+| control | 0.8 | **80/100** | 80/100 |
+| memory | 0.8 | 140/140 | 120/140 |
+| knowledge | 0.65 | 58/60 | 58/60 |
+| hard | 0.5 | 19/20 | 19/20 |
+| self | 0.55 | 57/60 | 35/60 |
+| mixed | 0.85 | 188/200 | 168/200 |
+| long | 0.7 | 156/160 | 147/160 |
+| stale | 0.8 | 100/100 | **100/100** (main: 60/100) |
+
+- `stale-due-same-thread` and `stale-due-earlier-in-thread`: first-try 0/20
+  each on main (`knowledge` 40 of 40, repaired), 20/20 each here, one planner
+  call per sample. The other three `stale` cases read 20/20 first-try on both.
+- No group moved significantly; the small dips (`knowledge` 58/60, `self`
+  57/60) are on cases whose input is unchanged. `control` sits on its floor
+  as before (`amend-job` 0/20).
+
+Session evals, gate tier at 5 and the frontier at 5, this branch: every gate
+scenario 5/5 but **M3, 5/10, below its floor**. M3's planner input is
+unchanged by this branch (neither turn's words share the other's terms), and
+its misses are main's: the plan writes "Sunday" itself, so `facts.related`
+attaches nothing, or the narrator claims a save. Paired at n=20: M3 **15/20
+here, 16/20 on main**, the same two failure modes. S15 paired at n=20: **14/20
+here, 11/20 on main** (its input is unchanged too). Frontier: S3, S10, S11,
+S12 5/5, S14 4/5, S13 0/5 (the brief misses the counts, as before).
