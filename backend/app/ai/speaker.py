@@ -14,7 +14,8 @@ The compiler can answer a turn without steps (:class:`app.ai.plan.Direct`):
   the facts and carries no general-knowledge label.
 - ``self``: the model answers from facts code gathered: the ledger's last
   turns and what's running (S16, "what are you doing / what did you just
-  do?"), and the app list. It says it doesn't know rather than guess.
+  do?"), the last reply ("what did you just say?", #158), and the app list.
+  It says it doesn't know rather than guess.
 - ``chat``: one short line, in the persona. The planner also files "what did
   you just do?" here some of the time (which glance lines sit in its prompt
   moves it: S16 fell to 9/15 once the apps declared real ones, #73), so chat
@@ -54,8 +55,8 @@ Path = Literal["code", "spoken", "fallback"]
 _SYSTEM: dict[str, str] = {
     "knowledge": (
         "You are the household's local assistant. Answer the person's question plainly, in "
-        "one to three sentences. If it is about you (what you can do, are doing, just did, "
-        'or why), set "about_you" to true and answer only from the facts below, written by '
+        "one to three sentences. If it is about you (what you can do, are doing, just did or "
+        'said, or why), set "about_you" to true and answer only from the facts below, written by '
         "code from your own records, in plain verbs (added, moved, trashed, found), never "
         "naming tools or saying something was completed unless a fact says so; if they "
         "don't say, say you don't know. Otherwise set it "
@@ -66,7 +67,7 @@ _SYSTEM: dict[str, str] = {
     ),
     "self": (
         "You are the household's local assistant, answering a question about yourself: what "
-        "you can do, what you're doing or what you just did. Answer only from the facts "
+        "you can do, what you're doing or what you just did or said. Answer only from the facts "
         "below, written by code from your own records; if they don't say, say you don't "
         "know. Say what the apps did in plain verbs (added, moved, trashed, found), naming "
         "things by their titles in quotes; never say something was completed or finished "
@@ -75,11 +76,11 @@ _SYSTEM: dict[str, str] = {
     "chat": (
         "You are the household's local assistant. Reply to the person's small talk in one "
         "short sentence. Don't offer to do anything and don't ask a question. If what they "
-        "said is really a question about you (what you can do, are doing, just did, or why), "
-        'set "about_you" to true and answer only from the facts below, written by code from '
-        "your own records, in plain verbs (added, moved, trashed, found), naming things by "
-        "their titles in quotes; if they don't say, say you don't know. Otherwise set it to "
-        "false and use the facts for nothing."
+        "said is really a question about you (what you can do, are doing, just did or said, "
+        'or why), set "about_you" to true and answer only from the facts below, written by '
+        "code from your own records, in plain verbs (added, moved, trashed, found), naming "
+        "things by their titles in quotes; if they don't say, say you don't know. Otherwise "
+        "set it to false and use the facts for nothing."
     ),
 }
 

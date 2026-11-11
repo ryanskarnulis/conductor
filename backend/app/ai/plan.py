@@ -506,11 +506,14 @@ def recalled_answer(plan: Plan, words: str, context: str) -> list[str]:
 
 
 # A question about conductor itself or what it keeps about the person (#134),
-# which is never general knowledge: "what can you do?", "what did you just do?".
+# which is never general knowledge: "what can you do?", "what did you just do?",
+# and since #158 "what did you just say?" and "which apps are you connected to?".
 _ABOUT_YOU = re.compile(
     r"^\W*(?:(?:so|and|hey|ok|okay)[\s,]+)?(?:what|which)\s+(?:else\s+)?(?:"
     r"can\s+you\s+(?:do|help)|are\s+you\s+(?:doing|working|up\s+to)|"
-    r"did\s+you\s+(?:just\s+)?do|have\s+you\s+(?:just\s+)?done)\b",
+    r"did\s+you\s+(?:just\s+)?(?:do|say|said)|have\s+you\s+(?:just\s+)?(?:done|said)|"
+    r"apps?\s+(?:are\s+you\s+connected\s+to|can\s+you\s+reach|"
+    r"do\s+you\s+have(?:\s+access\s+to)?))\b",
     re.IGNORECASE,
 )
 _ABOUT_ME = re.compile(

@@ -391,6 +391,67 @@ def test_rows_from_before_75_still_read(db_session: Session) -> None:
     assert ledger.paused_plan(db_session, conversation.id) is None
 
 
+# --- the self-report says what conductor last said (#158) ---------------------------------
+
+
+def _said(
+    db: Session, conversation: Conversation, words: str, reply: str | None, *, hidden: bool = False
+) -> LedgerTurn:
+    turn = ledger.open_turn(db, conversation, _user(db, conversation, words), hidden=hidden)
+    assert turn is not None
+    message = ConversationMessage(
+        conversation_id=conversation.id, role=ConversationRole.assistant, content=reply
+    )
+    db.add(message)
+    db.flush()
+    ledger.close_turn(db, turn, _run(), message)
+    db.commit()
+    return turn
+
+
+def test_the_self_report_carries_the_last_reply_only(db_session: Session) -> None:
+    conversation = _conversation(db_session)
+    _said(db_session, conversation, "add milk", "Added “milk” to your tasks.")
+    _said(db_session, conversation, "thanks!", "Any time.")
+    report = ledger.self_report(db_session, conversation.id)
+    assert '- you said: "Any time."' in report
+    assert "Added" not in report  # an older reply isn't "what you just said"
+    assert report.index('You were asked: "thanks!"') < report.index("you said")
+
+
+def test_the_last_reply_is_clipped(db_session: Session) -> None:
+    conversation = _conversation(db_session)
+    _said(db_session, conversation, "tell me a story", "word " * 200)
+    line = next(
+        line
+        for line in ledger.self_report(db_session, conversation.id).splitlines()
+        if "you said" in line
+    )
+    assert line.endswith('…"') and len(line) < 400
+
+
+def test_no_reply_line_without_a_reply(db_session: Session) -> None:
+    conversation = _conversation(db_session)
+    _said(db_session, conversation, "add milk", None)
+    assert "you said" not in ledger.self_report(db_session, conversation.id)
+
+
+def test_an_incognito_or_forgotten_last_reply_is_never_reported(db_session: Session) -> None:
+    conversation = _conversation(db_session)
+    _said(db_session, conversation, "add milk", "Added “milk”.")
+    _said(db_session, conversation, "secret", "Your secret reply.", hidden=True)
+    report = ledger.self_report(db_session, conversation.id)
+    # Not the incognito reply, and no older one passed off as the last.
+    assert "secret" not in report and "you said" not in report
+    assert "An incognito turn" in report
+    forgotten = _said(db_session, conversation, "my code is 1234", "Noted: 1234.")
+    forgotten.forgotten_at = forgotten.ended_at
+    db_session.commit()
+    report = ledger.self_report(db_session, conversation.id)
+    assert "1234" not in report and "you said" not in report
+    assert "asked you to forget" in report
+
+
 # --- the state block reads the ledger ------------------------------------------------------
 
 

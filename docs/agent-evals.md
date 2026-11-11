@@ -1292,6 +1292,71 @@ GPU hold:
   The rule was at least as good in every group, so the line stays as
   shipped. #134 also found the line fragile.
 
+### Questions about conductor itself (#158, #140's guard; 2026-11-10)
+
+The planner prompt, step kinds and compiler are unchanged. `plan.about_you`'s
+nudge (a `knowledge` answer sent back once) now also catches "what did you
+(just) say" and "which/what apps are you connected to / can you reach / do
+you have (access to)". The speaker's facts carry conductor's last reply
+(`ledger.self_report`: the newest turn's only, clipped, never an incognito or
+forgotten one), and its about-you wording says "just did or said".
+
+New plan cases: `self-said-just-now` ("what did you say just now?", after an
+exchange) and `self-apps-reach` ("what apps can you reach from here?") in
+`self`; and four empty-state `control` cases kept from #140's narrowed-schema
+attempt, which was not shipped (`yes-nothing-waiting`,
+`cancel-nothing-running`, `amend-nothing-waiting`, `undo-nothing-done`; a
+control step, chat or self all count, since none acts).
+
+Plan evals at n=20 on gemma-4-12b, back to back with the same cases: main's
+code (`8bf298a`) and this change.
+
+| group | floor | main | first-try | this change | first-try |
+|---|---|---|---|---|---|
+| golden | 0.8 | 392/420 | 384/420 | 395/420 | 386/420 |
+| cross | 0.8 | 139/140 | 122/140 | 139/140 | 126/140 |
+| ref | 0.85 | 74/80 | 74/80 | 79/80 | 79/80 |
+| control (9 cases) | 0.8 | 155/180 | 133/180 | 150/180 | 130/180 |
+| memory | 0.8 | 139/140 | 120/140 | 140/140 | 118/140 |
+| knowledge | 0.65 | 59/60 | 59/60 | 60/60 | 60/60 |
+| hard | 0.5 | 19/20 | 19/20 | 19/20 | 19/20 |
+| self (5 cases) | 0.55 | 71/100 | 43/100 | **99/100** | 43/100 |
+| mixed | 0.85 | 191/200 | 171/200 | 182/200 | 162/200 |
+| long | 0.7 | 152/160 | 143/160 | 150/160 | 144/160 |
+| stale | 0.8 | 80/80 | 60/80 | 80/80 | 60/80 |
+
+- `self-said-just-now` went from 8/20 to 20/20 and `self-apps-reach` from
+  4/20 to 20/20; on main every miss but one was `knowledge`. The first-try
+  rate is unchanged (7/20 and 2/20): the planner still files them as
+  knowledge, and the nudge's one repair turns them into `self`.
+- `control`: the existing five cases were 80/100 on both (`amend-job` 0/20,
+  as before). The empty-state cases were 75/80 on main and 70/80 here.
+  `amend-nothing-waiting` read 17/20 and then 13/20; its misses are asks to
+  tasks, knowledge, one decline and one cancel. The nudge can't match those
+  words, so its compile path didn't change. `yes-nothing-waiting` is never
+  right on the first try: the validator refuses a confirm with nothing
+  waiting, and the repair answers chat or self.
+- `mixed` fell by 9, all of it `ho-amend` ("make it the first twenty
+  instead", 11/20 and then 3/20, its misses the usual ask to music). It
+  doesn't match the nudge either, and it read 7/20 and 10/20 in earlier
+  runs. No group is Wilson-significantly below main (#150's rule).
+
+Session evals, gate tier at 5 and frontier at 5, this change:
+
+| scenario | result |
+|---|---|
+| S1, S1v, S2, S2r, S4, S5, S8, S9, S16, M2, M3, T1, T2 | 5/5 each |
+| S7, M1 | 4/5 each |
+| **S6** | **2/5**, then 19/20; main's code 17/20 in the same window |
+
+- S6's misses are turn 2's ask to music without the song ("Odessa is in
+  None"), compiled with no repair. Nothing this change touches runs on that
+  path, and at 20 runs each it reads 19/20 here against 17/20 on main.
+- Frontier: S3, S10, S11 and S12 5/5, S14 4/5, S15 3/5 (the known "Suddenly
+  never queued" misses), S13 0/5 (the brief, as before).
+- Claims were 116/116 backed. One infra miss (a llama-swap timeout) was
+  re-taken and not scored.
+
 ## Fleet smoke (#143)
 
 `backend/tests/test_fleet_smoke.py`: S2, S3, S9 and S15 through conductor
