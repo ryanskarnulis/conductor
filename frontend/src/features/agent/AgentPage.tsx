@@ -11,6 +11,10 @@ import {
   QuestionCard,
   Receipts,
   ResumedNote,
+  ThreadHead,
+  ThreadNote,
+  ThreadStart,
+  ThreadTabs,
   Utterance,
 } from '../../design/components'
 import { earcons, setSound, soundOn } from '../../design/earcons'
@@ -31,6 +35,7 @@ import { dayLabel, daySeparators, incognitoLapsed, surfaceLabel, withLiveWords }
 import type { TurnStream } from './turnStream'
 import { buildTurns, pendingConfirm, presenceFor, type ShellTurn } from './turnView'
 import { useConversation } from './useConversation'
+import { carryChips, useThreads } from './useThreads'
 import { useTurnActivity } from './useTurnActivity'
 import { delegateAckText } from './voiceAck'
 
@@ -193,7 +198,14 @@ function useTimeline(): { timeline: Timeline | null; error: string | null } {
 
 export function AgentPage() {
   const { timeline, error: timelineError } = useTimeline()
-  const activeId = timeline?.id ?? null
+  // Side threads (#139): the page shows one conversation at a time, the
+  // timeline or a thread; each keeps its own turns, stream and jobs.
+  const threads = useThreads(timeline !== null)
+  const thread = threads.current
+  const threadClosed = thread !== null && thread.closed_at !== null
+  const activeId = thread?.id ?? timeline?.id ?? null
+  const [startOpen, setStartOpen] = useState(false)
+  const [threadName, setThreadName] = useState('')
 
   const { detail, loading, error, pendingText, handoff, send, liveWords, note, refresh: refreshThread } = useConversation(activeId)
 
@@ -241,8 +253,9 @@ export function AgentPage() {
   const items = useMemo(() => groupJobNotes(turns), [turns])
   const separators = useMemo(() => daySeparators(items.map((item) => (item.kind === 'notes' ? item.turns[0]?.at : item.turn.when))), [items])
   const confirm = sending ? null : pendingConfirm(messages)
-  // A job's note lands in the thread but is never the turn the page is about.
-  const latestAt = turns.findLastIndex((turn) => !turn.jobNote)
+  // A job's note or a side thread's result lands in the conversation but is
+  // never the turn the page is about.
+  const latestAt = turns.findLastIndex((turn) => !turn.jobNote && !turn.threadNote)
   const latest = latestAt >= 0 ? turns[latestAt] : null
   const pause = !sending && latest ? latest.pause : null
   const presence = presenceFor(sending, activity, confirm !== null || pause !== null)
@@ -381,6 +394,12 @@ export function AgentPage() {
   const stopTurn = () => {
     if (activeId !== null) void cancelTurn(activeId)
   }
+  const beginThread = async () => {
+    if (await threads.start(incognito ? null : threadName.trim() || null, incognito)) {
+      setStartOpen(false)
+      setThreadName('')
+    }
+  }
   const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
@@ -397,6 +416,20 @@ export function AgentPage() {
         </span>
         <Presence state={presence.state} label={presence.label} live />
         <span className="shell-bar-spacer" />
+        <button
+          type="button"
+          className="shell-iconbtn"
+          aria-expanded={startOpen}
+          aria-controls="shell-thread-start"
+          disabled={timeline === null || sending}
+          onClick={() => {
+            setSearchOpen(false)
+            setMemoryOpen(false)
+            setStartOpen((open) => !open)
+          }}
+        >
+          Side thread
+        </button>
         <button
           type="button"
           className="shell-iconbtn"
@@ -452,13 +485,49 @@ export function AgentPage() {
             </div>
           ) : (
             <>
-              <div className="shell-convo" aria-label="Timeline">
+              {(threads.open.length > 0 || thread !== null) && (
+                <ThreadTabs
+                  threads={threads.open.map((t) => ({ id: t.id, title: t.title ?? 'Side thread' }))}
+                  active={thread !== null && !threadClosed ? thread.id : null}
+                  onSelect={threads.select}
+                  disabled={sending || threads.closing}
+                />
+              )}
+              <div className="shell-convo" aria-label={thread ? `Side thread: ${thread.title ?? 'Side thread'}` : 'Timeline'}>
+                {startOpen && (
+                  <div id="shell-thread-start">
+                    <ThreadStart
+                      name={threadName}
+                      incognito={incognito}
+                      busy={threads.starting}
+                      error={threads.error}
+                      onName={setThreadName}
+                      onStart={() => void beginThread()}
+                      onCancel={() => setStartOpen(false)}
+                    />
+                  </div>
+                )}
+                {!startOpen && threads.error && (
+                  <p role="alert" className="error">
+                    {threads.error}
+                  </p>
+                )}
+                {thread && (
+                  <ThreadHead
+                    title={thread.title ?? 'Side thread'}
+                    carries={carryChips(thread)}
+                    result={thread.closed_at !== null ? thread.result : null}
+                    closing={threads.closing}
+                    onDone={sending ? undefined : () => void threads.close()}
+                    onBack={() => threads.select(null)}
+                  />
+                )}
                 {error && (
                   <p role="alert" className="error">
                     {error}
                   </p>
                 )}
-                {loading && <div className="page-loading">Loading the timeline…</div>}
+                {loading && <div className="page-loading">{thread ? 'Loading the side thread…' : 'Loading the timeline…'}</div>}
                 {items.map((item, index) => {
                   const day = separators.get(index)
                   return (
@@ -470,6 +539,12 @@ export function AgentPage() {
                       )}
                       {item.kind === 'notes' ? (
                         <JobNotes turns={item.turns} />
+                      ) : item.turn.threadNote ? (
+                        <ThreadNote
+                          title={item.turn.threadNote.title ?? 'Side thread'}
+                          text={item.turn.reply ?? ''}
+                          onOpen={item.turn.threadNote.id > 0 ? () => void threads.view(item.turn.threadNote?.id ?? 0) : undefined}
+                        />
                       ) : (
                         <TurnView
                           turn={item.turn}
@@ -501,7 +576,11 @@ export function AgentPage() {
                   </p>
                 )}
                 {!loading && messages.length === 0 && !sending && (
-                  <p className="agent-thread-hint">What should the house do? Conductor will route it to the right app.</p>
+                  <p className="agent-thread-hint">
+                    {thread
+                      ? 'A side thread starts with only what it carries. Ask something below; it stays in here until you close it.'
+                      : 'What should the house do? Conductor will route it to the right app.'}
+                  </p>
                 )}
                 {sortTurnId !== null && panelHiddenFor === sortTurnId && (
                   <button type="button" className="sort-reopen" onClick={() => setPanelHiddenFor(null)}>
@@ -519,52 +598,64 @@ export function AgentPage() {
                 <div ref={convoEndRef} className="agent-thread-sentinel" aria-hidden="true" />
               </div>
 
-              {incognito && (
+              {incognito && !threadClosed && (
                 <p className="tl-incognito-note" role="status">
                   {timeline?.incognito_notice}
                 </p>
               )}
-              <form className="agent-composer" onSubmit={(e) => void submit(e)}>
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={onComposerKeyDown}
-                  placeholder={sending ? 'Conductor is working…' : incognito ? 'Ask conductor, incognito…' : 'Ask conductor…'}
-                  aria-label="Message conductor"
-                  rows={1}
-                  disabled={sending}
-                />
-                <MicButton onTranscript={onTranscript} disabled={sending} />
-                <button
-                  type="button"
-                  className="agent-voice-toggle tl-incognito"
-                  onClick={toggleIncognito}
-                  aria-pressed={incognito}
-                  aria-label="Incognito"
-                  title={incognito ? 'Incognito on: this turn’s words won’t be kept' : 'Incognito: don’t keep this turn’s words'}
-                >
-                  <EyeOff size={17} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  className="agent-voice-toggle"
-                  onClick={toggleVoiceOutput}
-                  aria-pressed={voiceOutput}
-                  aria-label={voiceOutput ? 'Mute spoken replies' : 'Unmute spoken replies'}
-                  title={voiceOutput ? 'Spoken replies on' : 'Spoken replies off'}
-                >
-                  {voiceOutput ? <Volume2 size={17} aria-hidden="true" /> : <VolumeX size={17} aria-hidden="true" />}
-                </button>
-                {sending ? (
-                  <button type="button" className="agent-stop" onClick={stopTurn} aria-label="Stop">
-                    <Square size={15} aria-hidden="true" />
+              {!threadClosed && (
+                <form className="agent-composer" onSubmit={(e) => void submit(e)}>
+                  <textarea
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={onComposerKeyDown}
+                    placeholder={
+                      sending
+                        ? 'Conductor is working…'
+                        : thread
+                          ? incognito
+                            ? 'Ask in this side thread, incognito…'
+                            : 'Ask in this side thread…'
+                          : incognito
+                            ? 'Ask conductor, incognito…'
+                            : 'Ask conductor…'
+                    }
+                    aria-label="Message conductor"
+                    rows={1}
+                    disabled={sending || threads.closing}
+                  />
+                  <MicButton onTranscript={onTranscript} disabled={sending || threads.closing} />
+                  <button
+                    type="button"
+                    className="agent-voice-toggle tl-incognito"
+                    onClick={toggleIncognito}
+                    aria-pressed={incognito}
+                    aria-label="Incognito"
+                    title={incognito ? 'Incognito on: this turn’s words won’t be kept' : 'Incognito: don’t keep this turn’s words'}
+                  >
+                    <EyeOff size={17} aria-hidden="true" />
                   </button>
-                ) : (
-                  <button type="submit" className="btn--primary agent-send" disabled={draft.trim() === ''} aria-label="Send message">
-                    <SendHorizontal size={17} aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="agent-voice-toggle"
+                    onClick={toggleVoiceOutput}
+                    aria-pressed={voiceOutput}
+                    aria-label={voiceOutput ? 'Mute spoken replies' : 'Unmute spoken replies'}
+                    title={voiceOutput ? 'Spoken replies on' : 'Spoken replies off'}
+                  >
+                    {voiceOutput ? <Volume2 size={17} aria-hidden="true" /> : <VolumeX size={17} aria-hidden="true" />}
                   </button>
-                )}
-              </form>
+                  {sending ? (
+                    <button type="button" className="agent-stop" onClick={stopTurn} aria-label="Stop">
+                      <Square size={15} aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <button type="submit" className="btn--primary agent-send" disabled={draft.trim() === ''} aria-label="Send message">
+                      <SendHorizontal size={17} aria-hidden="true" />
+                    </button>
+                  )}
+                </form>
+              )}
             </>
           )}
         </section>

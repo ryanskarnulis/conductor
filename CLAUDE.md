@@ -122,6 +122,19 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   search skip it; no fact is saved or attached; the trace and the capture
   write nothing, and log lines blank wordy fields. Only the live response
   carries the reply. The page turns it off after the same quiet gap.
+- **Side threads** (#139, `app/services/threads.py`, `app/ai/thread_note.py`):
+  a page control starts one (no step kind, no planner change): a
+  conversation with `kind = thread`, read whole, with its own apps' threads
+  and live channel; several may be open, one on the page. It `carries` the
+  timeline window's entities and saved facts as quoted data, never turns;
+  incognito and forgotten turns lend nothing, and every read re-checks. Its
+  State lists its own entities, then what it carries. Closing posts one
+  `thread_note` to the timeline, narrated from its receipts with code checks
+  (titles, counts), never from an incognito or forgotten turn, an undone
+  write or the memory app; like a job's note it lapses no question. Its
+  `thread` ledger turn copies the receipts without undo handles, so the
+  timeline's State sees what it touched. A closed thread takes no turns; its
+  jobs note into the timeline.
 - **Delegate v1.1** (#67): each `ask` mints one `Idempotency-Key`; only a
   connection dropped after send is resent, under that key. The app's typed
   record is stored per call (`app_record`, never sent to the model), and a 5xx

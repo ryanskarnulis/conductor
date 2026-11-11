@@ -98,6 +98,14 @@ class Driver(Protocol):
         """Background work gets its turn now: running jobs are read and a
         ``think`` runs to its end (#78)."""
 
+    def open_thread(self, title: str | None) -> dict[str, Any]:
+        """The person starts a side thread from the page (#139, the
+        ``"threads"`` capability): what it carries; turns go to it now."""
+
+    def close_thread(self) -> ThreadResult:
+        """The person closes the open side thread: its result note, and the
+        timeline as it reads after; turns go to the timeline again."""
+
     def supports(self, capability: str) -> bool: ...
 
 
@@ -158,7 +166,45 @@ class StopAfter:
     label: str | None = None
 
 
-Step = Say | ConfirmIfAsked | NewConversation | Advance | Settle | StopAfter | Search
+@dataclass(frozen=True)
+class OpenThread:
+    """The person starts a side thread from the page (#139); the ``Say``
+    steps after it go to the thread until a ``CloseThread``."""
+
+    title: str | None = None
+    label: str = "thread"
+
+
+@dataclass(frozen=True)
+class CloseThread:
+    """The person closes the side thread; its result note is kept on the
+    session under ``label``, and its write claims are held to the receipts."""
+
+    label: str = "thread"
+
+
+@dataclass
+class ThreadResult:
+    """A side thread's close: the note it posted and the timeline after."""
+
+    note: dict[str, Any]
+    timeline: list[dict[str, Any]] = field(default_factory=list)
+    carries: list[dict[str, Any]] = field(default_factory=list)
+    # The turn indexes said inside the thread.
+    turns: list[int] = field(default_factory=list)
+
+
+Step = (
+    Say
+    | ConfirmIfAsked
+    | NewConversation
+    | Advance
+    | Settle
+    | StopAfter
+    | Search
+    | OpenThread
+    | CloseThread
+)
 
 
 # --- the session a check reads ------------------------------------------------------
@@ -172,6 +218,8 @@ class Session:
     claims: list[tuple[int, Claim]] = field(default_factory=list)
     # What each ``Search`` step found, by its label.
     searches: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # Side threads (#139): what each carried in, and its close, by label.
+    threads: dict[str, ThreadResult] = field(default_factory=dict)
 
     def turn(self, label: str) -> TurnRecord:
         for record in self.turns:
@@ -355,6 +403,30 @@ def _run_step(step: Step, driver: Driver, session: Session) -> TurnRecord | None
     if isinstance(step, Search):
         session.searches[step.label] = driver.search(step.query)
         return None
+    if isinstance(step, OpenThread):
+        if not driver.supports("threads"):
+            raise Unsupported("threads")
+        opened = driver.open_thread(step.title)
+        session.threads[step.label] = ThreadResult(
+            note={}, carries=list(opened.get("carries") or []), turns=[len(session.turns) + 1]
+        )
+        return None
+    if isinstance(step, CloseThread):
+        kept = session.threads.get(step.label)
+        closed = driver.close_thread()
+        if kept is not None:
+            closed.carries = kept.carries
+            closed.turns = list(range(kept.turns[0], len(session.turns) + 1))
+        session.threads[step.label] = closed
+        # The note speaks for the whole thread: its claims are held to every
+        # receipt so far, like a reply's.
+        session.claims.extend(
+            (len(session.turns), claim)
+            for claim in read_claims(
+                closed.note.get("content"), world.receipts, turn=len(session.turns)
+            )
+        )
+        return None
     if isinstance(step, ConfirmIfAsked):
         last = session.last
         if session.writes(last) or not (last.reply and "?" in last.reply):
@@ -481,6 +553,7 @@ class LoopDriver:
         self._settle = settle
         self._pass_time = pass_time
         self._conversation: int | None = None
+        self._timeline: int | None = None
         self._seen: int = 0
         # The OpenAPI paths, not ``app.routes``: included routers nest there.
         routes = set(client.app.openapi()["paths"])
@@ -489,6 +562,8 @@ class LoopDriver:
     def supports(self, capability: str) -> bool:
         if capability == "stop":
             return self._cancel_path is not None
+        if capability == "threads":
+            return "/api/agent/threads" in self._client.app.openapi()["paths"]
         if capability.startswith("tool:"):
             return capability.removeprefix("tool:") in self._tool_names()
         return False
@@ -498,7 +573,7 @@ class LoopDriver:
         self._holder.bind(world)
         timeline = self._client.get("/api/agent/timeline")
         assert timeline.status_code == 200, timeline.text
-        self._conversation = timeline.json()["id"]
+        self._conversation = self._timeline = timeline.json()["id"]
         self._seen = 0
 
     def new_conversation(self) -> None:
@@ -549,6 +624,28 @@ class LoopDriver:
 
     def settle(self) -> None:
         self._settle()
+
+    def open_thread(self, title: str | None) -> dict[str, Any]:
+        self._reset()
+        body = {"title": title} if title else {}
+        started = self._client.post("/api/agent/threads", json=body)
+        assert started.status_code == 201, started.text
+        thread = dict(started.json())
+        self._conversation = int(thread["id"])
+        return thread
+
+    def close_thread(self) -> ThreadResult:
+        assert self._conversation is not None and self._conversation != self._timeline
+        self._reset()
+        closed = self._client.post(f"/api/agent/threads/{self._conversation}/close", json={})
+        assert closed.status_code == 200, closed.text
+        note = dict(closed.json()["message"])
+        self._conversation = self._timeline
+        # The note isn't something the person waited on: never "unprompted".
+        self._seen = max(self._seen, int(note["id"]))
+        timeline = self._client.get(f"/api/agent/conversations/{self._timeline}")
+        assert timeline.status_code == 200, timeline.text
+        return ThreadResult(note=note, timeline=list(timeline.json()["messages"]))
 
     def stop(self) -> None:
         assert self._cancel_path is not None and self._conversation is not None

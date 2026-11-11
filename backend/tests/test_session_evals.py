@@ -41,9 +41,9 @@ from sqlalchemy.orm import sessionmaker
 import app.main as main_module
 from app.ai import interpreter as interpreter_module
 from app.ai.interpreter import Interpreter, conductor_from_settings
-from app.ai.provider import ChatProvider, ProviderRequestError
+from app.ai.provider import ChatProvider, ChatResult, ProviderRequestError
 from app.ai.providers.llamacpp import provider_from_settings
-from app.api import rate_limit, routes_agent
+from app.api import rate_limit, routes_agent, routes_threads
 from app.config import get_settings
 from app.db.session import get_db
 from app.fleet.thread_store import DbThreadStore
@@ -87,6 +87,8 @@ from tests.session_scenarios import (
     S15,
     S16,
     SCENARIOS,
+    THREAD_FLOWS_BACK,
+    THREAD_KEEPS_INCOGNITO,
     TIMELINE_RECALL,
     YES,
     answer,
@@ -193,6 +195,12 @@ class _ScriptedRun:
         app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
             self.provider, app.state.fleet, narrate=True
         )
+
+        # A side thread's result (#139) is narrated by the same scripted model.
+        def thread_chat(messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
+            return self.provider.chat(messages, max_tokens=max_tokens)
+
+        app.dependency_overrides[routes_threads.get_thread_chat] = lambda: thread_chat
         self.driver = LoopDriver(
             client,
             holder,
@@ -334,6 +342,35 @@ def test_a_t2_plan_carrying_the_incognito_words_fails(scripted: _ScriptedRun) ->
         text_turn("I have no record of the gate code."),
     ]
     _fails(scripted.run(INCOGNITO, script), "carried the incognito words")
+
+
+def test_compiled_th1_carries_the_task_in_and_the_thread_sees_it(scripted: _ScriptedRun) -> None:
+    sample = scripted.run(THREAD_FLOWS_BACK)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    planner = [r for r in scripted.provider.requests if _is_planner(r)]
+    inside = str(planner[-1]["messages"][1]["content"])
+    # In the thread: the carried task in State, none of the timeline's turns.
+    assert "measure the garage wall" in inside.split("[End of state]")[0]
+    assert "The last exchange" not in inside
+
+
+def test_a_th1_result_without_the_thread_write_is_completed_by_code(
+    scripted: _ScriptedRun,
+) -> None:
+    assert THREAD_FLOWS_BACK.script is not None
+    script = THREAD_FLOWS_BACK.script(World())
+    script[-1] = text_turn("All done in there.")
+    sample = scripted.run(THREAD_FLOWS_BACK, script)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    note = sample.session.threads["garage"].note["content"]
+    assert "Garage shelves" in note and "order the shelf brackets" in note
+
+
+def test_a_th2_result_carrying_the_incognito_write_fails(scripted: _ScriptedRun) -> None:
+    assert THREAD_KEEPS_INCOGNITO.script is not None
+    script = THREAD_KEEPS_INCOGNITO.script(World())
+    script[-1] = text_turn("Side thread “Party”: added “buy candles” and wrapped the gift.")
+    _fails(scripted.run(THREAD_KEEPS_INCOGNITO, script), "incognito turn's")
 
 
 def test_compiled_s11_says_what_cant_be_undone_when_the_narrator_doesnt(

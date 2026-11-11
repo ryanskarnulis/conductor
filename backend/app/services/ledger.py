@@ -58,6 +58,7 @@ from app.ai.plan import Ledgered, PausedPlan, RunningJob, Touched, TurnPlan, Und
 from app.ai.state_block import Entity
 from app.db.models import (
     Conversation,
+    ConversationKind,
     ConversationMessage,
     ConversationRole,
     LedgerEntity,
@@ -239,6 +240,8 @@ def paused_plan(
     )
     last: LedgerTurn | None = None
     for turn in turns:
+        if turn.kind == THREAD_TURN:
+            continue  # a side thread's result (#139) is a note, not an exchange
         if turn.kind != JOB_TURN:
             last = turn
             break
@@ -1030,6 +1033,7 @@ def watched_jobs(db: Session) -> list[WatchedJob]:
         .where(LedgerJob.noted_at.is_(None))
         .order_by(LedgerJob.id)
     ).all()
+    lands = _note_landings(db, {turn.conversation_id for _, turn in rows if turn is not None})
     return [
         WatchedJob(
             id=job.id,
@@ -1042,7 +1046,7 @@ def watched_jobs(db: Session) -> list[WatchedJob]:
             untrusted=job.untrusted,
             created_at=_aware(job.created_at),
             polled_at=_aware(job.polled_at) if job.polled_at else None,
-            conversation_id=turn.conversation_id if turn is not None else None,
+            conversation_id=lands.get(turn.conversation_id) if turn is not None else None,
             surface=turn.surface if turn is not None else None,
             asked=turn.words if turn is not None else "",
         )
@@ -1108,7 +1112,9 @@ def note_job(
         row.polled_at = now
     started = db.get(LedgerStep, row.started_by_step_id) if row.started_by_step_id else None
     turn = started.plan.turn if started is not None else None
-    conversation = db.get(Conversation, turn.conversation_id) if turn is not None else None
+    lands = _note_landings(db, {turn.conversation_id} if turn is not None else set())
+    landing = lands.get(turn.conversation_id) if turn is not None else None
+    conversation = db.get(Conversation, landing) if landing is not None else None
     if conversation is None or conversation.deleted_at is not None:
         db.flush()
         logger.info("job_note_skipped", job_id=job_id, why="no live conversation")
@@ -1185,6 +1191,41 @@ def note_job(
         message_id=message.id,
     )
     return message.id
+
+
+def _note_landings(db: Session, conversation_ids: set[int]) -> dict[int, int]:
+    """Where each conversation's notes land: itself, or the timeline for a
+    side thread that has closed (#139), since nobody reads a closed thread."""
+    if not conversation_ids:
+        return {}
+    closed = set(
+        db.execute(
+            select(Conversation.id).where(
+                Conversation.id.in_(conversation_ids),
+                Conversation.kind == ConversationKind.thread.value,
+                Conversation.closed_at.is_not(None),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    timeline = (
+        db.execute(
+            select(Conversation.id)
+            .where(
+                Conversation.kind == ConversationKind.timeline.value,
+                Conversation.deleted_at.is_(None),
+            )
+            .order_by(Conversation.id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if closed
+        else None
+    )
+    return {
+        found: timeline if found in closed and timeline is not None else found
+        for found in conversation_ids
+    }
 
 
 _ENDED_WORDS = {
@@ -1364,7 +1405,9 @@ def note_think(
     row.status, row.polled_at = _THINK_STATUS[how], now
     started = db.get(LedgerStep, row.started_by_step_id) if row.started_by_step_id else None
     turn = started.plan.turn if started is not None else None
-    conversation = db.get(Conversation, turn.conversation_id) if turn is not None else None
+    lands = _note_landings(db, {turn.conversation_id} if turn is not None else set())
+    landing = lands.get(turn.conversation_id) if turn is not None else None
+    conversation = db.get(Conversation, landing) if landing is not None else None
     if conversation is None or conversation.deleted_at is not None:
         db.flush()
         logger.info("think_note_skipped", job_id=job_id, why="no live conversation")
@@ -1423,3 +1466,92 @@ def note_think(
     db.flush()
     logger.info("think_noted", job_id=job_id, ref=row.ref, how=how, message_id=message.id)
     return message.id
+
+
+# --- side threads (#139) --------------------------------------------------------------------
+#
+# Closing a side thread posts its one result note into the timeline: the
+# message, and a ``thread`` turn whose step carries copies of the receipts the
+# result was built from (``source = "thread"``, no undo handle: an undo stays
+# the thread's), so what the thread touched is among the timeline's recent
+# entities. Like a job's note, it is not an exchange: it never lapses a
+# waiting question (:func:`paused_plan` passes over it).
+
+THREAD_TURN = "thread"
+THREAD_STEP = "thread"
+THREAD_SOURCE = "thread"
+
+
+def note_thread(
+    db: Session,
+    timeline: Conversation,
+    thread: Conversation,
+    text: str,
+    receipts: Sequence[LedgerReceipt],
+    *,
+    stop_reason: str,
+    now: datetime,
+) -> ConversationMessage:
+    """Post a closed thread's result into ``timeline`` and journal its turn;
+    the caller has claimed the close and commits."""
+    message = ConversationMessage(
+        conversation_id=timeline.id,
+        role=ConversationRole.assistant,
+        content=text,
+        stop_reason=stop_reason,
+    )
+    timeline.updated_at = now
+    db.add(message)
+    db.flush()
+    turn = LedgerTurn(
+        conversation_id=timeline.id,
+        assistant_message_id=message.id,
+        kind=THREAD_TURN,
+        words=thread.title or "",
+        status="ended",
+        stop_reason="closed",
+        ended_at=now,
+    )
+    db.add(turn)
+    db.flush()
+    plan = LedgerPlan(turn_id=turn.id, source=THREAD_TURN, status="ran")
+    db.add(plan)
+    db.flush()
+    step = LedgerStep(
+        plan_id=plan.id,
+        seq=1,
+        kind=THREAD_STEP,
+        tool=THREAD_STEP,
+        arguments={"thread_id": thread.id},
+        outcome="done",
+        result=text,
+    )
+    db.add(step)
+    db.flush()
+    for seq, receipt in enumerate(receipts, start=1):
+        copy = LedgerReceipt(
+            step_id=step.id,
+            seq=seq,
+            source=THREAD_SOURCE,
+            app=receipt.app,
+            tool=receipt.tool,
+            outcome=receipt.outcome,
+            count=receipt.count,
+            reason=receipt.reason,
+            untrusted=receipt.untrusted,
+        )
+        db.add(copy)
+        db.flush()
+        for touch in receipt.touched:
+            db.add(
+                LedgerTouch(
+                    receipt_id=copy.id,
+                    entity_id=touch.entity_id,
+                    title=touch.title,
+                    untrusted=touch.untrusted,
+                )
+            )
+    db.flush()
+    _safely(db, "ledger_memory_index_failed", lambda: memory_index.index_pending(db))
+    logger.info("thread_noted", thread_id=thread.id, message_id=message.id, receipts=len(receipts))
+    return message

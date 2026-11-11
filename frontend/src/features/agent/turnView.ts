@@ -13,7 +13,7 @@ import type {
 import { activityLabel, appFromTool, lookedAtFromTool, openedAppFromTool } from './delegateCalls'
 import { answerValue, fillParts, valueFromRecord, type RefValue } from './planRefs'
 import { queuedPlanSteps, type TurnStream } from './turnStream'
-import { JOB_NOTE } from '../../types/agent'
+import { JOB_NOTE, THREAD_NOTE } from '../../types/agent'
 
 /** The shell's view of a conversation, derived from today's persisted turns
  * (messages, their delegate calls and the apps' typed records) plus the live
@@ -61,6 +61,9 @@ export interface ShellTurn {
   surface?: string | null
   /** Incognito (#82): its words and reply were never written. */
   incognito?: boolean
+  /** The reply is a side thread's result (#139), posted when it closed: the
+   * thread it came from. Like a job's note, it answers nothing. */
+  threadNote?: { id: number; title: string | null } | null
 }
 
 export interface PendingConfirmView {
@@ -284,11 +287,17 @@ export function streamReceipts(stream: TurnStream): ShellTurn['receipts'] {
   })
 }
 
-/** The newest message that is part of the conversation itself: a background
- * job's note (#76) is neither said nor answered, so it never takes the place
- * of the last turn (it doesn't void a waiting question on the server either). */
+/** A background job's note (#76) or a side thread's result (#139): posted
+ * into the conversation, but neither said nor answered. */
+export function isNote(message: AgentMessage): boolean {
+  return message.stop_reason === JOB_NOTE || message.stop_reason === THREAD_NOTE
+}
+
+/** The newest message that is part of the conversation itself: a note is
+ * neither said nor answered, so it never takes the place of the last turn
+ * (it doesn't void a waiting question on the server either). */
 export function lastExchange(messages: AgentMessage[]): AgentMessage | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) if (messages[i].stop_reason !== JOB_NOTE) return messages[i]
+  for (let i = messages.length - 1; i >= 0; i--) if (!isNote(messages[i])) return messages[i]
   return undefined
 }
 
@@ -328,8 +337,9 @@ export function buildTurns(
     // mid-thread) still shows, as a turn with nothing said.
     const orphan = m.role === 'assistant'
     const next = orphan ? m : messages[i + 1]
-    // A job's note (#76) answers nothing: it is never the reply to what you said.
-    const reply = next && next.role === 'assistant' && (orphan || next.stop_reason !== JOB_NOTE) ? next : null
+    // A job's note (#76) or a thread's result (#139) answers nothing: it is
+    // never the reply to what you said.
+    const reply = next && next.role === 'assistant' && (orphan || !isNote(next)) ? next : null
     const isLast = reply !== null && reply === lastExchange(messages)
     const calls = reply?.tool_calls ?? []
     // The turn that ended on a pause keeps the plan the stream drew, so the
@@ -358,13 +368,14 @@ export function buildTurns(
         return (call.app_record ?? []).map((entry) => receiptFrom(entry, app)).filter((r): r is NonNullable<typeof r> => r !== null)
       }),
       reply: reply?.content ?? null,
-      stopReason: reply?.stop_reason === JOB_NOTE ? null : (reply?.stop_reason ?? null),
+      stopReason: reply && isNote(reply) ? null : ((reply?.stop_reason as AgentStopReason | null | undefined) ?? null),
       live: false,
       jobNote: reply?.stop_reason === JOB_NOTE,
       at: reply?.stop_reason === JOB_NOTE ? reply.created_at : null,
       when: m.created_at,
       surface: m.surface ?? null,
       incognito: m.incognito === true,
+      threadNote: reply?.stop_reason === THREAD_NOTE ? (reply.thread ?? { id: 0, title: null }) : null,
     })
     if (reply && !orphan) i++
   }

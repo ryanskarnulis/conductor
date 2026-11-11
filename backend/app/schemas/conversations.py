@@ -64,6 +64,13 @@ class ToolCallRead(BaseModel):
     app_confirm: dict[str, Any] | None = None
 
 
+class NoteThreadRead(BaseModel):
+    """The side thread a timeline note came from (#139)."""
+
+    id: int
+    title: str | None
+
+
 class MessageRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -78,6 +85,8 @@ class MessageRead(BaseModel):
     # whether it was incognito (its words and reply were never written).
     surface: str | None = None
     incognito: bool = False
+    # A side thread's result note (#139): the thread it came from.
+    thread: NoteThreadRead | None = None
 
 
 class ConversationDetail(ConversationRead):
@@ -169,3 +178,52 @@ class TurnActivityRead(BaseModel):
     # A compiled plan's ack (#70): what conductor is about to do, said as soon
     # as the plan is valid ("On it, asking music."). Never a claim of done.
     ack: str | None = None
+
+
+# --- side threads (#139) ------------------------------------------------------------------
+
+
+class ThreadCreate(BaseModel):
+    """Start a side thread from the page: its name, if the person gave one.
+    Incognito keeps no name."""
+
+    title: Annotated[str, StringConstraints(strip_whitespace=True, max_length=60)] | None = None
+    incognito: bool = False
+
+
+class CarryRead(BaseModel):
+    """One thing a side thread carries in, as data: an entity by its title
+    (``untrusted``: outside text, shown quoted), or a saved fact's words."""
+
+    type: Literal["entity", "fact"]
+    app: str | None = None
+    kind: str | None = None
+    title: str | None = None
+    untrusted: bool = False
+    text: str | None = None
+
+
+class ThreadRead(BaseModel):
+    """A side thread: its name, what it carries (as it stands now), and, once
+    closed, when and the result it posted to the timeline."""
+
+    id: int
+    title: str | None
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
+    closed_at: UTCDateTime | None = None
+    result: str | None = None
+    carries: list[CarryRead]
+
+
+class ThreadClose(BaseModel):
+    """Close a side thread: the surface the person closed it from."""
+
+    surface: Literal["desktop", "phone", "voice", "room_speaker"] | None = None
+
+
+class ThreadClosed(BaseModel):
+    """A closed side thread and the result note it posted to the timeline."""
+
+    thread: ThreadRead
+    message: MessageRead

@@ -76,13 +76,17 @@ export type AgentStopReason =
 /** The `stop_reason` of the one note a background job posts when it ends (#76). */
 export const JOB_NOTE = 'job_note'
 
+/** The `stop_reason` of a side thread's result, posted into the timeline when
+ * it closes (#139). Like a job's note, it answers nothing. */
+export const THREAD_NOTE = 'thread_note'
+
 export interface AgentMessage {
   id: number
   conversation_id: number
   role: 'user' | 'assistant'
   content: string | null
   tool_calls: ToolCallRecord[] | null
-  stop_reason: AgentStopReason | typeof JOB_NOTE | null
+  stop_reason: AgentStopReason | typeof JOB_NOTE | typeof THREAD_NOTE | null
   created_at: string
   /** The surface the turn came from (#82): null is the web page, typed. */
   surface?: Surface | null
@@ -90,6 +94,37 @@ export interface AgentMessage {
    * `content` is "(incognito)" — except on the live exchange, which carries
    * what the person reads now. */
   incognito?: boolean
+  /** A side thread's result note (#139): the thread it came from. */
+  thread?: { id: number; title: string | null } | null
+}
+
+/** One thing a side thread carries in (#139), as data: an entity by its
+ * title (outside text when `untrusted`), or a saved fact's words. */
+export interface ThreadCarry {
+  type: 'entity' | 'fact'
+  app?: string | null
+  kind?: string | null
+  title?: string | null
+  untrusted?: boolean
+  text?: string | null
+}
+
+/** A side thread (#139): its own small conversation, started from the page.
+ * Closed, it has posted `result` into the timeline. */
+export interface ThreadInfo {
+  id: number
+  title: string | null
+  created_at: string
+  updated_at: string
+  closed_at: string | null
+  result: string | null
+  carries: ThreadCarry[]
+}
+
+/** What closing a side thread gave back: the thread, and its note in the timeline. */
+export interface ThreadClosed {
+  thread: ThreadInfo
+  message: AgentMessage
 }
 
 /** Where a turn came from (backend `MessageCreate.surface`). */
