@@ -29,6 +29,11 @@ services:
       # (127.0.0.1) is unreachable from inside the container. Same
       # host-gateway mechanism as PCC and chess.
       LLAMACPP_BASE_URL: ${LLAMACPP_BASE_URL:-http://host.docker.internal:8200/v1}
+      # Shared workspace embeddings service (../embeddings/, port 8600) for
+      # recall by meaning (#147). It binds docker0 (172.17.0.1) beside
+      # loopback, so the host-gateway alias reaches it. Optional: down or slow
+      # means word overlap alone. CONDUCTOR_EMBEDDINGS=false switches it off.
+      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL:-http://host.docker.internal:8600/v1}
       # Shared workspace speech service (../speech/, ports 8400/8410), same
       # host-gateway mechanism. Env var names per ../agent-standard/voice.md;
       # unset SPEECH_BASE_URL to run voiceless (/api/voice answers 503).
@@ -37,8 +42,8 @@ services:
       TTS_MODEL: ${TTS_MODEL:-kokoro}
       TTS_VOICE: ${TTS_VOICE:-am_fenrir(2)+am_michael(1)}
     extra_hosts:
-      # Reaches the shared ../llama-swap runtime and the fleet apps on the
-      # host — same mechanism PCC and chess use.
+      # Reaches the shared ../llama-swap runtime, the embeddings service and
+      # the fleet apps on the host — same mechanism PCC and chess use.
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/data              # SQLite file + WAL sidecars persist here

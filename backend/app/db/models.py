@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, UniqueConstraint, func
+from sqlalchemy import JSON, ForeignKey, LargeBinary, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from app import clock
@@ -343,6 +343,20 @@ class LedgerTopic(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     terms: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
     turns: Mapped[int] = mapped_column(default=0)
+
+
+class LedgerTurnVector(Base, TimestampMixin):
+    """A turn's meaning (#147): the embeddings service's vector for the words
+    memory indexed it on, so recall and matches can rank by meaning beside
+    shared words. Built by code once the turn closes; never for an incognito
+    or forgotten turn, and deleted when a turn is forgotten. ``vector`` is
+    little-endian float32; ``model`` is the one the service said made it."""
+
+    __tablename__ = "ledger_turn_vectors"
+
+    turn_id: Mapped[int] = mapped_column(ForeignKey("ledger_turns.id"), primary_key=True)
+    model: Mapped[str]
+    vector: Mapped[bytes] = mapped_column(LargeBinary)
 
 
 class LedgerTouch(Base):
