@@ -493,6 +493,37 @@ CASES: tuple[Case, ...] = (
         (one(M("recall", words=("caribou",))), one(M("ask", "music", ("caribou",)))),
         "memory",
     ),
+    # Recall by meaning (#147): the question in other words than were said
+    # (``tests/recall_cases.py``), and controls about things never said. The
+    # plan is a recall either way; what it cites is code's (meaning or words,
+    # else "nothing on record"), so a control's plan must not answer instead.
+    Case(
+        "memory-paraphrase-carport",
+        "what did we settle on for storing things in the carport?",
+        (one(M("recall", ref_or_words=("carport", "storing", "storage"))),),
+        "memory",
+    ),
+    Case(
+        "memory-paraphrase-tune",
+        "what was that tune I fetched from the Montreal producer?",
+        (
+            one(M("recall", ref_or_words=("tune", "montreal"))),
+            one(M("ask", "music", ("montreal",))),
+        ),
+        "memory",
+    ),
+    Case(
+        "memory-control-treehouse",
+        "what did we decide about the treehouse?",
+        (one(M("recall", words=("treehouse",))),),
+        "memory",
+    ),
+    Case(
+        "memory-control-passport",
+        "when did we talk about renewing my passport?",
+        (one(M("recall", words=("passport",))),),
+        "memory",
+    ),
     # Memory you can see (#81): asks to conductor's own memory app.
     Case(
         "memory-remember",

@@ -4,6 +4,8 @@ import App from './App'
 import { getConversation, getTimeline } from './api/agent'
 
 vi.mock('./api/agent', () => ({
+  // Side threads (#139): none open.
+  listThreads: vi.fn(() => Promise.resolve([])),
   getConversation: vi.fn(),
   getTimeline: vi.fn(),
   getTurnActivity: vi.fn(),

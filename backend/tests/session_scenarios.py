@@ -1,5 +1,5 @@
 """Session scenarios: S1–S16 (#56, ``docs/revamp-research-2026-11.md`` §1.1), M1–M3 (#81, #134),
-T1–T2 and S1v (#82: one timeline, incognito, a voice-tagged S1).
+T1–T2 and S1v (#82: one timeline, incognito, a voice-tagged S1), TH1–TH2 (#139: side threads).
 
 Each is the person's side of a conversation plus checks on what came of it.
 Checks read the end state and the replies, never the path: which tools ran in
@@ -34,8 +34,10 @@ from tests.receipt_claims import refers_to
 from tests.scripted_provider import text_turn
 from tests.session_harness import (
     Advance,
+    CloseThread,
     ConfirmIfAsked,
     NewConversation,
+    OpenThread,
     Say,
     Scenario,
     Search,
@@ -242,6 +244,10 @@ S2R = Scenario(
 
 def _s3(session: Session) -> None:
     _album_queued(session, "Honey")
+    # Music resolved one album, so its record names it by a release-group id
+    # (music#96): the title the task carries comes from that ref.
+    (queued,) = [r for r in session.world.receipts if r.kind == "queue"]
+    assert queued.detail.get("album_id"), "music queued a download that names no album"
     _weekend_task_titled(session, "honey")
     only_writes(session, {("queue", "honey"), ("create", "honey")})
 
@@ -639,14 +645,26 @@ S14 = Scenario(
 
 
 def _s15(session: Session) -> None:
+    # Real music can't tell which album is "the other" (music#96): it names the
+    # candidates and writes nothing, so the task that would carry the album's
+    # name has none to carry. Honey from S3 stays the only album, the only task.
     _album_queued(session, "Honey")
-    _album_queued(session, "Suddenly")
-    _weekend_task_titled(session, "suddenly")
+    same = session.turn("same")
+    assert not session.writes(same), (
+        "wrote "
+        + ", ".join(f"{r.kind} {r.title!r}" for r in session.writes(same))
+        + " though music couldn't say which album"
+    )
+    reply = _lower(same.reply)
+    assert re.search(r"suddenly|swim|which|link|\?", reply), (
+        "didn't name the albums to pick from or ask which one"
+    )
 
 
 S15 = Scenario(
     "S15",
-    "after S3, 'do the same for their other album': the same two steps for Suddenly",
+    "after S3, 'do the same for their other album': music can't say which, so it names the "
+    "candidates and nothing more is written",
     (Say(_S3_TEXT), Say("do the same for their other album", label="same")),
     (_s15,),
     script=lambda w: [
@@ -655,7 +673,11 @@ S15 = Scenario(
             ask("music", "download the other album by Caribou"),
             ask("tasks", "add a task to sort {s1} this weekend"),
         ),
-        _say("Queued “Suddenly” and added “sort Suddenly” for the weekend."),
+        _say(
+            "Music can't tell which Caribou album is the other one: it has Honey, Suddenly "
+            "and Swim. I haven't added a task, since the album step gave no name to pass on. "
+            "Which one do you want?"
+        ),
     ],
 )
 
@@ -876,6 +898,99 @@ INCOGNITO = Scenario(
 )
 
 
+# --- TH1–TH2 side threads (#139) -------------------------------------------------------------
+
+_MEASURE = "add a task to measure the garage wall"
+_BRACKETS = "add a task to order the shelf brackets"
+
+
+def _result(session: Session, label: str) -> str:
+    """The thread's result note: posted into the timeline, as a note."""
+    thread = session.threads.get(label)
+    assert thread is not None and thread.note, f"side thread {label!r} never closed"
+    note = thread.note
+    assert note.get("stop_reason") == "thread_note", f"the result is a {note.get('stop_reason')}"
+    assert any(m["id"] == note["id"] for m in thread.timeline), "the result isn't in the timeline"
+    return str(note.get("content") or "")
+
+
+def _thread_flowed_back(session: Session) -> None:
+    only_writes(session, {("create", "measure"), ("create", "bracket")})
+    thread = session.threads["garage"]
+    carried = [str(c.get("title") or c.get("text") or "") for c in thread.carries]
+    assert any("measure" in c.lower() for c in carried), (
+        f"the thread didn't carry the timeline's task in: {carried}"
+    )
+    inside = session.writes(session.turn("inside"))
+    brackets = [r for r in inside if r.kind == "create" and "bracket" in r.title.lower()]
+    assert brackets, "nothing was added inside the thread"
+    text = _result(session, "garage")
+    assert "garage shelves" in _lower(text), f"the result doesn't name its thread: {text!r}"
+    assert refers_to(text, brackets[0].title), f"the result doesn't name {brackets[0].title!r}"
+
+
+THREAD_FLOWS_BACK = Scenario(
+    "TH1",
+    "side thread: start one carrying the timeline's task, add a task in it, close it, and its "
+    "result shows in the timeline",
+    (
+        Say(_MEASURE, label="before"),
+        OpenThread("Garage shelves", label="garage"),
+        Say(_BRACKETS, label="inside"),
+        CloseThread("garage"),
+    ),
+    (_thread_flowed_back,),
+    needs=frozenset({"threads"}),
+    # Unmeasured: added with #139, not yet run live (the batch's eval gate runs it).
+    tier="frontier",
+    script=lambda w: [
+        _ask("tasks", _MEASURE),
+        _say("Added “measure the garage wall”."),
+        _ask("tasks", _BRACKETS),
+        _say("Added “order the shelf brackets”."),
+        # The result's narrator, from the thread's receipts.
+        _say("Side thread “Garage shelves”: added “order the shelf brackets”."),
+    ],
+)
+
+_GIFT = "add a task to wrap the surprise gift"
+_CANDLES = "add a task to buy candles"
+
+
+def _thread_kept_incognito(session: Session) -> None:
+    secret = session.turn("secret")
+    assert secret.incognito, "the secret wasn't sent incognito"
+    # The app still saw the incognito request: the write happened.
+    assert any("gift" in r.title.lower() for r in session.writes(secret)), "the gift wasn't added"
+    text = _lower(_result(session, "party"))
+    assert "candles" in text, f"the result doesn't name the kept task: {text!r}"
+    for word in ("gift", "surprise", "wrap"):
+        assert word not in text, f"the result carried the incognito turn's {word!r}: {text!r}"
+
+
+THREAD_KEEPS_INCOGNITO = Scenario(
+    "TH2",
+    "side thread: an incognito turn inside it never rides back in its result",
+    (
+        OpenThread("Party", label="party"),
+        Say(_GIFT, label="secret", incognito=True),
+        Say(_CANDLES, label="kept"),
+        CloseThread("party"),
+    ),
+    (_thread_kept_incognito,),
+    needs=frozenset({"threads"}),
+    # Unmeasured: added with #139, not yet run live (the batch's eval gate runs it).
+    tier="frontier",
+    script=lambda w: [
+        _ask("tasks", _GIFT),
+        _say("Added “wrap the surprise gift”."),
+        _ask("tasks", _CANDLES),
+        _say("Added “buy candles”."),
+        _say("Side thread “Party”: added “buy candles”."),
+    ],
+)
+
+
 SCENARIOS: tuple[Scenario, ...] = (
     S1,
     S1V,
@@ -900,4 +1015,6 @@ SCENARIOS: tuple[Scenario, ...] = (
     FACT_IN_ASK,
     TIMELINE_RECALL,
     INCOGNITO,
+    THREAD_FLOWS_BACK,
+    THREAD_KEEPS_INCOGNITO,
 )

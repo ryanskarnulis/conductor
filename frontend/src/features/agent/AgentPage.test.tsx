@@ -19,6 +19,8 @@ vi.mock('../memory/memoryApi', () => ({
 }))
 
 vi.mock('../../api/agent', () => ({
+  // Side threads (#139): none open.
+  listThreads: vi.fn(() => Promise.resolve([])),
   cancelTurn: vi.fn(),
   getConversation: vi.fn(),
   getTurnActivity: vi.fn(),
