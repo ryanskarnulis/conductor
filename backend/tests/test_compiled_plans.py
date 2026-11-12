@@ -1713,6 +1713,15 @@ def test_a_question_spoken_keeps_the_list_and_the_question() -> None:
         ("Found 3. Which one?", [{"tool": "l", "outcome": "looked_up"}], False, False),
         ("No such album, so nothing was queued.", [{"tool": "d", "outcome": "refused"}], False, True),
         ("The library has 7 songs.", [], False, False),  # an answer, not a question
+        # #189: real music asks for details with no question mark.
+        ("Please tell me the artist and the album title you would like to download.", [], True, False),
+        ("I need a bit more. Let me know which album you mean.", [], True, False),
+        ("Which one would you like me to queue.", [], True, False),
+        ("Could you tell me the artist", [], True, False),
+        ("Nothing to do. Let me know if you need anything else.", [], False, False),
+        ("Tell me more about your day, it was fun.", [{"tool": "l", "outcome": "looked_up"}], False, False),
+        # A refusal said why it stopped: only a real question pauses there.
+        ("No such album. Please tell me the artist.", [{"tool": "d", "outcome": "refused"}], False, True),
     ],
 )  # fmt: skip
 def test_what_counts_as_an_app_asking_or_turning_down_its_part(
@@ -1724,6 +1733,36 @@ def test_what_counts_as_an_app_asking_or_turning_down_its_part(
     call = ToolCallRecord(tool="ask_music", arguments={}, result=result, app_record=record)
     assert (narrator.app_asks(call) is not None) is asks
     assert narrator.app_declined(call) is declined
+
+
+def test_an_apps_request_for_details_without_a_question_mark_pauses_the_plan(
+    run_with: Any, fleet: Fleet, world: World, db_session: Session
+) -> None:
+    # #189: music ran nothing and asked in words, as the browser check saw it.
+
+    asked = (
+        "The agent's note (its reading of the results, not a record): \"Please tell me the "
+        'artist and the album title you would like to download."'
+    )
+
+    def send(app_name: str, original: Any, *args: Any, **kwargs: Any) -> Any:
+        exchange = original(*args, **kwargs)
+        if app_name == "music":
+            exchange.assistant_message.content = asked
+            exchange.assistant_message.record = []
+        return exchange
+
+    build_delegate_tools(fleet, _wrapped(world, send))
+    plan = steps(
+        ask("music", "download an album"), ask("tasks", "add a task to sort {s1} this weekend")
+    )
+    reply = run_with(ScriptedProvider([plan_turn(plan)]), "download an album")
+    compiled = _plans(db_session)[-1]
+    assert (compiled.status, compiled.pause, compiled.resume_at) == ("paused", "app_question", 0)
+    assert reply["content"] == (
+        "Music asks: “Please tell me the artist and the album title you would like to download.”"
+    )
+    assert not [w for w in world.writes() if w.kind == "create"]  # the task waits
 
 
 def test_an_app_that_turns_down_its_part_ends_the_plan(

@@ -144,8 +144,12 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   is a tool-less call on a typed receipt of what ran (`app/ai/narrator.py`);
   the persona lives only there. Code guarantees the facts (titles, counts,
   undo, a plan's unrun steps and why, quoted outside text, two sentences on
-  voice); handoffs and an app's confirm question pass through verbatim, and
-  so does an app's own question when it did nothing (quoted as its words, #168).
+  voice, and a job's state: queued or started, never done, its query no
+  second thing, #188); handoffs and an app's confirm question pass through
+  verbatim, and so does an app's own question when it did nothing (quoted as
+  its words, #168). An app that ran nothing may ask without a "?" ("Please
+  tell me the artist…", #189): a few request phrasings read it, until
+  delegate v1.2's typed `needs_input` (#145) replaces them.
 - **The ledger** (#69, `app/services/ledger.py`) is the record of what
   happened: a turn opens with the person's words before it runs and closes
   with its plan (a control step split off first is its own plan), one step

@@ -62,6 +62,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from app.ai import confirmation, memory, run_record
 from app.ai.provider import ChatResult
 from app.ai.stop import STOPPED_ERROR
+from app.fleet.jobs import FINISHED
 
 if TYPE_CHECKING:
     from app.ai.runtime import ToolCallRecord
@@ -169,6 +170,20 @@ class _Fact:
     # that blames the person instead doesn't count, whatever else it says.
     reason: str = ""
     because: tuple[str, ...] = ()
+    # A job's state fact (#188) is about this title: when the title is missing
+    # too, code's line for the title already says the state.
+    of: str = ""
+
+
+@dataclass(frozen=True)
+class _Started:
+    """A job an app accepted that hasn't finished (#188): the reply must not
+    call it done. ``title`` is what it is for, ``done_words`` the words (after
+    ``_norm``) that would claim it finished."""
+
+    title: str
+    state: str  # "queued" or "started"
+    done_words: tuple[str, ...]
 
 
 # --- the decision: narrate, pass through, or keep the planner's words -----------
@@ -251,6 +266,10 @@ def app_asks(record: ToolCallRecord) -> str | None:
     question is :func:`live_confirm`'s."""
     if not _did_nothing(record):
         return None
+    # An app that ran nothing at all may ask without a question mark (#189:
+    # music's "Please tell me the artist and the album title you would like
+    # to download."); one that refused something has said why it stopped.
+    requests = record.app_record == []
     for paragraph in reversed(re.split(r"\n\s*\n", record.result or "")):
         text = " ".join(paragraph.split())
         if not text or _APP_DID.match(text):
@@ -260,17 +279,45 @@ def app_asks(record: ToolCallRecord) -> str | None:
             text = labelled.group("said")
         sentences = _sentences(text)
         last = max(
-            (n for n, s in enumerate(sentences) if s.rstrip(_QUOTES).endswith("?")), default=-1
+            (
+                n
+                for n, s in enumerate(sentences)
+                if s.rstrip(_QUOTES).endswith("?") or (requests and asks_for_input(s))
+            ),
+            default=-1,
         )
         if last >= 0:
             return " ".join(sentences[: last + 1])
     return None
 
 
+def asks_for_input(sentence: str) -> bool:
+    """Whether one of an app's sentences asks the person for something, worded
+    as a request rather than a question ("Please tell me the artist…", "Let
+    me know which one"). The one place this is read from words: delegate v1.2
+    plans a typed ``needs_input`` on the record (conductor#145), which will
+    replace it."""
+    return _REQUESTS_INPUT.search(sentence.strip().lstrip(_QUOTES)) is not None
+
+
 # Conductor's own ``[app did: …]`` paragraph after an app's reply.
 _APP_DID = re.compile(r"\[\w[\w-]* did:")
 # A labelled paragraph whose words are quoted: ``The agent's note (…): "…"``.
 _LABELLED = re.compile(r'^[^"“:]{1,120}:\s*["“](?P<said>.+)["”]$')
+# A sentence that asks the person for input without a question mark: it
+# opens with the request ("please tell me", "let me know which", "which …
+# would you like"), so a closing courtesy ("let me know if you need anything")
+# never reads as one.
+_REQUESTS_INPUT = re.compile(
+    r"^(?:(?:so|ok|okay),?\s+)?"
+    r"(?:please\s+|(?:could|can)\s+you\s+(?:please\s+)?)?"
+    r"(?:(?:tell|give|send|share)\s+me\s+(?:the|which|what|whose|an?|your)\b"
+    r"|let\s+me\s+know\s+(?:the|which|what|whose)\b"
+    r"|(?:name|specify|provide)\s+(?:the|which|an?|your)\b)"
+    r"|^(?:which|what)\b.*\b(?:would\s+you\s+like|do\s+you\s+want|did\s+you\s+mean)\b"
+    r"|^i\s+need\s+(?:to\s+know\s+)?(?:the|which|what|whose)\b",
+    re.IGNORECASE,
+)
 
 
 def app_declined(record: ToolCallRecord) -> bool:
@@ -339,11 +386,16 @@ def _narrated(
     words: str, records: Sequence[ToolCallRecord], *, surface: str | None, chat: Chat
 ) -> Narration:
     facts = _facts(records)
+    started = _started_jobs(records)
     spoken = surface in SPOKEN
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": _opening(words, records, surface)},
     ]
+
+    def wrong(said: str) -> int:
+        return len(_missing(said, facts)) + len(_claims_done(said, started, facts))
+
     calls = 0
     try:
         calls += 1
@@ -356,11 +408,15 @@ def _narrated(
     path: Path = "narrated"
     missing_titles = [fact for fact in _missing(text, facts) if fact.kind == "title"]
     missing_reasons = [fact for fact in _missing(text, facts) if fact.reason]
-    if missing_titles or missing_reasons:
+    claimed = _claims_done(text, started, facts)
+    if missing_titles or missing_reasons or claimed:
         retry = [
             *messages,
             {"role": "assistant", "content": first},
-            {"role": "user", "content": _retry(missing_titles, missing_reasons)},
+            {
+                "role": "user",
+                "content": _retry(missing_titles, missing_reasons, started if claimed else ()),
+            },
         ]
         try:
             calls += 1
@@ -369,17 +425,25 @@ def _narrated(
             second = None
         if second is not None:
             again = _shape(second, spoken)
-            if len(_missing(again, facts)) < len(_missing(text, facts)):
+            if wrong(again) < wrong(text):
                 text, path = again, "respoken"
+    # A sentence still calling an unfinished job done is dropped (#188): code's
+    # line for it says what is true.
+    claimed = _claims_done(text, started, facts)
+    if claimed:
+        text = " ".join(sentence for sentence in _sentences(text) if sentence not in claimed)
     reply, appended = _complete(text, facts, spoken=spoken)
-    if appended:
+    if appended or claimed:
         path = "appended"
     return Narration(_quote_untrusted(reply, facts), path, appended, calls)
 
 
-def _retry(titles: Sequence[_Fact], reasons: Sequence[_Fact]) -> str:
-    """The narrator's one second chance: the names it dropped, and the true
-    reason a step didn't run when its reply left it out or blamed the person."""
+def _retry(
+    titles: Sequence[_Fact], reasons: Sequence[_Fact], started: Sequence[_Started] = ()
+) -> str:
+    """The narrator's one second chance: the names it dropped, the true
+    reason a step didn't run when its reply left it out or blamed the person,
+    and a job it called done that has only begun."""
     parts = []
     if titles:
         parts.append(
@@ -396,8 +460,108 @@ def _retry(titles: Sequence[_Fact], reasons: Sequence[_Fact]) -> str:
             "person's doing: say that plainly, and don't say they left anything out or "
             "didn't provide something."
         )
+    for job in started:
+        subject = f"“{job.title}”" if job.title else "The job"
+        parts.append(
+            f"{subject} is only {job.state}: none of it is done yet. Say it was {job.state}, "
+            "never that it was done or finished."
+        )
     parts.append("Say it again, as briefly, naming each exactly as the receipt writes it.")
     return " ".join(parts)
+
+
+def _started_jobs(records: Sequence[ToolCallRecord]) -> list[_Started]:
+    """The jobs this run's apps accepted that haven't finished (#188)."""
+    found: list[_Started] = []
+    for record in records:
+        for entry in record.app_record or []:
+            state = _job_started(entry)
+            if state is None:
+                continue
+            refs = [
+                ref
+                for ref in entry.get("touched") or []
+                if ref.get("title") and not str(ref.get("kind") or "").endswith("job")
+            ]
+            title = ""
+            if refs:
+                untrusted = bool(refs[0].get("untrusted") or entry.get("untrusted"))
+                raw = str(refs[0]["title"])
+                title = _clean(raw) if untrusted else raw.strip()
+            verbs = [w for w in _norm(str(entry.get("tool") or "")).split() if w not in _NOT_DONE]
+            done = tuple(dict.fromkeys([*(_past(w) for w in verbs[:1]), *_DONE_WORDS]))
+            found.append(_Started(title, state, done))
+    return found
+
+
+def _claims_done(text: str, started: Sequence[_Started], facts: Sequence[_Fact]) -> list[str]:
+    """The reply's sentences that call a job done when it has only begun: a
+    finished word ("downloaded", "is done") with no hedge or negation, about
+    that job (it names its title, or no other title the run wrote)."""
+    if not started:
+        return []
+    titles = [_norm(fact.text) for fact in facts if fact.kind == "title"]
+    claims: list[str] = []
+    for sentence in _sentences(text):
+        have = f" {_norm(sentence)} "
+        if _HEDGED.search(have):
+            continue
+        for job in started:
+            if not any(f" {word} " in have for word in job.done_words):
+                continue
+            mine = _norm(job.title)
+            names_it = bool(mine) and f" {mine} " in have
+            others = any(t and t != mine and f" {t} " in have for t in titles)
+            if names_it or not others:
+                claims.append(sentence)
+                break
+    return claims
+
+
+def _past(verb: str) -> str:
+    return f"{verb}d" if verb.endswith("e") else f"{verb}ed"
+
+
+# Words a reply uses to say a job is under way, not done (after ``_norm``).
+_STARTED_CUES = (
+    "queued",
+    "queue",
+    "started",
+    "starting",
+    "downloading",
+    "running",
+    "on its way",
+    "on the way",
+    "underway",
+    "in progress",
+    "not done",
+    "not finished",
+    "hasnt finished",
+    "isnt done",
+    "few minutes",
+    "shortly",
+    "soon",
+)
+# A tool's words that start work rather than name it ("queue_download").
+_NOT_DONE = frozenset({"queue", "start", "submit", "request", "begin", "schedule"})
+# Words that claim a job finished, besides its own verb's past ("downloaded").
+_DONE_WORDS = (
+    "finished",
+    "completed",
+    "is done",
+    "are done",
+    "all done",
+    "its done",
+    "is ready",
+    "are ready",
+    "now in your library",
+)
+# A sentence that hedges or denies (after ``_norm``): "it will be downloaded
+# in a few minutes", "hasn't finished yet".
+_HEDGED = re.compile(
+    r" (?:not|never|yet|will|itll|youll|ill|once|when|after|soon|until|should|shortly|"
+    r"hasnt|havent|isnt|wont|arent|wasnt|being|nothing|going to|in a few|as soon as) "
+)
 
 
 def _speak(chat: Chat, messages: list[dict[str, Any]]) -> str | None:
@@ -627,14 +791,16 @@ def _unrun_ask(record: ToolCallRecord) -> str:
 
 
 def _entry(entry: dict[str, Any], *, offer: bool = True) -> dict[str, Any]:
+    action = _verb(str(entry.get("tool") or ""))
+    started = _job_started(entry)
     view: dict[str, Any] = {
-        "action": _verb(str(entry.get("tool") or "")),
+        "action": f"{started}, not finished yet: {action}" if started else action,
         "outcome": entry.get("outcome"),
     }
     items = []
     for ref in entry.get("touched") or []:
         title = ref.get("title")
-        if not title:
+        if not title or _restates(ref, entry):
             continue
         untrusted = bool(ref.get("untrusted") or entry.get("untrusted"))
         item: dict[str, Any] = {
@@ -664,6 +830,36 @@ def _entry(entry: dict[str, Any], *, offer: bool = True) -> dict[str, Any]:
     return view
 
 
+def _job_started(entry: dict[str, Any]) -> str | None:
+    """``queued`` or ``started`` for a ``done`` entry whose job hasn't ended
+    (#188): the app accepted the work, and none of it is done yet. ``None``
+    for anything else, a finished job included."""
+    job = entry.get("job")
+    if entry.get("outcome") != "done" or not isinstance(job, dict):
+        return None
+    status = str(job.get("status") or "")
+    if status in FINISHED:
+        return None
+    return "queued" if status in ("", "submitted") else "started"
+
+
+def _restates(ref: dict[str, Any], entry: dict[str, Any]) -> bool:
+    """A job ref whose title only restates another thing the entry touched:
+    real music's album job is titled by its query ("Caribou - Honey") beside
+    the album ref "Honey" (#188). The album is the thing; the job is its
+    bookkeeping, so it isn't named a second time."""
+    if not str(ref.get("kind") or "").endswith("job"):
+        return False
+    have = set(_norm(str(ref.get("title") or "")).split())
+    for other in entry.get("touched") or []:
+        if other is ref or str(other.get("kind") or "").endswith("job"):
+            continue
+        words = set(_norm(str(other.get("title") or "")).split())
+        if words and words <= have:
+            return True
+    return False
+
+
 # --- what the reply must say ---------------------------------------------------------
 
 
@@ -686,7 +882,12 @@ def _facts(records: Sequence[ToolCallRecord]) -> list[_Fact]:
             outcome = entry.get("outcome")
             if outcome not in ("done", "looked_up"):
                 continue
-            verb = "found" if outcome == "looked_up" else _verb(str(entry.get("tool") or ""))
+            started = _job_started(entry)
+            verb = (
+                "found"
+                if outcome == "looked_up"
+                else started or _verb(str(entry.get("tool") or ""))
+            )
             refs = [
                 ref
                 for ref in entry.get("touched") or []
@@ -724,6 +925,20 @@ def _facts(records: Sequence[ToolCallRecord]) -> list[_Fact]:
                 kind = str((refs or entry.get("touched") or [{}])[0].get("kind") or "item")
                 noun = kind.replace("_", " ") + ("" if total == 1 else "s")
                 facts.append(_Fact("count", str(total), f"{verb} {total} {noun}"))
+            if started:
+                # Accepted, not done (#188): the reply says so, by code's check.
+                of = titles[0][0] if titles else ""
+                subject = f"“{of}”" if of else "the job"
+                state = "is queued" if started == "queued" else "has started"
+                facts.append(
+                    _Fact(
+                        "status",
+                        started,
+                        f"{subject} {state}, not done yet",
+                        alternatives=_STARTED_CUES,
+                        of=of,
+                    )
+                )
             offer = entry.get("undo") or {}
             if record.undoes:
                 offer = {}  # an undo's own inverse is never offered back (#74)
@@ -809,7 +1024,12 @@ def _complete(text: str, facts: Sequence[_Fact], *, spoken: bool) -> tuple[str, 
 
 def _appendix(missing: Sequence[_Fact], *, spoken: bool) -> str:
     """One sentence for what's missing: names and counts, and the undo offer."""
-    named = [fact.say for fact in missing if fact.kind not in ("undo", "nothing")]
+    titles = {fact.text for fact in missing if fact.kind == "title"}
+    named = [
+        fact.say
+        for fact in missing
+        if fact.kind not in ("undo", "nothing") and not (fact.of and fact.of in titles)
+    ]
     undo = next((fact.say for fact in missing if fact.kind == "undo"), None)
     # A recall that found nothing says so in a sentence of its own (#80).
     nothing = next((f"{fact.say}." for fact in missing if fact.kind == "nothing"), "")
