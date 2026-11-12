@@ -1872,3 +1872,175 @@ T2 5/5; S5 4/5; M2 12/15 (three "forgot nothing": turn 2 ran no step);
 S11 4/5; S14 3/5 (one "wrote before the plan was confirmed"); S13 0/5 (the
 brief, as before); S15 0/5 (as in the batch run). Infra 0/12, claims backed
 138/140. Nothing is significantly below the batch run.
+
+## Empty-state guards back, first-try losses, "forget that" (#176, #180, #183; 2026-11-11)
+
+Measured on `205a50a` (#179's tip) at n=20, gemma-4-12b. Per-case first
+replies come from `CONDUCTOR_EVAL_REPORT` (the `about` and the first plan of
+each sample), from this branch's runs and the #151, #160 and #179 reports.
+
+### #176: the empty-state guards
+
+What the first reply was, main against the pre-#151 run:
+
+| case | pre-#151 | main | main's first reply → final plan |
+|---|---|---|---|
+| `yes-nothing-waiting` | 18/20 (0) | 4/20 (0) | `the outside world` + confirm 20 → decline 16, chat 4 |
+| `amend-nothing-waiting` | 16/20 (13) | 4/20 (4) | ask tasks 14 (`an app` 7, `the outside world` 7), amend 4, think 2 |
+| `self-said-just-now` | 18/20 (7) | 15/20 (12) | self 12; recall 8 → recall 5, self 3 |
+
+Before #151 the first replies were the same mistakes (confirm, knowledge)
+and the repair answered chat or self. With `about` first, the 12B labels a
+bare "yes" `the outside world` and keeps it through the confirm's repair, so
+the repair is a decline; "make it the first ten instead" is `an app` and a
+new ask to tasks; and `plan.disagrees` sends back a recall for "what did you
+say just now?", but the repair kept it 5 times in 8. Three validator changes,
+no prompt change:
+
+- The confirm's objection, when nothing waits at all (no question to confirm
+  or resume, no waiting line), adds that a yes or no answers nothing and is
+  small talk, `{"about": "small talk", "answer": "chat"}`.
+- `plan.points_at_nothing` (a nudge): words that change something ("instead",
+  not "instead of"; "make/change/move it") while State shows nothing they
+  could change (no running job, nothing waiting, no recent entities, matches
+  or earlier turns) and a plan that asks, looks, opens, searches or thinks,
+  goes back once for an amend, which code answers "There's nothing waiting
+  to change." Chat, self and control steps pass. Among the plan cases only
+  `amend-nothing-waiting` meets it.
+- `plan.about_you` also sends back a plan of only recalls or thinks when the
+  words ask what conductor just did or said ("… just now", "… just do"); a
+  recall searches earlier conversations, not the last reply.
+
+| case | main | this change (first-try) |
+|---|---|---|
+| `yes-nothing-waiting` | 4/20 | **20/20** (0: the first reply is still a confirm; every repair is chat) |
+| `amend-nothing-waiting` | 4/20 | **18/20** (8): 10 repairs to amend; misses are 2 cancels |
+| `self-said-just-now` | 15/20 | **20/20** (12): the 8 recalls all repaired to self |
+
+### #180: which plan cases need the repair, and why
+
+Per-case first-try from the reports (score/first-try of 20; "#179" is the
+#179 section's run, "pre-#151" the #151 section's main):
+
+| case | pre-#151 | #160 | #179 | why the first reply goes back |
+|---|---|---|---|---|
+| `s3-album-task` | 20/14 | 20/5 | 20/2 | "add a task to sort the Caribou album": the lost-ref repair asks for `{s1}` |
+| `cross-playlist-task` | 20/15 | 20/16 | 20/2 | "… the playlist I just downloaded": the same repair |
+| `s15-same-again` | 18/18 | 16/16 | 13/12 | a `recall` first for "their other album" (the #168 path, not repaired) |
+| `memory-paraphrase-carport` | – | – | 20/6 | a recall labelled `conductor itself`: `plan.disagrees` sent it back |
+| `memory-control-treehouse` | – | – | 20/9 | the same |
+| `memory-control-passport` | – | – | 20/11 | the same |
+| `long-fence-weekend` | 20/14 | 20/3 | 20/1 | the think's problem writes `{s2}` for the look it is given: `plan.unrunnable` |
+| `long-cleanup` | 13/12 | 19/19 | 13/12 | "sort my music" sent to tasks (4 asks to tasks, over the budget) |
+
+- **memory**: `plan.disagrees` (#151) sent back every recall whose `about` was
+  `conductor itself`, there for "what did you say just now?". The 12B labels
+  "what did we decide about the treehouse?" so too, and the recall is right:
+  36 of the 41 times the rule fired in the #179 run it sent back a right plan
+  (all `memory`), 5 times `self-said-just-now`. Now `conductor itself` with a
+  recall agrees; a think alone still doesn't, and a recall for what conductor
+  just said goes back through `plan.about_you` (#176), which reads the words.
+- **long-fence-weekend**: a think reads its inputs whole (`given`), and code
+  never fills a think's problem, but `plan.unrunnable` treated its `{s2}` (a
+  look) as a name to fill and sent the plan for a third call, which turned
+  the look into an ask. Now a think's ref to one of its own inputs passes,
+  and the filed problem writes it as the step id `given` labels ("s2").
+- **cross**: no code fix. Measured with #138's memory line reverted, the two
+  lost-ref cases read 14/40 first-try against 3/40 on this branch (cross
+  first-try 107/140 against 94/140; scores 133/140 each); #138's "neutral
+  forget" variant (concrete remember example, `"forget that <a fact they
+  saved>"`) read 1/40. So #138's forget placeholder costs `{s1}` on the first
+  reply, the lost-ref repair recovers every one, and restoring a concrete
+  forget example is what #138 removed (it was copied into half the forget
+  plans). Recorded, not changed.
+- **long-cleanup**: no clear cause. Its miss ("sort my music" to tasks) is
+  the same mode before #151 (7/20); the case reads 13, 19, 13, 14 /20 across
+  runs. Recorded, not changed.
+
+The three groups after this change (with #176), against the #179 run, each
+cell passed then first-try; none is significantly below it by #150's rule:
+
+| group | #179 | this change |
+|---|---|---|
+| cross | 133, 96 /140 | 133, 94 |
+| memory | 315, 276 /320 | 312, **311** |
+| long | 153, 133 /160 | 154, **153** |
+
+`memory-paraphrase-carport`, `memory-control-treehouse` and
+`memory-control-passport` 20/20 first-try each; `long-fence-weekend` 20/20
+first-try (17 kept the look). `memory-caribou` 17/20 (three `look music,
+recall` first replies, no nudge involved). `long-cleanup` 14/20, the same
+miss.
+
+### #183: M2 ("forget that") and S14
+
+M2 alone (`CONDUCTOR_EVAL_RUNS` set to the run count), each arm the
+worktree's own code (its venv; main's arm checks out `205a50a`'s
+`backend/app`):
+
+| arm | M2 | "forget that" planned as `cancel` |
+|---|---|---|
+| #179's gate run (main's code) | 12/15 | 3 |
+| main (`205a50a`) | 19/20 | 1 |
+| this branch (#176, #180), three runs | 20/20, 38/40, 4/5 | 0, 2, 1 |
+| this branch, #138's memory line reverted, two runs | 20/20, 40/40 | 0, 0 |
+| **this change** (`plan.forgets_by_control`) | **40/40** | 4, each repaired to an ask to memory |
+
+Every miss is the same: "forget that", with the fact in State and nothing
+waiting or running, compiles to a `cancel` (valid, so no repair), and code
+says "There's nothing waiting to cancel." No turn-1 reply asked a question,
+so no waiting value was offered. With #138's line that is 7 sessions in 100;
+reverted, 0 in 60 (Fisher one-sided p 0.034; by #150's rule 93/100 is just
+short of significant against 60/60, upper 0.962 against lower 0.957). So
+#138's line is the likely cause; reverting it would bring back the copying
+#138 removed, so the line stays and code catches the plan:
+`plan.forgets_by_control` (a nudge) sends back a cancel, amend or undo for
+words that say "forget" and that memory parses as a forget, while State
+lists a saved fact and nothing waits or runs, for an ask to memory. "Delete
+…" (memory reads it as a forget too) is left alone, and no plan case meets
+the rule except the three `memory-forget-*` cases, whose plans are asks to
+memory already.
+
+S14 (frontier) is reported, not changed: 3/5 in #179's run (one run wrote
+tasks before the plan was confirmed, one made no dated garage tasks).
+
+### The gate on this branch's final code
+
+Plan evals at n=20 (1759 s, 13 passed, 1 skipped) and session evals (gate
+tier 5, frontier 5; 860 s, infra 0/12, claims backed 132/132), gemma-4-12b,
+embeddings up, held-out set not run. Against the #179 section, each plan
+cell passed then first-try. Nothing is significantly below it by #150's
+rule (upper bound under the baseline's lower bound, 1.645), on score or
+first-try.
+
+| group | floor | #179 | this branch |
+|---|---|---|---|
+| golden | 0.8 | 400, 400 /420 | 400, 400 |
+| cross | 0.8 | 133, 96 /140 | 134, 99 |
+| ref | 0.85 | 79, 79 /80 | 75, 75 |
+| control | 0.8 | 148, 142 /180 | **179**, 141 |
+| memory | 0.8 | 315, 276 /320 | 313, **312** |
+| knowledge | 0.65 | 60, 60 /60 | 60, 60 |
+| hard | 0.5 | 20, 19 /20 | 19, 19 |
+| self | 0.55 | 98, 95 /100 | 100, 94 |
+| mixed | 0.85 | 196, 176 /200 | 198, 178 |
+| long | 0.7 | 153, 133 /160 | 158, **155** |
+| stale | 0.8 | 100, 100 /100 | 100, 100 |
+
+- `control` is 179/180 (Wilson 0.98–1.00): `yes-nothing-waiting` 20/20,
+  `amend-nothing-waiting` 19/20 (one cancel), the other seven 20/20. Its
+  floor stays 0.8 here; it can now be reconsidered (#176).
+- `ref` 75/80 is `s7-dennis` 15/20 (`ask tasks` without the ref, a first
+  reply no nudge touches; 14/20 in the batch run). `memory-dont-forget`
+  17/20 (the oil change to tasks, as before).
+- Forget plans copying the memory line's example: 0/40.
+- An earlier full run on `f0e9763` (before #183's nudge) read the same way:
+  cross 128, 95; ref 76; control 179, 143; memory 313, 312; self 100, 86
+  (`self-said-just-now` first-try 6/20, its swing); long 154, 152; M2 4/5
+  (one `cancel`), S4 and S16 4/5.
+
+Session evals: every gate scenario 5/5 (S1, S1v, S2, S2r, S4, S5, S6, S7,
+S8, S9, S16, M1, M2, M3, T1, T2). Frontier: S3, S10, S12, TH1, TH2 5/5; S14
+4/5 (0 dated garage tasks); S11 2/5 ("the task wasn't undone": "undo that"
+cancelled the running download instead; the batch run's 3/5 had the same miss);
+S15 1/5 and S13 0/5, as before (out of scope here).

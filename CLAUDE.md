@@ -161,7 +161,9 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   (`app/ai/speaker.py`). Each reply opens with `about` (#151: what the
   message is about; the running-job and waiting values only when State has
   one), and a plan its `about` contradicts gets one repair
-  (`plan.disagrees`); it isn't stored with the plan. **No guessed action:** a plan still invalid after
+  (`plan.disagrees`); it isn't stored with the plan. Words that change
+  something State doesn't show get one repair to an amend, never a new ask
+  (`plan.points_at_nothing`, #176). **No guessed action:** a plan still invalid after
   the compiler's repair, or with a `{sN}` no step can name
   (`plan.unrunnable`), gets one more round (`compiler.repair_turn`), then
   code asks which app was meant when the tries disagreed, else files a
@@ -241,13 +243,14 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   something of the fact the person didn't say ("Sunday") when their own
   words share two terms with it (#179): code sends it after the request, quoted and
   marked as context, never rewriting the words; the step's `facts` argument
-  records it, and the record lines models read leave it out. Three
+  records it, and the record lines models read leave it out. Four
   validator nudges (one repair, then the plan runs as compiled) keep plans
   on that path: "what do you remember about X?" with no saved fact about X
   is a `recall` (`plan.remembered_topic`), a lookup of a fact State lists
-  before another app's ask is dropped (`plan.looked_up_fact`), and "what
+  before another app's ask is dropped (`plan.looked_up_fact`), "what
   can you do?" or "what do you know about me?" is never `knowledge`
-  (`plan.about_you`).
+  (`plan.about_you`), and "forget that" with nothing waiting or running is
+  never a control step (`plan.forgets_by_control`, #183).
 - **Data flows as quoted data, never as control** (#72, `app/ai/dataflow.py`).
   Code fills `{sN}` from step N's receipt: its main touched title (job refs
   skipped, up to 3 joined), cleaned and quoted. No title, or more than 3,

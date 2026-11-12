@@ -521,9 +521,8 @@ def test_anything_else_lets_the_proposal_lapse(
     assert ledger.paused_plan(db_session, run_with.conversation) is None
     # A later yes has nothing to answer: the validator refuses a confirm.
     checks = plans.Checks(fleet=fleet, confirmable=False)
-    assert "confirm with nothing waiting on the person" in plans.problems(
-        plans.StepPlan.model_validate(confirm("yes")), checks
-    )
+    (found,) = plans.problems(plans.StepPlan.model_validate(confirm("yes")), checks)
+    assert found.startswith("confirm with nothing waiting on the person")
     assert world.receipts == []
 
 
@@ -872,6 +871,20 @@ def test_the_proposal_schema_offers_only_asks_to_agent_apps(fleet: Fleet) -> Non
     assert item["properties"]["do"] == {"type": "string", "const": "ask"}
     assert item["properties"]["app"]["enum"] == ["music", "tasks"]
     assert schema["required"] == ["summary", "steps"]
+
+
+def test_a_think_problem_points_at_a_look_it_was_given_by_step() -> None:
+    # #180: a look gives no name, so its ref stays a pointer to what it found
+    # ("s2", as `given` labels it); a named input is filled as before.
+    from app.ai import dataflow
+
+    step = plans.Think(
+        id="s3", do="think", problem="the fence ({s1}) and the weekend ({s2}) {s4}",
+        inputs=["s1", "s2"],
+    )  # fmt: skip
+    values = {"s1": dataflow.Value("“Build the fence”")}
+    problem = think.record(step, {}, values).arguments["problem"]
+    assert problem == "the fence (“Build the fence”) and the weekend (s2) {s4}"
 
 
 def test_a_spoken_proposal_keeps_to_two_sentences() -> None:

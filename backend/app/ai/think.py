@@ -132,7 +132,12 @@ def record(
 
     ref = new_ref()
     filled = dataflow.fill(step.problem, values)
-    problem = " ".join(filled.text.split())
+    # An input that gave no name (a look, #180) stays a pointer to what it
+    # found: "s2", as ``given`` labels it.
+    unfilled = plans.REF.sub(
+        lambda ref: ref.group(1) if ref.group(1) in step.inputs else ref.group(0), filled.text
+    )
+    problem = " ".join(unfilled.split())
     return ToolCallRecord(
         tool=TOOL,
         arguments={"problem": problem, "inputs": list(step.inputs), "given": given(step, found)},
