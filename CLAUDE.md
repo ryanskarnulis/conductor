@@ -298,6 +298,11 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   plan: its notes and asks are the plan's steps on the live channel.
   `cancel`/`amend` aimed at a running job (one runs and nothing waits, or
   the target names it) are the jobs runtime's (`app/ai/job_control.py`).
+  With nothing waiting, the person's words pick between them (#185): "undo"
+  is an undo even compiled as a cancel, and "stop"/"cancel" with a job
+  running is a cancel even compiled as an undo. A running job takes an undo
+  only when it is all the last plan wrote; beside other writes it is left
+  running and the reply says so (code's reason, guaranteed like #163's).
 - **Jobs** (#76): a step whose receipt carries a `job` detaches: the reply
   says it's queued, and the ledger's `ledger_jobs` row tracks it. The watcher
   (`app/services/job_watcher.py`, one thread, started with the app, resumes

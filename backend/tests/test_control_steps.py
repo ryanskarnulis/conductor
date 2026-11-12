@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.ai import control, interpreter
@@ -25,8 +25,9 @@ from app.ai.runtime import AgentRunResult, ToolCallRecord
 from app.ai.plan import Ledgered, Touched, UndoReceipt
 from app.ai.provider import ChatResult
 from app.api import routes_agent
-from app.db.models import Conversation, LedgerPlan, LedgerReceipt, LedgerTurn
+from app.db.models import Conversation, LedgerJob, LedgerPlan, LedgerReceipt, LedgerTurn
 from app.fleet.delegate import RecordEntry, Undo
+from app.fleet.jobs import JobRead
 from app.fleet.manifests import Fleet, discover_fleet
 from app.fleet.tools import build_delegate_tools
 from app.main import app
@@ -207,18 +208,87 @@ def test_undo_twice_never_undoes_a_receipt_again(
     assert len(world.writes()) == writes
 
 
-def test_a_download_alone_cant_be_undone_and_no_app_is_asked(run_with: Any, world: World) -> None:
+def _album_only(run_with: Any) -> None:
     run_with(
         ScriptedProvider(
             [plan_turn(steps(ask("music", "download the new Caribou album"))), text_turn("Ok.")]
         ),
         "download the new Caribou album",
     )
+
+
+@pytest.fixture
+def stops(world: World, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The jobs the world's music was asked to stop."""
+    asked: list[str] = []
+
+    def cancel_job(fleet_app: Any, ref: str) -> JobRead:
+        asked.append(ref)
+        return JobRead.model_validate(world.job_cancel(ref))
+
+    monkeypatch.setattr(interpreter, "cancel_job", cancel_job)
+    return asked
+
+
+def test_a_running_download_alone_is_stopped_by_an_undo(
+    run_with: Any, world: World, stops: list[str]
+) -> None:
+    # #185: the job is all the last plan did, so undoing it is stopping it.
+    _album_only(run_with)
+    reply = run_with(ScriptedProvider([plan_turn(UNDO)]), "undo that")
+    assert stops == ["1"]
+    assert _tools(reply) == ["cancel_job_music"]
+    assert [w.kind for w in world.writes()] == ["queue", "cancel"]
+
+
+def test_a_finished_download_alone_cant_be_undone_and_no_app_is_asked(
+    run_with: Any, world: World, db_session: Session, stops: list[str]
+) -> None:
+    _album_only(run_with)
+    db_session.execute(update(LedgerJob).values(status="completed"))
+    db_session.commit()
     reply = run_with(ScriptedProvider([plan_turn(UNDO)]), "undo that")
     assert reply["content"].startswith(control.CANT_UNDO)
     assert "a download can't be undone" in reply["content"]
     assert all(call.get("result") is None for call in reply["tool_calls"])
-    assert [w.kind for w in world.writes()] == ["queue"]
+    assert [w.kind for w in world.writes()] == ["queue"] and stops == []
+
+
+@pytest.mark.parametrize("compiled", [UNDO, steps({"do": "cancel", "target": "the download"})])
+def test_undo_that_after_a_task_and_a_download_undoes_the_task_only(
+    run_with: Any, world: World, stops: list[str], compiled: dict[str, Any]
+) -> None:
+    # S11 (#185): "undo that" read as a cancel went to the running download.
+    _s3(run_with)
+    created = world.writes()[-1]
+    asked = run_with(ScriptedProvider([plan_turn(compiled)]), "undo that")
+    assert stops == []
+    assert _tools(asked) == ["ask_music", "ask_tasks"]
+    assert "still running, so say stop to end it" in asked["content"]
+    # The narrator says the task and the download's reason but not that it runs:
+    # it gets one more try, then code says it.
+    done = run_with(
+        ScriptedProvider(
+            [
+                plan_turn(YES),
+                text_turn(f"Trashed “{created.title}”; the Honey download can't be undone."),
+                text_turn(f"Trashed “{created.title}”; the Honey download can't be undone."),
+            ]
+        ),
+        "yes",
+    )
+    assert [w.kind for w in world.writes()] == ["queue", "create", "trash"] and stops == []
+    assert "it is still running" in done["content"]
+
+
+def test_stop_that_read_as_an_undo_stops_the_download_and_keeps_the_task(
+    run_with: Any, world: World, stops: list[str]
+) -> None:
+    _s3(run_with)
+    reply = run_with(ScriptedProvider([plan_turn(UNDO)]), "stop that")
+    assert stops == ["1"]
+    assert _tools(reply) == ["cancel_job_music"]
+    assert [w.kind for w in world.writes()] == ["queue", "create", "cancel"]
 
 
 def _journal_by_hand(db: Session, conversation_id: int, *records: ToolCallRecord) -> None:
@@ -461,3 +531,33 @@ def test_a_vague_line_about_the_undo_doesnt_stand_in_for_what_couldnt_be_undone(
     done = run_with(ScriptedProvider([plan_turn(YES), text_turn(vague)]), "yes")
     assert done["content"].startswith(vague)
     assert "didn't ask music to undo “Honey”, since a download can't be undone" in done["content"]
+
+
+def test_undo_that_again_never_stops_the_download_left_running(
+    run_with: Any, world: World, stops: list[str]
+) -> None:
+    _s3(run_with)
+    run_with(ScriptedProvider([plan_turn(UNDO)]), "undo that")
+    run_with(
+        ScriptedProvider([plan_turn(YES), text_turn("Trashed it; Honey is still running.")]), "yes"
+    )
+    again = run_with(ScriptedProvider([plan_turn(UNDO)]), "undo that")
+    assert again["content"].startswith("Already undone: “")
+    assert stops == [] and [w.kind for w in world.writes()] == ["queue", "create", "trash"]
+
+
+def test_an_undo_naming_an_older_task_is_no_stop_for_the_running_download(
+    run_with: Any, world: World, stops: list[str]
+) -> None:
+    run_with(
+        ScriptedProvider(
+            [plan_turn(steps(ask("tasks", "add a task to water the plants"))), text_turn("Ok.")]
+        ),
+        "add a task to water the plants",
+    )
+    _album_only(run_with)
+    asked = run_with(
+        ScriptedProvider([plan_turn(steps({"do": "undo", "target": "water the plants"}))]),
+        "undo the water the plants task",
+    )
+    assert stops == [] and _tools(asked) == ["ask_tasks"]

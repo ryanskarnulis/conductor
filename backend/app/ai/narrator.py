@@ -455,11 +455,14 @@ def _retry(
             + "."
         )
     for fact in reasons:
-        parts.append(
-            f"The step for {fact.text} didn't run because {fact.reason}. That is not the "
-            "person's doing: say that plainly, and don't say they left anything out or "
-            "didn't provide something."
-        )
+        if run_record.NO_NAME_REASON in fact.reason:
+            parts.append(
+                f"The step for {fact.text} didn't run because {fact.reason}. That is not the "
+                "person's doing: say that plainly, and don't say they left anything out or "
+                "didn't provide something."
+            )
+        else:
+            parts.append(f"The step for {fact.text} didn't run because {fact.reason}: say that.")
     for job in started:
         subject = f"“{job.title}”" if job.title else "The job"
         parts.append(
@@ -971,6 +974,9 @@ def _unrun_fact(record: ToolCallRecord, reason: str) -> _Fact:
     # The reason code knows and the model tends to garble (#163).
     if run_record.NO_NAME_REASON in reason:
         return _Fact("unrun", app, say, alternatives=words, reason=reason, because=_NO_NAME_CUES)
+    # A job an undo left running (#185): the reply says it still runs.
+    if run_record.STILL_RUNNING in reason:
+        return _Fact("unrun", app, say, alternatives=words, reason=reason, because=_RUNNING_CUES)
     return _Fact("unrun", app, say, alternatives=words)
 
 
@@ -983,8 +989,8 @@ def _missing(text: str, facts: Sequence[_Fact]) -> list[_Fact]:
                 f" {_norm(word)} " in have for word in (fact.text, *fact.alternatives) if word
             )
             if present and fact.because:
-                present = any(f" {cue} " in have for cue in fact.because) and not _BLAME.search(
-                    have
+                present = any(f" {cue} " in have for cue in fact.because) and not (
+                    run_record.NO_NAME_REASON in fact.reason and _BLAME.search(have)
                 )
         elif fact.kind == "count":
             present = _has_number(text, have, fact.text)
@@ -1349,6 +1355,21 @@ _NO_NAME_CUES = (
     "didnt give any name",
     "didnt return a name",
     "didnt come back with a name",
+)
+# Ways a reply says a job is still going (after ``_norm``, #185).
+_RUNNING_CUES = (
+    "still running",
+    "still downloading",
+    "still going",
+    "still queued",
+    "still in progress",
+    "still underway",
+    "still working",
+    "is running",
+    "keeps running",
+    "keep running",
+    "in progress",
+    "underway",
 )
 # A reply that puts a missing name on the person: "a name was not provided",
 # "you didn't give one". The receipt says the earlier step gave none (#163).

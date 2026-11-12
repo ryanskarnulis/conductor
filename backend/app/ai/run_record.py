@@ -84,6 +84,8 @@ NOT_RUN_PREFIX = "not run: "
 # Why a ``{sN}`` step didn't run when the step it names gave no title (#72):
 # "s1 gave no name to pass on". The narrator guarantees the reply says it (#163).
 NO_NAME_REASON = "gave no name to pass on"
+# Why an undo left a job alone (#185): it runs, and stopping it is a stop.
+STILL_RUNNING = "it is still running"
 # The retired loop's own "not run" answers (#75), kept so old records still
 # read the same. A plan's unrun steps carry other reasons.
 TOOL_CALL_LIMIT_ERROR = f"{NOT_RUN_PREFIX}the run reached its limit of tool calls before this call"

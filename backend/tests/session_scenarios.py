@@ -520,7 +520,7 @@ S11 = Scenario(
         *_s3_script(w),
         plan({"do": "undo", "target": "last"}),
         YES,
-        _say("Trashed “sort Honey”. The Honey download can't be undone, though."),
+        _say("Trashed “sort Honey”. The Honey download can't be undone, and it's still running."),
     ],
 )
 

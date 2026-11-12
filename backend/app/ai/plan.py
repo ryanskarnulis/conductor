@@ -1191,6 +1191,8 @@ class UndoReceipt:
     how: str | None = None
     none: str | None = None
     undone: bool = False
+    # The ref of the job this receipt started (#185), whether or not it runs.
+    job: str | None = None
 
 
 @dataclass(frozen=True)

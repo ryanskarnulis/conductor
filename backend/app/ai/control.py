@@ -111,6 +111,20 @@ def run(
     pending: PendingConfirm | None,
 ) -> AgentRunResult:
     """Run a control plan's one step."""
+    said = _as_said(
+        step, view, words=state.words, waiting=paused is not None or pending is not None
+    )
+    if said is not step:
+        # The plan on the ledger is the one code ran: a yes to the app's
+        # question resumes an undo from it.
+        step, turn.body = said, {"steps": [said.model_dump()]}
+    if isinstance(step, plans.Undo):
+        captured = _job_only(view, step.target, state.words)
+        if captured:
+            # The last plan only started a job that still runs: undoing it
+            # is stopping it (#185).
+            cancel_step = plans.Cancel(id=step.id, do="cancel", target=step.target)
+            return job_control.cancel(interp, state, turn, cancel_step, captured)
     if isinstance(step, plans.Cancel | plans.Amend):
         running = view.running()
         waiting = paused is not None or pending is not None
@@ -124,6 +138,56 @@ def run(
         return amend(interp, state, turn, step, paused=paused, pending=pending)
     assert isinstance(step, plans.Undo)
     return undo(interp, state, turn, step, view, position=0, words=state.words)
+
+
+# --- which one the words mean (#185) --------------------------------------------------------
+#
+# "Undo that" right after a plan that made a task and started a download was
+# compiled as a cancel some of the time, and the cancel went to the running
+# job (S11). Code decides from the person's own words: "undo" is the last
+# plan's writes; "stop" and "cancel" are a running job. A running job takes an
+# undo only when it is all the last plan did.
+
+_SAYS_UNDO = re.compile(r"\b(?:undo|undid|take\s+(?:that|it)\s+back|revert)\b", re.IGNORECASE)
+_SAYS_STOP = re.compile(r"\b(?:stop|cancel|halt|abort)\b", re.IGNORECASE)
+
+
+def _as_said(step: plans.Step, view: View, *, words: str, waiting: bool) -> plans.Step:
+    """The control step the person's words ask for, when it isn't the one
+    compiled and nothing waits on them: a cancel for words that only say
+    undo is an undo; an undo for words that only say stop, with a job
+    running, is a cancel."""
+    if waiting:
+        return step
+    undo, stop = bool(_SAYS_UNDO.search(words)), bool(_SAYS_STOP.search(words))
+    if isinstance(step, plans.Cancel) and undo and not stop:
+        logger.info("control_cancel_said_undo", step=step.id)
+        return plans.Undo(id=step.id, do="undo", target=step.target)
+    if isinstance(step, plans.Undo) and stop and not undo and view.running():
+        logger.info("control_undo_said_stop", step=step.id)
+        return plans.Cancel(id=step.id, do="cancel", target=step.target)
+    return step
+
+
+def _running_ref(receipt: UndoReceipt, running: Sequence[plans.RunningJob]) -> bool:
+    return receipt.job is not None and any(
+        job.app == receipt.app and job.ref == receipt.job for job in running
+    )
+
+
+def _job_only(view: View, target: str, words: str) -> list[plans.RunningJob]:
+    """The running jobs that are everything the last plan wrote, when the
+    undo means the last plan (not an older one it names), or none."""
+    ledgered = view()
+    if ledgered is None or ledgered.last_plan is None:
+        return []
+    running = view.running()
+    last = [r for r in ledgered.receipts if r.plan_id == ledgered.last_plan]
+    if not last or not all(_running_ref(receipt, running) for receipt in last):
+        return []
+    if any(receipt.plan_id != ledgered.last_plan for receipt in pick(ledgered, target, words)):
+        return []
+    return [job for job in running if any(r.app == job.app and r.job == job.ref for r in last)]
 
 
 # --- cancel ----------------------------------------------------------------------------------
@@ -310,12 +374,20 @@ def undo(
     groups: dict[str, list[UndoReceipt]] = {}
     already: list[UndoReceipt] = []
     notes: list[ToolCallRecord] = []
+    running = view.running()
     for receipt in chosen:
         app = interp._fleet.get(receipt.app)
         if receipt.id in handled:
             continue
         if receipt.undone:
             already.append(receipt)
+        elif _running_ref(receipt, running):
+            # A job beside other writes is left running (#185): the undo is
+            # the rest, and the reply says the job still runs.
+            why = receipt.none or f"{receipt.app} is still working on it"
+            notes.append(
+                _note(receipt, f"{why}; {run_record.STILL_RUNNING}, so say stop to end it")
+            )
         elif receipt.outcome == "unknown":
             notes.append(
                 _note(receipt, f"there's no record of what {receipt.app} did; check it there")

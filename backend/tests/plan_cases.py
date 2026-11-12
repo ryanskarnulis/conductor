@@ -503,6 +503,20 @@ CASES: tuple[Case, ...] = (
         state(last=_LAST_S3),
         frozenset({"pcc:task:301", "music:album:55", "last"}),
     ),
+    # S11 as the session has it (#185): S3's download still running beside the
+    # task it made. An undo, or a cancel (code reads "undo" in the words and
+    # undoes the task, leaving the download), is right; an ask is not.
+    Case(
+        "s11-undo-job-running",
+        "undo that",
+        (one(M("undo")), one(M("cancel"))),
+        "control",
+        state(
+            last=_LAST_S3,
+            jobs="music job 20, “Honey” (outside text): submitted, 0 of 9 done",
+        ),
+        frozenset({"pcc:task:301", "music:album:55", "music:job:20", "job:20", "20", "last"}),
+    ),
     # The same words with nothing for them (#140): nothing waits, runs or was
     # done. A cancel, amend or undo is right (code then says there's nothing
     # to act on), and so is a chat or self answer: neither acts. A confirm
