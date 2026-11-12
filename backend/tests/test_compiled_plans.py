@@ -574,6 +574,71 @@ def test_words_that_change_something_pass_when_a_question_waits(fleet: Fleet) ->
     assert plans.points_at_nothing(body, "make it ten instead", checks) == []
 
 
+_KEY = "the spare key is under the blue pot"
+
+
+@pytest.mark.parametrize(
+    ("words", "parts", "body", "sent_back"),
+    [
+        # #183: M2's misses: "forget that" planned as a cancel with nothing to cancel.
+        ("forget that", {"facts": _KEY}, steps({"do": "cancel", "target": "last"}), True),
+        ("please forget it", {"facts": _KEY}, steps({"do": "undo", "target": "last"}), True),
+        (
+            "forget that",
+            {"facts": _KEY},
+            steps({"do": "amend", "target": "last", "change": "forget"}, ask("memory", "x")),
+            True,
+        ),
+        # Memory's own ask, or something a control step can act on: no objection.
+        ("forget that", {"facts": _KEY}, steps(ask("memory", "forget that")), False),
+        ("forget that", {"facts": _KEY, "jobs": "music:job:9 (running)"}, steps({"do": "cancel", "target": "music:job:9"}), False),
+        ("forget that", {"facts": _KEY, "waiting": 'your last reply asked "Which?"'}, steps({"do": "cancel", "target": "last"}), False),
+        # Nothing saved to forget, or words that aren't a forget.
+        ("forget that", {}, steps({"do": "cancel", "target": "last"}), False),
+        ("never mind, forget it", {"facts": _KEY}, steps({"do": "cancel", "target": "last"}), False),
+        ("cancel that", {"facts": _KEY}, steps({"do": "cancel", "target": "last"}), False),
+        # Memory also reads "delete …" as a forget; another app's delete isn't one.
+        ("delete the groceries task", {"facts": _KEY}, steps({"do": "cancel", "target": "last"}), False),
+    ],
+)  # fmt: skip
+def test_forget_that_is_memorys_when_nothing_waits_or_runs(
+    fleet: Fleet, words: str, parts: dict[str, str], body: dict[str, Any], sent_back: bool
+) -> None:
+    from tests.plan_cases import state
+
+    checks = plans.Checks(fleet=fleet, context=state(**parts))
+    found = plans.forgets_by_control(plans.load(body), words, checks)
+    assert bool(found) is sent_back
+    if found:
+        assert "an ask to memory" in found[0] and "never a cancel" in found[0]
+
+
+def test_m2s_forget_gets_its_repair_from_the_compiler(fleet: Fleet) -> None:
+    from tests.plan_cases import state
+
+    context = state(facts=_KEY)
+    replies = [
+        json.dumps({"about": "an app", **steps({"do": "cancel", "target": "last"})}),
+        json.dumps({"about": "conductor itself", **steps(ask("memory", "forget that"))}),
+    ]
+    sent: list[list[dict[str, Any]]] = []
+
+    def chat(messages: list[dict[str, Any]], _max: int, _fmt: dict[str, Any]) -> ChatResult:
+        sent.append(list(messages))
+        return text_turn(replies.pop(0))
+
+    compiled = compiler.compile_turn(
+        chat,
+        system_prompt=compiler.planner_prompt(fleet),
+        context=context,
+        words="forget that",
+        fleet=fleet,
+        checks=plans.Checks(fleet=fleet, context=context),
+    )
+    assert compiled.repaired and plans.describe(compiled.plan) == "ask:memory"  # type: ignore[arg-type]
+    assert "never a cancel" in sent[1][-1]["content"]
+
+
 @pytest.mark.parametrize(
     ("words", "body", "sent_back"),
     [

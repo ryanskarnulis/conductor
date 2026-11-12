@@ -1971,3 +1971,76 @@ cell passed then first-try; none is significantly below it by #150's rule:
 first-try (17 kept the look). `memory-caribou` 17/20 (three `look music,
 recall` first replies, no nudge involved). `long-cleanup` 14/20, the same
 miss.
+
+### #183: M2 ("forget that") and S14
+
+M2 alone (`CONDUCTOR_EVAL_RUNS` set to the run count), each arm the
+worktree's own code (its venv; main's arm checks out `205a50a`'s
+`backend/app`):
+
+| arm | M2 | "forget that" planned as `cancel` |
+|---|---|---|
+| #179's gate run (main's code) | 12/15 | 3 |
+| main (`205a50a`) | 19/20 | 1 |
+| this branch (#176, #180), three runs | 20/20, 38/40, 4/5 | 0, 2, 1 |
+| this branch, #138's memory line reverted, two runs | 20/20, 40/40 | 0, 0 |
+| **this change** (`plan.forgets_by_control`) | **40/40** | 4, each repaired to an ask to memory |
+
+Every miss is the same: "forget that", with the fact in State and nothing
+waiting or running, compiles to a `cancel` (valid, so no repair), and code
+says "There's nothing waiting to cancel." No turn-1 reply asked a question,
+so no waiting value was offered. With #138's line that is 7 sessions in 100;
+reverted, 0 in 60 (Fisher one-sided p 0.034; by #150's rule 93/100 is just
+short of significant against 60/60, upper 0.962 against lower 0.957). So
+#138's line is the likely cause; reverting it would bring back the copying
+#138 removed, so the line stays and code catches the plan:
+`plan.forgets_by_control` (a nudge) sends back a cancel, amend or undo for
+words that say "forget" and that memory parses as a forget, while State
+lists a saved fact and nothing waits or runs, for an ask to memory. "Delete
+…" (memory reads it as a forget too) is left alone, and no plan case meets
+the rule except the three `memory-forget-*` cases, whose plans are asks to
+memory already.
+
+S14 (frontier) is reported, not changed: 3/5 in #179's run (one run wrote
+tasks before the plan was confirmed, one made no dated garage tasks).
+
+### The gate on this branch's final code
+
+Plan evals at n=20 (1759 s, 13 passed, 1 skipped) and session evals (gate
+tier 5, frontier 5; 860 s, infra 0/12, claims backed 132/132), gemma-4-12b,
+embeddings up, held-out set not run. Against the #179 section, each plan
+cell passed then first-try. Nothing is significantly below it by #150's
+rule (upper bound under the baseline's lower bound, 1.645), on score or
+first-try.
+
+| group | floor | #179 | this branch |
+|---|---|---|---|
+| golden | 0.8 | 400, 400 /420 | 400, 400 |
+| cross | 0.8 | 133, 96 /140 | 134, 99 |
+| ref | 0.85 | 79, 79 /80 | 75, 75 |
+| control | 0.8 | 148, 142 /180 | **179**, 141 |
+| memory | 0.8 | 315, 276 /320 | 313, **312** |
+| knowledge | 0.65 | 60, 60 /60 | 60, 60 |
+| hard | 0.5 | 20, 19 /20 | 19, 19 |
+| self | 0.55 | 98, 95 /100 | 100, 94 |
+| mixed | 0.85 | 196, 176 /200 | 198, 178 |
+| long | 0.7 | 153, 133 /160 | 158, **155** |
+| stale | 0.8 | 100, 100 /100 | 100, 100 |
+
+- `control` is 179/180 (Wilson 0.98–1.00): `yes-nothing-waiting` 20/20,
+  `amend-nothing-waiting` 19/20 (one cancel), the other seven 20/20. Its
+  floor stays 0.8 here; it can now be reconsidered (#176).
+- `ref` 75/80 is `s7-dennis` 15/20 (`ask tasks` without the ref, a first
+  reply no nudge touches; 14/20 in the batch run). `memory-dont-forget`
+  17/20 (the oil change to tasks, as before).
+- Forget plans copying the memory line's example: 0/40.
+- An earlier full run on `f0e9763` (before #183's nudge) read the same way:
+  cross 128, 95; ref 76; control 179, 143; memory 313, 312; self 100, 86
+  (`self-said-just-now` first-try 6/20, its swing); long 154, 152; M2 4/5
+  (one `cancel`), S4 and S16 4/5.
+
+Session evals: every gate scenario 5/5 (S1, S1v, S2, S2r, S4, S5, S6, S7,
+S8, S9, S16, M1, M2, M3, T1, T2). Frontier: S3, S10, S12, TH1, TH2 5/5; S14
+4/5 (0 dated garage tasks); S11 2/5 ("the task wasn't undone": "undo that"
+cancelled the running download instead; the batch run's 3/5 had the same miss);
+S15 1/5 and S13 0/5, as before (out of scope here).

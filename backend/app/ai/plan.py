@@ -845,6 +845,29 @@ def points_at_nothing(plan: Plan, words: str, checks: Checks) -> list[str]:
     ]
 
 
+_FORGET = re.compile(r"\bforget\b", re.IGNORECASE)
+
+
+def forgets_by_control(plan: Plan, words: str, checks: Checks) -> list[str]:
+    """ "Forget that", with a fact State lists and nothing waiting or running,
+    planned as a cancel, amend or undo (#183: M2's misses, 7 in 100 sessions
+    with #138's memory line, none in 60 without it). Code then says there is
+    nothing to cancel and the fact stays; the repair asks memory instead."""
+    if not isinstance(plan, StepPlan) or not any(step.do in CONTROL_KINDS for step in plan.steps):
+        return []
+    # Their own "forget": memory also takes "delete …", which is any app's.
+    if not _FORGET.search(words) or parse_memory(words).kind != "forget" or _waits(checks):
+        return []
+    lines = checks.context.splitlines()
+    if any(line.startswith(_RUNNING_HEADER) for line in lines) or not saved_in(checks.context):
+        return []
+    return [
+        "they asked you to forget something they told you, and nothing is waiting or running "
+        f'to cancel or change: that is an ask to {MEMORY_APP} in their own words ("forget '
+        'that"), never a cancel, amend or undo'
+    ]
+
+
 def looked_up_fact(plan: Plan, words: str, context: str) -> list[str]:
     """A plan that first looks up a saved fact State already lists, to feed
     another app's ask ("add a task for my music sorting day": recall or ask

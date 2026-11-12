@@ -243,13 +243,14 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   something of the fact the person didn't say ("Sunday") when their own
   words share two terms with it (#179): code sends it after the request, quoted and
   marked as context, never rewriting the words; the step's `facts` argument
-  records it, and the record lines models read leave it out. Three
+  records it, and the record lines models read leave it out. Four
   validator nudges (one repair, then the plan runs as compiled) keep plans
   on that path: "what do you remember about X?" with no saved fact about X
   is a `recall` (`plan.remembered_topic`), a lookup of a fact State lists
-  before another app's ask is dropped (`plan.looked_up_fact`), and "what
+  before another app's ask is dropped (`plan.looked_up_fact`), "what
   can you do?" or "what do you know about me?" is never `knowledge`
-  (`plan.about_you`).
+  (`plan.about_you`), and "forget that" with nothing waiting or running is
+  never a control step (`plan.forgets_by_control`, #183).
 - **Data flows as quoted data, never as control** (#72, `app/ai/dataflow.py`).
   Code fills `{sN}` from step N's receipt: its main touched title (job refs
   skipped, up to 3 joined), cleaned and quoted. No title, or more than 3,
