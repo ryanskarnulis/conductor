@@ -94,7 +94,9 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   the flag, code's gate asks first (a `destructive` ask pauses on it). `open_`
   apps confirm their own resets; "resign the game" is a plain handoff.
 - **Delegate calls are budgeted** (3 per app per turn: the validator sends a
-  plan over it back, the tool refuses past it) and every one emits a
+  plan over it back, counting only an app's own asks: a part that is another
+  app's manifest example, "sort my music" asked of tasks, goes back to that
+  app instead, #186; the tool refuses past it) and every one emits a
   `delegate_call` structlog event; never raw transcripts into a model's
   context.
 - **No chat turns are replayed** (#64). Each turn's one user message opens
@@ -144,8 +146,12 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   is a tool-less call on a typed receipt of what ran (`app/ai/narrator.py`);
   the persona lives only there. Code guarantees the facts (titles, counts,
   undo, a plan's unrun steps and why, quoted outside text, two sentences on
-  voice); handoffs and an app's confirm question pass through verbatim, and
-  so does an app's own question when it did nothing (quoted as its words, #168).
+  voice, and a job's state: queued or started, never done, its query no
+  second thing, #188); handoffs and an app's confirm question pass through
+  verbatim, and so does an app's own question when it did nothing (quoted as
+  its words, #168). An app that ran nothing may ask without a "?" ("Please
+  tell me the artist…", #189): a few request phrasings read it, until
+  delegate v1.2's typed `needs_input` (#145) replaces them.
 - **The ledger** (#69, `app/services/ledger.py`) is the record of what
   happened: a turn opens with the person's words before it runs and closes
   with its plan (a control step split off first is its own plan), one step
@@ -259,7 +265,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   means the step doesn't run and the plan ends, with the reason on the
   record; so does an ask its app turned down with nothing done (#168). Never
   guess a name or splice in an app's reply text. The validator repairs a lost
-  ref: a bare `s1`, a step re-describing what an earlier ask will find, an ask
+  ref: a bare `s1`, a step re-describing what an earlier ask will find (a
+  compound ask for one thing too, #188; not an ask for several), an ask
   pointing at State ("their other album"), or a recall or memory lookup for
   one (`plan.recalls_unnamed`, a nudge, #168); and it
   splits an ask carrying a second app's work ("… and add a task", #127) into
@@ -291,6 +298,11 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   plan: its notes and asks are the plan's steps on the live channel.
   `cancel`/`amend` aimed at a running job (one runs and nothing waits, or
   the target names it) are the jobs runtime's (`app/ai/job_control.py`).
+  With nothing waiting, the person's words pick between them (#185): "undo"
+  is an undo even compiled as a cancel, and "stop"/"cancel" with a job
+  running is a cancel even compiled as an undo. A running job takes an undo
+  only when it is all the last plan wrote; beside other writes it is left
+  running and the reply says so (code's reason, guaranteed like #163's).
 - **Jobs** (#76): a step whose receipt carries a `job` detaches: the reply
   says it's queued, and the ledger's `ledger_jobs` row tracks it. The watcher
   (`app/services/job_watcher.py`, one thread, started with the app, resumes

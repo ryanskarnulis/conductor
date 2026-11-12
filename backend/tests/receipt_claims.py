@@ -109,6 +109,13 @@ _HEDGE = re.compile(
     r"try|trying|let's|do you)\b"
 )
 _NEGATION = re.compile(r"n't\b|\b(?:not|never|no longer|unable|cannot|nothing|none|nor|without)\b")
+# A decision someone made is talk about the past, not a write (#188: T1 and S5
+# read "the decision made …" as a create): taken out before the families look.
+_DECIDED = re.compile(
+    r"\bdecisions?\b(?:\s+[\w']+){0,3}?\s+made\b"
+    r"|\bmade\s+(?:(?:a|the|any|that|this|your|my|our|their)\s+)?decisions?\b",
+    re.IGNORECASE,
+)
 _QUOTED = re.compile(r"[\"“”‘’]([^\"“”‘’]{2,80})[\"“”‘’]|(?<![a-z])'([^']{2,80})'(?![a-z])")
 
 
@@ -213,7 +220,8 @@ def read_claims(
         for clause in clauses(sentence):
             if _hedged(clause):
                 continue
-            family = next((f for f in FAMILIES if f.pattern.search(clause)), None)
+            said = _DECIDED.sub(" ", clause)
+            family = next((f for f in FAMILIES if f.pattern.search(said)), None)
             if family is None:
                 continue
             backing = [receipt for receipt in evidence if receipt.kind in family.kinds]

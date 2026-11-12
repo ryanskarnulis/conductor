@@ -425,12 +425,21 @@ def control_view(db: Session, conversation_id: int, *, since: datetime | None = 
                 break
         if len(plans) == CONTROL_PLANS:
             break
-    receipts = [
-        _undo_receipt(plan, receipt)
+    rows = [
+        (plan, receipt)
         for plan in plans
         for step in plan.steps
         for receipt in step.receipts
         if receipt.outcome in _WRITE_OUTCOMES
+    ]
+    started = {receipt.job_id for _, receipt in rows if receipt.job_id is not None}
+    job_refs: dict[int, str] = {}
+    if started:
+        found = db.execute(select(LedgerJob.id, LedgerJob.ref).where(LedgerJob.id.in_(started)))
+        job_refs = {job_id: ref for job_id, ref in found}
+    receipts = [
+        _undo_receipt(plan, receipt, job_refs.get(receipt.job_id) if receipt.job_id else None)
+        for plan, receipt in rows
     ]
     running = running_jobs(db, conversation_id)
     return Ledgered(
@@ -452,7 +461,7 @@ def _is_control(db: Session, plan: LedgerPlan) -> bool:
     return undid is not None
 
 
-def _undo_receipt(plan: LedgerPlan, receipt: LedgerReceipt) -> UndoReceipt:
+def _undo_receipt(plan: LedgerPlan, receipt: LedgerReceipt, job: str | None = None) -> UndoReceipt:
     return UndoReceipt(
         id=receipt.id,
         plan_id=plan.id,
@@ -473,6 +482,7 @@ def _undo_receipt(plan: LedgerPlan, receipt: LedgerReceipt) -> UndoReceipt:
         how=receipt.undo_how,
         none=receipt.undo_none,
         undone=receipt.undone_by_step_id is not None,
+        job=job,
     )
 
 

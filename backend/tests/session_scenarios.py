@@ -501,13 +501,15 @@ def _s11(session: Session) -> None:
     assert all(_task_for(session, r).trashed for r in created), "the task wasn't undone"
     assert all(job.state != "cancelled" for job in session.world.jobs.values())
     reply = _lower(session.last.reply)
+    # #185: the download is left running on purpose, so saying it still runs
+    # says why it wasn't undone.
     assert re.search(
         r"(download|album|honey)[^.]*(can't|cannot|can not|could not|couldn't|stays|already|"
-        r"isn't|won't|no way|not able)|(can't|cannot|can not|could not|couldn't|no way|"
-        r"not able)[^.]*"
+        r"isn't|won't|no way|not able|still (?:running|downloading|going|queued))"
+        r"|(can't|cannot|can not|could not|couldn't|no way|not able)[^.]*"
         r"(download|album|honey)",
         reply,
-    ), "didn't say the download can't be undone"
+    ), "didn't say the download can't be undone or is still running"
 
 
 S11 = Scenario(
@@ -520,7 +522,7 @@ S11 = Scenario(
         *_s3_script(w),
         plan({"do": "undo", "target": "last"}),
         YES,
-        _say("Trashed “sort Honey”. The Honey download can't be undone, though."),
+        _say("Trashed “sort Honey”. The Honey download can't be undone, and it's still running."),
     ],
 )
 

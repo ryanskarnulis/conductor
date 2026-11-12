@@ -748,3 +748,110 @@ def test_the_retry_keeps_the_first_prompt_as_its_prefix() -> None:
     chat, seen = _scripted("Added it.", "Added it; the delete never ran, no name to pass on.")
     narrator.narrate("add it, then delete it", None, records, surface=None, chat=chat)
     assert seen[1][:2] == seen[0][:2]  # the second call extends the first
+
+
+# --- a job that only started (#188) -------------------------------------------------------------
+#
+# Real music's album download: the album ref beside its job, whose title is the
+# job's query ("Caribou - Honey"). The fleet smoke's narrator said "Downloaded"
+# for an album only queued, and named the query as a second thing.
+
+
+def _music_album(status: str = "submitted") -> ToolCallRecord:
+    return ToolCallRecord(
+        tool="ask_music",
+        arguments={"message": "download the new Caribou album"},
+        result="Queued Honey by Caribou.",
+        app_record=[
+            {
+                "tool": "download_album",
+                "outcome": "done",
+                "touched": [
+                    {"app": "music", "kind": "album", "id": "mb-1", "title": "Honey",
+                     "untrusted": True},
+                    {"app": "music", "kind": "download_job", "id": "4",
+                     "title": "Caribou - Honey", "untrusted": True},
+                ],
+                "undo": {"none": "a download can't be undone"},
+                "job": {"ref": "4", "status": status, "done": 0, "total": None},
+            }
+        ],
+    )  # fmt: skip
+
+
+def test_a_queued_job_is_said_as_queued_and_its_query_is_not_a_second_thing() -> None:
+    chat, seen = _scripted("Queued “Honey”; it'll be a few minutes.")
+    narration = narrator.narrate("download it", None, [_music_album()], surface=None, chat=chat)
+    (step,) = _receipt(seen[0])
+    (entry,) = step["did"]
+    assert entry["action"].startswith("queued")
+    assert [item["title"] for item in entry["items"]] == ["Honey"]  # no "Caribou - Honey"
+    assert (narration.reply, narration.path) == (
+        "Queued “Honey”; it'll be a few minutes.",
+        "narrated",
+    )
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        "Downloaded “Honey” by Caribou.",
+        "Downloaded “Honey” and “Caribou - Honey”.",
+        "“Honey” is done.",
+    ],
+)
+def test_a_reply_that_calls_a_queued_job_done_is_respoken(first: str) -> None:
+    chat, seen = _scripted(first, "Queued “Honey”; it's on its way.")
+    narration = narrator.narrate("download it", None, [_music_album()], surface=None, chat=chat)
+    assert (narration.reply, narration.path) == ("Queued “Honey”; it's on its way.", "respoken")
+    assert "only queued" in seen[1][-1]["content"]
+
+
+def test_a_reply_that_still_calls_it_done_loses_that_sentence_for_codes() -> None:
+    chat, _ = _scripted("Downloaded “Honey”.", "All done: “Honey” downloaded.")
+    narration = narrator.narrate("download it", None, [_music_album()], surface=None, chat=chat)
+    assert narration.path == "appended"
+    reply = narration.reply or ""
+    assert "ownloaded" not in reply and "done" not in reply.lower().replace("not done", "")
+    assert reply == "For the record: queued “Honey”."
+
+
+def test_a_running_job_is_said_as_started_and_hedged_words_are_left_alone() -> None:
+    chat, seen = _scripted("“Honey” is downloading now; it will be downloaded in a few minutes.")
+    narration = narrator.narrate(
+        "download it", None, [_music_album("working")], surface=None, chat=chat
+    )
+    assert narration.path == "narrated" and len(seen) == 1
+    assert _receipt(seen[0])[0]["did"][0]["action"].startswith("started")
+
+
+def test_a_reply_that_names_a_queued_job_without_its_state_gets_it_appended() -> None:
+    chat, _ = _scripted("Got “Honey” for you.", "Got “Honey” for you.")
+    narration = narrator.narrate("download it", None, [_music_album()], surface=None, chat=chat)
+    assert (
+        narration.reply == "Got “Honey” for you. For the record: “Honey” is queued, not done yet."
+    )
+
+
+def test_a_finished_job_and_a_job_named_only_by_its_query_are_as_before() -> None:
+    done = _music_album("completed")
+    chat, _ = _scripted("Downloaded “Honey”.")
+    assert narrator.narrate("x", None, [done], surface=None, chat=chat).path == "narrated"
+    # A playlist's job is its only ref (the contract's example): it is named.
+    playlist = ToolCallRecord(
+        tool="ask_music",
+        arguments={},
+        result="ok",
+        app_record=[
+            {
+                "tool": "download_playlist",
+                "outcome": "done",
+                "touched": [{"app": "music", "kind": "download_job", "id": "112",
+                             "title": "Late Night Drive", "untrusted": True}],
+                "job": {"ref": "112", "status": "submitted", "done": 0, "total": None},
+            }
+        ],
+    )  # fmt: skip
+    chat, seen = _scripted("Queued “Late Night Drive”.")
+    narrator.narrate("x", None, [playlist], surface=None, chat=chat)
+    assert _receipt(seen[0])[0]["did"][0]["items"][0]["title"] == "Late Night Drive"

@@ -10,6 +10,7 @@ couldn't run gets one more repair, then code's question or honest line.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -1537,6 +1538,31 @@ def test_a_lost_ref_gets_the_repair(fleet: Fleet) -> None:
     assert _problems(named, fleet) == []  # a name the person said is no lost ref
 
 
+@pytest.mark.parametrize(
+    ("first", "later", "lost"),
+    [
+        # #188: S15/S15p's misses, a compound or possessive ask and a task with no ref.
+        ("download the other album by Caribou, if it isn't queued yet", "add a task to sort the other album by Caribou this weekend", True),
+        ("download the other album by Caribou and let me know which one", "add a task to sort the other Caribou album", True),
+        ("download the person's other album", "add a task to sort the other album this weekend", True),
+        ("download the new Caribou album and save it to the house folder", "sort the new Caribou album on Monday", True),
+        # An ask for several of them: the later step picks one, no single ref names it.
+        ("download the new albums from Bonobo and Caribou", "sort the new Bonobo album on Saturday", False),
+        ("download the new Bonobo album and the new Caribou album", "sort the new Bonobo album on Saturday", False),
+        ("download the new albums by Bonobo, Caribou and Four Tet", "sort the Caribou album on Sunday", False),
+        # A name the later step says itself, or the ref written.
+        ("download the other album by Caribou, and queue it", "add a task to sort Suddenly", False),
+        ("download the other album by Caribou, and queue it", "add a task to sort {s1}", False),
+    ],
+)  # fmt: skip
+def test_a_compound_ask_no_longer_hides_a_lost_ref(
+    fleet: Fleet, first: str, later: str, lost: bool
+) -> None:
+    found = _problems(steps(ask("music", first), ask("tasks", later)), fleet)
+    lost_refs = [p for p in found if "which only s1 will find out" in p]
+    assert bool(lost_refs) is lost, found
+
+
 def test_an_ask_carrying_another_apps_work_gets_the_split_repair(fleet: Fleet) -> None:
     # S15's miss (#127): one ask to music with the task in it.
     for mixed in (
@@ -1713,6 +1739,15 @@ def test_a_question_spoken_keeps_the_list_and_the_question() -> None:
         ("Found 3. Which one?", [{"tool": "l", "outcome": "looked_up"}], False, False),
         ("No such album, so nothing was queued.", [{"tool": "d", "outcome": "refused"}], False, True),
         ("The library has 7 songs.", [], False, False),  # an answer, not a question
+        # #189: real music asks for details with no question mark.
+        ("Please tell me the artist and the album title you would like to download.", [], True, False),
+        ("I need a bit more. Let me know which album you mean.", [], True, False),
+        ("Which one would you like me to queue.", [], True, False),
+        ("Could you tell me the artist", [], True, False),
+        ("Nothing to do. Let me know if you need anything else.", [], False, False),
+        ("Tell me more about your day, it was fun.", [{"tool": "l", "outcome": "looked_up"}], False, False),
+        # A refusal said why it stopped: only a real question pauses there.
+        ("No such album. Please tell me the artist.", [{"tool": "d", "outcome": "refused"}], False, True),
     ],
 )  # fmt: skip
 def test_what_counts_as_an_app_asking_or_turning_down_its_part(
@@ -1724,6 +1759,36 @@ def test_what_counts_as_an_app_asking_or_turning_down_its_part(
     call = ToolCallRecord(tool="ask_music", arguments={}, result=result, app_record=record)
     assert (narrator.app_asks(call) is not None) is asks
     assert narrator.app_declined(call) is declined
+
+
+def test_an_apps_request_for_details_without_a_question_mark_pauses_the_plan(
+    run_with: Any, fleet: Fleet, world: World, db_session: Session
+) -> None:
+    # #189: music ran nothing and asked in words, as the browser check saw it.
+
+    asked = (
+        "The agent's note (its reading of the results, not a record): \"Please tell me the "
+        'artist and the album title you would like to download."'
+    )
+
+    def send(app_name: str, original: Any, *args: Any, **kwargs: Any) -> Any:
+        exchange = original(*args, **kwargs)
+        if app_name == "music":
+            exchange.assistant_message.content = asked
+            exchange.assistant_message.record = []
+        return exchange
+
+    build_delegate_tools(fleet, _wrapped(world, send))
+    plan = steps(
+        ask("music", "download an album"), ask("tasks", "add a task to sort {s1} this weekend")
+    )
+    reply = run_with(ScriptedProvider([plan_turn(plan)]), "download an album")
+    compiled = _plans(db_session)[-1]
+    assert (compiled.status, compiled.pause, compiled.resume_at) == ("paused", "app_question", 0)
+    assert reply["content"] == (
+        "Music asks: “Please tell me the artist and the album title you would like to download.”"
+    )
+    assert not [w for w in world.writes() if w.kind == "create"]  # the task waits
 
 
 def test_an_app_that_turns_down_its_part_ends_the_plan(
@@ -1838,3 +1903,74 @@ def test_an_apps_question_is_read_from_its_agents_note_after_a_long_record() -> 
         "albums by Caribou: Suddenly (2020) and Swim (2010). Which one would you like, or do "
         "you have a link?"
     )
+
+
+# --- #186: the budget repair merges only an app's own asks ----------------------------------
+
+
+@pytest.fixture
+def examples_fleet(tmp_path: Path) -> Fleet:
+    """The fixture fleet with the real manifests' examples for tasks and music."""
+    root = write_fixture_fleet(tmp_path / "fleet")
+    for directory, examples in (
+        ("project-command-center", ["what's due today", "mark the groceries task done"]),
+        ("music", ["download this song", "sort my music", "organize my library into folders"]),
+    ):
+        path = root / directory / "app.yaml"
+        text = path.read_text(encoding="utf-8")
+        listed = ", ".join(json.dumps(example) for example in examples)
+        path.write_text(re.sub(r"examples: \[[^\]]*\]", f"examples: [{listed}]", text, count=1))
+    return discover_fleet(root)
+
+
+_CLEANUP = (
+    ask("tasks", "trash the groceries task", destructive=True),
+    ask("tasks", "mark fix the drawer done"),
+    ask("tasks", "move paint cabinets to Sunday"),
+)
+
+
+def test_an_ask_that_is_another_apps_listed_work_goes_back_to_that_app(
+    examples_fleet: Fleet,
+) -> None:
+    # long-cleanup's miss: four asks to tasks, one of them music's own example.
+    over = steps(*_CLEANUP, ask("tasks", "sort my music"), {"do": "cancel", "target": "job 17"})
+    (objection,) = _problems(over, examples_fleet)
+    assert objection.startswith('s4 asks tasks to "sort my music", which is music\'s work')
+    assert "ask music for it in its own step" in objection
+    # Not "4 asks to tasks": merging s4 in would keep the misroute.
+    assert "at most 3 per turn" not in objection
+    # The budget repair's merge, misroute kept: split back out.
+    merged = steps(
+        ask(
+            "tasks",
+            "trash the groceries task, mark fix the drawer done, move paint cabinets to Sunday, "
+            "and sort my music",
+            destructive=True,
+        ),
+        {"do": "cancel", "target": "job 17"},
+    )
+    (objection,) = _problems(merged, examples_fleet)
+    assert objection.startswith('s1 asks tasks to "sort my music", which is music\'s work')
+    routed = steps(*_CLEANUP, ask("music", "sort my music"), {"do": "cancel", "target": "job 17"})
+    assert _problems(routed, examples_fleet) == []
+
+
+def test_an_app_over_its_budget_on_its_own_work_still_merges(examples_fleet: Fleet) -> None:
+    over = steps(*_CLEANUP, ask("tasks", "add a task to call the plumber"))
+    (objection,) = _problems(over, examples_fleet)
+    assert objection.startswith("4 asks to tasks; at most 3 per turn")
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        "remind me to sort my music on Sunday",
+        "add a task to sort my music",
+        "sort my music folder notes into the house project",
+    ],
+)
+def test_naming_another_apps_work_inside_a_task_is_no_misroute(
+    examples_fleet: Fleet, request_: str
+) -> None:
+    assert _problems(steps(ask("tasks", request_)), examples_fleet) == []

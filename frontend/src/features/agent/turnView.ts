@@ -227,6 +227,12 @@ export function streamSteps(stream: TurnStream): ShellTurn['steps'] {
     }
     return { ...stepFrom({ tool: step.tool ?? '', arguments: step.arguments ?? {}, error: null }, false), state: 'run' as const }
   })
+  // An app that did nothing and asked the person instead (#168, #189): its
+  // ask is the last step that landed, and it waits on the answer, not done.
+  const last = steps.length - 1
+  if (stream.paused?.reason === 'app_question' && last >= 0 && steps[last].state === 'done') {
+    steps[last] = { ...steps[last], state: 'wait' as const }
+  }
   const paused = stream.paused && stream.paused.reason !== 'app_confirm' ? stream.paused.step : null
   const values = refValues(stream)
   return [...steps, ...queuedPlanSteps(stream).map((step) => queuedFrom(step, step.id === paused, values))]
