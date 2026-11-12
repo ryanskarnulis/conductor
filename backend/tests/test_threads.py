@@ -25,7 +25,9 @@ from app.api import routes_threads
 from app.db.models import (
     Conversation,
     ConversationKind,
+    LedgerPlan,
     LedgerReceipt,
+    LedgerStep,
     LedgerTurn,
     MemoryFact,
 )
@@ -272,17 +274,43 @@ def test_a_thread_that_did_nothing_says_so_without_a_model(timeline: Timeline) -
     assert provider.requests == []
 
 
-def test_a_thread_whose_only_turn_failed_says_the_app_was_unreachable() -> None:
-    failed = {"app": "music", "tool": "ask", "outcome": "failed"}
-    end = ThreadEnd(title="Album", entries=[failed, failed])
-    note = thread_note.thread_note(end, surface=None, chat=None)
-    assert (
-        note.reply
-        == "Side thread “Album” closed. Could not reach music, so nothing was done there."
+def test_a_thread_whose_only_turn_failed_names_the_app_that_did_not_answer(
+    timeline: Timeline,  # noqa: F811
+) -> None:
+    """A failed ask leaves a step and no receipt (#189)."""
+    thread = _start(timeline.client, title="Album")
+    _task(_in_thread(timeline, thread["id"]))
+    db = timeline.db
+    with db.no_autoflush:
+        step = db.execute(
+            select(LedgerStep)
+            .join(LedgerPlan, LedgerPlan.id == LedgerStep.plan_id)
+            .join(LedgerTurn, LedgerTurn.id == LedgerPlan.turn_id)
+            .where(LedgerTurn.conversation_id == thread["id"], LedgerStep.app == "tasks")
+        ).scalar_one()
+        step.outcome, step.result, step.error = "failed", None, "tasks didn't answer"
+        for receipt in db.execute(
+            select(LedgerReceipt).where(LedgerReceipt.step_id == step.id)
+        ).scalars():
+            for touch in list(receipt.touched):
+                db.delete(touch)
+            db.flush()
+            db.delete(receipt)
+        db.commit()
+    provider = _narrator("should never be read")
+    closed = _close(timeline.client, thread["id"])
+    assert closed["message"]["content"] == (
+        "Side thread “Album” closed. tasks didn't answer, so nothing was done there."
     )
-    assert note.path == "fallback"
-    mixed = ThreadEnd(title="Album", entries=[failed, {"app": "tasks", "outcome": "done"}])
-    assert mixed.did_anything
+    assert provider.requests == []
+
+
+def test_the_failed_line_joins_several_apps() -> None:
+    end = ThreadEnd(title="Album", failed=["music", "tasks"])
+    assert not end.did_anything
+    assert thread_note.fallback(end, None) == (
+        "Side thread “Album” closed. music and tasks didn't answer, so nothing was done there."
+    )
 
 
 def test_a_closed_thread_is_found_by_timeline_search_as_its_note(timeline: Timeline) -> None:  # noqa: F811

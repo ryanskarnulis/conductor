@@ -65,25 +65,25 @@ class ThreadEnd:
     ``entries`` are receipt entries in the v1.1 record's shape (``app``,
     ``tool``, ``outcome``, ``touched``, ``count``, ``untrusted``, ``reason``),
     oldest first. ``running`` are its jobs still going, as ``(app, title,
-    untrusted)``."""
+    untrusted)``. ``failed`` are the apps that didn't answer, once each."""
 
     title: str
     entries: list[dict[str, Any]] = field(default_factory=list)
     running: list[tuple[str, str | None, bool]] = field(default_factory=list)
+    # Apps whose step failed with nothing to show for it (#189): a failed ask
+    # leaves a step row and no receipt, so it never reaches ``entries``.
+    failed: list[str] = field(default_factory=list)
 
     @property
     def did_anything(self) -> bool:
-        return bool(self.running or any(e.get("outcome") != "failed" for e in self.entries))
+        return bool(self.entries or self.running)
 
-    @property
-    def failed_apps(self) -> list[str]:
-        """Apps whose turn failed (it was unavailable), once each, in order."""
-        apps: list[str] = []
-        for entry in self.entries:
-            app = str(entry.get("app") or "the app")
-            if entry.get("outcome") == "failed" and app not in apps:
-                apps.append(app)
-        return apps
+
+def narrator_join(names: list[str]) -> str:
+    """ "music", "music and tasks", "music, tasks and chess"."""
+    if len(names) < 3:
+        return " and ".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def thread_note(end: ThreadEnd, *, surface: str | None, chat: Chat | None) -> Narration:
@@ -112,10 +112,9 @@ def fallback(end: ThreadEnd, surface: str | None) -> str:
     """Code's note: the thread by name and only what its receipts say."""
     subject = f"Side thread {_name(end)}"
     if not end.did_anything:
-        failed = end.failed_apps
-        if failed:
-            names = " and ".join(failed) if len(failed) < 3 else ", ".join(failed)
-            text = f"{subject} closed. Could not reach {names}, so nothing was done there."
+        if end.failed:
+            names = narrator_join(end.failed)
+            text = f"{subject} closed. {names} didn't answer, so nothing was done there."
         else:
             text = f"{subject} closed. Nothing was changed or found there."
     else:
