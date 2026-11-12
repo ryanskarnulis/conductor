@@ -868,6 +868,51 @@ def forgets_by_control(plan: Plan, words: str, checks: Checks) -> list[str]:
     ]
 
 
+# Their words name a thing by what it isn't yet ("their other album", "another
+# song", "the next record"): nothing ever called it that, so only an app can find it.
+_NOT_YET_NAMED = re.compile(
+    r"\b(?:other|another|next)\s+(?:[\w'’]+\s+){0,2}?" + _NOUNS + r"\b", re.IGNORECASE
+)
+
+
+def recalls_unnamed(plan: Plan, words: str) -> list[str]:
+    """A recall feeding a later ask, for a thing the person's words name only
+    as "the other one" (#168: S15's "do the same for their other album",
+    recall first in 9 of 20 sessions). A recall finds what was said or done
+    before, never one not had yet: it names nothing (the ask then doesn't
+    run) or names the very album the words exclude, which went to music as a
+    title and was queued again. The repair asks the app directly, as the
+    lost-ref repair words it."""
+    if not isinstance(plan, StepPlan):
+        return []
+    named = _NOT_YET_NAMED.search(words)
+    if named is None:
+        return []
+    for n, step in enumerate(plan.steps):
+        # A memory ask is the same lookup ("what other album did I mention?").
+        if not isinstance(step, Recall) and not (isinstance(step, Ask) and step.app == MEMORY_APP):
+            continue
+        feeds = next(
+            (
+                later
+                for later in plan.steps[n + 1 :]
+                if isinstance(later, Ask) and f"{{{step.id}" in later.request
+            ),
+            None,
+        )
+        if feeds is None:
+            continue
+        noun = named.group("noun").lower()
+        return [
+            f'{step.id} looks up "{named.group(0)}", but nothing ever named it: a recall or '
+            f"memory finds only what was said or done before, never one they don't have yet. "
+            f"Leave {step.id} out and ask {feeds.app} for it directly, writing the artist or title State "
+            f'names, like "the other {noun} by <the artist in State>"; a later step writes '
+            f"{{sN}} for what that ask finds"
+        ]
+    return []
+
+
 def looked_up_fact(plan: Plan, words: str, context: str) -> list[str]:
     """A plan that first looks up a saved fact State already lists, to feed
     another app's ask ("add a task for my music sorting day": recall or ask
@@ -1008,7 +1053,8 @@ def step_text(step: BaseModel) -> str:
 
 
 # ``proposal``: a think's proposal (#78), posted as its job's note; a yes runs it.
-PauseReason = Literal["ask_user", "gate", "app_confirm", "proposal"]
+# ``app_question``: an app that did nothing asked the person something (#168).
+PauseReason = Literal["ask_user", "gate", "app_confirm", "app_question", "proposal"]
 # ``invalid``: no plan code could run, even after the repairs; code answered
 # (#75). Old rows may also say ``fell_back`` (the loop took the turn).
 PlanStatus = Literal["ran", "answered", "paused", "invalid"]

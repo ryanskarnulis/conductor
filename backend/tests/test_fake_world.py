@@ -153,24 +153,46 @@ def test_one_album_by_an_artist_resolves_without_naming_it(world: World) -> None
     assert entry.touched[0].title == "Kind of Blue"
 
 
-@pytest.mark.parametrize(
-    "message",
-    [
-        "download the Caribou album",
-        "download the other album by Caribou",
-        "download Caribou's other album",
-        "download another Caribou album",
-    ],
+_ARTIST_ALONE = (
+    "download the Caribou album",
+    "download the new Caribou album",
+    "download the other album by Caribou",
+    "download Caribou's other album",
+    "download another Caribou album",
 )
-def test_music_cannot_resolve_one_album_so_it_writes_and_touches_nothing(
+
+
+# music#102: with no title, ``download_album`` is the artist's newest studio
+# album, whatever the words around it say ("new", "other"); music has no idea
+# which album is "the other", so a fresh ask for one still queues the newest.
+@pytest.mark.parametrize("message", _ARTIST_ALONE)
+def test_the_artist_alone_is_their_newest_album(world: World, message: str) -> None:
+    [entry] = _music_record(world, message)
+    assert entry.outcome == "done" and entry.touched[0].title == "Honey"
+
+
+# Asked again with the artist alone once the newest is held, music refuses:
+# nothing queued, a ``refused`` entry with no ref, its reason (outside text)
+# listing the other albums as ``Title (year)``, and its agent asks which one.
+@pytest.mark.parametrize("message", _ARTIST_ALONE)
+def test_the_artist_alone_again_is_refused_with_the_others_listed(
     world: World, message: str
 ) -> None:
-    app = MusicApp(world)
-    reply = app.handle(1, message)
-    assert world.receipts == [] and world.jobs == {}
-    # It names the candidates (all of them: it doesn't know which is "other").
-    assert all(title in reply.text for title in ("Honey", "Suddenly", "Swim")) and "?" in reply.text
-    assert _music_record(World(THURSDAY), message) == []
+    _music_record(world, "download the new Caribou album")
+    [entry] = _music_record(world, message)
+    assert [r.title for r in world.receipts] == ["Honey"] and len(world.jobs) == 1
+    assert (entry.tool, entry.outcome, entry.touched, entry.job) == (
+        "download_album",
+        "refused",
+        [],
+        None,
+    )
+    assert entry.untrusted is True
+    assert entry.reason is not None and entry.reason.startswith(
+        "Honey (2024) by Caribou was already asked for, so nothing was queued. "
+        "MusicBrainz lists these other albums by Caribou: Suddenly (2020); Swim (2010)."
+    )
+    assert len(entry.reason) <= 160
 
 
 def test_music_does_not_know_what_other_means(world: World) -> None:
@@ -179,6 +201,32 @@ def test_music_does_not_know_what_other_means(world: World) -> None:
     reply = app.handle(1, "download the other album by Caribou")
     assert [r.title for r in world.receipts] == ["Honey"]  # nothing queued for "other"
     assert "Suddenly" in reply.text and "Swim" in reply.text and "?" in reply.text
+    [call] = reply.tools
+    assert call.tool == "download_album" and call.result is None and call.error
+
+
+def test_a_title_is_never_second_guessed_and_the_last_album_is_still_named(
+    world: World,
+) -> None:
+    app = MusicApp(world)
+    app.handle(1, "download the new Caribou album")
+    app.handle(1, "download Honey by Caribou")  # a title queues, held or not
+    app.handle(1, "download Suddenly by Caribou")
+    reply = app.handle(1, "download the other album by Caribou")
+    assert [r.title for r in world.receipts] == ["Honey", "Honey", "Suddenly"]
+    # One album left: still the person's to name, never queued for them.
+    assert "Swim (2010)" in reply.text and reply.found[0].outcome == "refused"
+    app.handle(1, "download Swim by Caribou")
+    reply = app.handle(1, "download the other album by Caribou")
+    assert reply.found[0].reason is not None and "no other studio album" in reply.found[0].reason
+
+
+def test_a_cancelled_album_job_holds_nothing(world: World) -> None:
+    app = MusicApp(world)
+    app.handle(1, "download the new Caribou album")
+    world.job_cancel("1")
+    app.handle(1, "download the new Caribou album")
+    assert [r.title for r in world.receipts if r.kind == "queue"] == ["Honey", "Honey"]
 
 
 def test_music_with_no_artist_asks_for_a_link(world: World) -> None:

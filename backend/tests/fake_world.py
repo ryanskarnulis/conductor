@@ -298,6 +298,19 @@ class Job:
 
 # The two playlist tracks that never match (S4): titles from outside.
 PLAYLIST_MISSES = ("Lost Signal", "Paper Moons")
+# Music's limits on a refused album lookup (music ``albums.MAX_CANDIDATES``,
+# ``run_record._MAX_FIELD_CHARS``): at most three albums listed, and the
+# record's ``reason`` cut to 160 characters, so a long list can lose its end.
+MUSIC_MAX_CANDIDATES = 3
+MUSIC_FIELD_CHARS = 160
+
+
+def _music_clip(text: str) -> str:
+    """Music's ``run_record.clip``: whitespace flattened, cut with an ellipsis."""
+    text = " ".join(text.split())
+    return text if len(text) <= MUSIC_FIELD_CHARS else text[: MUSIC_FIELD_CHARS - 1] + "…"
+
+
 # The jobs contract's words for the world's job states (delegate-api "Jobs").
 _JOB_STATUS = {"queued": "working", "finished": "completed", "cancelled": "canceled"}
 
@@ -547,6 +560,13 @@ class World:
             "untrusted": True,
             "reason": f"{job.failed} tracks couldn't be downloaded" if job.failed else None,
             "record": record,
+        }
+
+    def held_album_ids(self) -> set[str]:
+        """The albums music already has (music#102's ``jobs.held_album_ids``):
+        a queued or finished album job's; a cancelled one holds nothing."""
+        return {
+            job.album_id for job in self.jobs.values() if job.album_id and job.state != "cancelled"
         }
 
     def job_cancel(self, ref: str) -> dict[str, Any] | None:
@@ -953,6 +973,10 @@ class MusicApp:
     def handle(self, thread: int, message: str) -> AppReply:
         message, _ = split_context(message)
         text = message.lower()
+        if re.match(r"\s*(?:please\s+)?(?:download|queue|fetch|rip)\b", text):
+            # A request that opens with a download is one, whatever the title
+            # it carries says ("download the album “sort Honey”").
+            return self._download(message)
         if re.search(r"\b(how are|status|progress|how's|how is)\b.*\bdownload", text):
             return self._status()
         if re.search(r"\b(need|needs|still|left|unsorted)\b.*\bsort", text) or re.search(
@@ -1075,30 +1099,80 @@ class MusicApp:
                 ):
                     return self._add_song(Song(0, track, album.artist, album.title, album.genre))
         artist_albums = [a for a in self.world.catalog if a.artist.lower() in text]
+        # A quoted title (conductor passes names on quoted) is matched whole,
+        # as music's lookup matches a title; bare words match a title in them.
+        quoted = {q.strip().lower() for q in re.findall(r"[“\"]([^”\"]+)[”\"]", message)}
         named = [
-            a for a in self.world.catalog if re.search(rf"\b{re.escape(a.title.lower())}\b", text)
+            a
+            for a in self.world.catalog
+            if (a.title.lower() in quoted)
+            or (not quoted and re.search(rf"\b{re.escape(a.title.lower())}\b", text))
         ]
-        # What real music (MusicBrainz, no conversation) can resolve to one
-        # album: a title it was given, the newest of an artist's, or an artist
-        # with just one. It has no idea which album is "the other": it doesn't
-        # know what the person already has or means, so it names the candidates.
+        if quoted and not named and not artist_albums:
+            return AppReply("I couldn't find that. Give me a link, or the artist and title.")
+        # Real music's ``download_album(artist, album=None)`` (music#96, #102):
+        # a title it was given names its album, held or not; the artist alone
+        # is their newest studio album ("the new album" and "the other album"
+        # are the same call), unless music already has that one, and then it
+        # refuses and lists the others, for the person to pick.
         if len(named) == 1:
             album = named[0]
-        elif len(artist_albums) == 1:
-            album = artist_albums[0]
-        elif artist_albums and re.search(r"\b(new|newest|latest|recent)\b", text):
-            album = max(artist_albums, key=lambda a: a.year)
         elif artist_albums:
-            titles = ", ".join(f"{a.title} ({a.year})" for a in artist_albums)
-            return AppReply(
-                f"Which album? I found these by {artist_albums[0].artist}: {titles}. "
-                "Nothing queued; tell me which, or send a link."
-            )
+            album = max(artist_albums, key=lambda a: a.year)
+            if album.mbid in self.world.held_album_ids():
+                return self._album_held(album, artist_albums)
         else:
             return AppReply("I couldn't find that. Give me a link, or the artist and title.")
         return self._queue_job(
             "album", album.title, len(album.tracks), artist=album.artist, album_id=album.mbid
         )
+
+    def _album_held(self, album: Album, artist_albums: list[Album]) -> AppReply:
+        """Music's refusal for an artist-alone ask whose newest album is held
+        (music#102's ``_album_refusal``): nothing queued, a ``refused`` entry
+        with no ref, flagged as outside text, its reason listing the artist's
+        other studio albums not held, newest first, at most three, cut to
+        music's record field length. Its agent then asks which one."""
+        held = self.world.held_album_ids()
+        others = sorted(
+            (a for a in artist_albums if a.mbid not in held), key=lambda a: a.year, reverse=True
+        )[:MUSIC_MAX_CANDIDATES]
+        have = f"{album.title} ({album.year}) by {album.artist}"
+        if others:
+            listed = "; ".join(f"{a.title} ({a.year})" for a in others)
+            error = (
+                f"{have} was already asked for, so nothing was queued. "
+                f"MusicBrainz lists these other albums by {album.artist}: {listed}."
+            )
+            next_step = (
+                "Say it was already asked for, name the other albums listed, "
+                "ask which one or for a link, and queue nothing"
+            )
+            text = (
+                f"{album.title} was already asked for, so I didn't queue it again. "
+                f"MusicBrainz lists these other albums by {album.artist}: {listed}. "
+                "Which one do you want, or do you have a link?"
+            )
+        else:
+            error = (
+                f"{have} was already asked for, so nothing was queued. "
+                f"MusicBrainz lists no other studio album by {album.artist}."
+            )
+            next_step = "Say it was already asked for and there is no other album"
+            text = (
+                f"{album.title} was already asked for, and MusicBrainz lists no other "
+                f"studio album by {album.artist}."
+            )
+        self.world.read("music", "albums")
+        stored = f"{error.rstrip('.')}. {next_step}."
+        call = ToolCallRead(tool="download_album", arguments={"artist": album.artist}, error=stored)
+        refused = RecordEntry(
+            tool="download_album",
+            outcome="refused",
+            reason=_music_clip(stored),
+            untrusted=True,
+        )
+        return AppReply(text, [call], found=[refused])
 
     def _queue_job(self, kind: str, title: str, total: int, **detail: Any) -> AppReply:
         job = Job(len(self.world.jobs) + 1, kind, title, total, album_id=detail.get("album_id"))

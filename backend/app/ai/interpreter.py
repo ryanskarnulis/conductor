@@ -92,6 +92,7 @@ import structlog
 from app import clock
 from app.ai import (
     compiler,
+    confirmation,
     control,
     dataflow,
     facts,
@@ -147,6 +148,9 @@ _AFTER_FAILURE = f"{run_record.NOT_RUN_PREFIX}an earlier step of the plan didn't
 _AFTER_THINK = (
     f"{run_record.NOT_RUN_PREFIX}nothing runs after handing a problem to the thinking model"
 )
+# How the person's answer to an app's question rides after the step that asked
+# it, when the paused plan resumes (#168).
+APP_ANSWER_LEAD = "the person's answer to your question"
 _THINK_OFF = f"{run_record.NOT_RUN_PREFIX}the thinking model is switched off here"
 # The rest of a plan whose control step ran first (#75), when it can't go on.
 _WAITS_ON_QUESTION = f"{run_record.NOT_RUN_PREFIX}the question before it needs your answer first"
@@ -325,7 +329,7 @@ class Interpreter:
             fleet=self._fleet,
             calls_per_app=current_delegation_context().calls_per_turn_per_app,
             confirmable=pending is not None or gate is not None,
-            resumable=paused is not None and paused.reason == "ask_user",
+            resumable=paused is not None and paused.reason in ("ask_user", "app_question"),
             context=state.context or "",
         )
         rt.emit(state.on_activity, Activity(kind="model"))
@@ -364,6 +368,8 @@ class Interpreter:
             return self._answer(state, plan, self_facts)
         if isinstance(plan, plans.Resume):
             assert paused is not None  # the validator only allows a resume while paused
+            if paused.reason == "app_question":
+                return self._resume_app_question(state, turn, paused)
             resumed = plans.load(paused.body)
             assert isinstance(resumed, plans.StepPlan)
             turn.body = paused.body
@@ -739,6 +745,18 @@ class Interpreter:
                 turn.note = f"stopped after {step.id}"
                 return self._finish(state, turn, steps[index + 1 :])
             self._keep(state, values, step, record)
+            if isinstance(step, plans.Ask) and narrator.app_asks(record) is not None:
+                # The app asked the person (#168): the plan waits on their
+                # answer, which goes back to the same step.
+                return self._app_questioned(state, turn, position, step, values)
+            if narrator.app_declined(record):
+                # It turned its part down: what follows would run on a guess.
+                owner = confirmation.record_app(record.tool, record.arguments) or "the app"
+                why = f"{owner} turned down its part"
+                turn.note = f"stopped after {step.id}: {why}"
+                return self._finish(
+                    state, turn, steps[index + 1 :], run_record.NOT_RUN_PREFIX + why
+                )
             index += 1
         return self._finish(state, turn, [])
 
@@ -811,6 +829,47 @@ class Interpreter:
             self._carry(turn, resume_at, values)
             state.dropped = []  # still in the paused plan: said when it gets there
         return self._finish(state, turn, [])
+
+    def _app_questioned(
+        self,
+        state: _Run,
+        turn: TurnPlan,
+        position: int,
+        step: plans.Ask,
+        values: dict[str, dataflow.Value],
+    ) -> AgentRunResult:
+        """An app that did nothing asked the person something (#168: music
+        naming the albums to pick from). The plan pauses at that step, the
+        rest unrun and unsaid; the next turn's resume sends the person's
+        answer back to it and goes on (:meth:`_resume_app_question`). The
+        reply is the app's question in its own words (``narrator``)."""
+        question = narrator.app_asks(state.records[-1])
+        turn_events.paused("app_question", question=question, app=step.app, step=step.id)
+        turn.status, turn.pause = "paused", "app_question"
+        turn.resume_at, turn.pause_app = position, step.app
+        turn.note = f"{step.id} waits on the person: {step.app} asked"
+        self._carry(turn, position, values)
+        state.dropped = []  # still in the paused plan: said when it gets there
+        return self._finish(state, turn, [])
+
+    def _resume_app_question(
+        self, state: _Run, turn: TurnPlan, paused: PausedPlan
+    ) -> AgentRunResult:
+        """The person answered an app's question (#168): the step that asked
+        goes to the app again with their answer, in their own words (trusted),
+        after its request; the rest of the plan follows."""
+        resumed = plans.load(paused.body)
+        assert isinstance(resumed, plans.StepPlan)
+        steps = list(resumed.steps)
+        asked = steps[paused.resume_at]
+        assert isinstance(asked, plans.Ask)
+        answer = dataflow.answer(state.words).text
+        steps[paused.resume_at] = asked.model_copy(
+            update={"request": f"{asked.request} ({APP_ANSWER_LEAD}: {answer})"}
+        )
+        turn.body = {**paused.body, "steps": [step.model_dump() for step in steps]}
+        turn_events.resumed("app_question", step=asked.id, answer=answer)
+        return self._execute(state, turn, steps[paused.resume_at :], paused.resume_at, {})
 
     def _think_unplanned(self, state: _Run, compiled: compiler.Compiled) -> AgentRunResult:
         """A request no round could shape into a plan (#146): the person's own
@@ -912,10 +971,16 @@ class Interpreter:
         logger.info("plan_step_refused", step=step.id, reason=refusal)
         return self._finish(state, turn, steps[index + 1 :])
 
-    def _finish(self, state: _Run, turn: TurnPlan, unrun: Sequence[plans.Step]) -> AgentRunResult:
+    def _finish(
+        self,
+        state: _Run,
+        turn: TurnPlan,
+        unrun: Sequence[plans.Step],
+        why: str = _AFTER_FAILURE,
+    ) -> AgentRunResult:
         """End the plan: what didn't run goes on the record with why, then the
         narrator speaks from this plan's records (a stopped turn: the record)."""
-        self._skip(unrun, state, _AFTER_FAILURE)
+        self._skip(unrun, state, why)
         self._skip(state.dropped, state, _AFTER_THINK)
         state.dropped = []
         if _stopped(state.stop):

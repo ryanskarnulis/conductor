@@ -256,6 +256,44 @@ _PENDING = (
     "(pending plan p7, step s1, ref pending:p7)"
 )
 
+# S15's second turn as the session evals (and real music since music#99) leave
+# it (#168): no "Last plan" line, the album only as a recent entity and in the
+# record of this conversation's turns; captured from the scripted S15 and
+# moved to this file's Thursday.
+_S15_TURN2 = "\n".join(
+    [
+        _HEADER,
+        *calendar_lines(_TODAY),
+        "Surface: desktop (the person reads your reply on a screen).",
+        "Running jobs (as of each one's last report):",
+        "- music job 1, “Honey” (outside text): submitted, 0 of 4 done",
+        "Recent entities (newest first, as of then):",
+        "- tasks task 13: sort Honey",
+        '- music album afeac68b-955f-542c-87c5-d9eb84a4da05: "Honey" (outside text)',
+        "- music download_job 1: album download",
+        "[End of state]",
+        "",
+        "Before this turn:",
+        "",
+        "The record of earlier turns in this conversation (what the apps did and answered "
+        "then, oldest first; an answer is as of then, not now):",
+        '- ask_music {"message":"download the new Caribou album"} -> Queued the album '
+        '"Honey" by Caribou: 4 tracks, job 1. I\'ll have it in a few minutes. [music did: '
+        'queue_download] [touched: album afeac68b-955f-542c-87c5-d9eb84a4da05 "Honey" '
+        '(outside text), download_job album download] (asked: "download the new Caribou '
+        'album and add a task to sort it this weekend")',
+        '- ask_tasks {"message":"add a task to sort \\u201cHoney\\u201d this weekend"} -> '
+        'Created task "sort Honey" (#13) in Inbox, due 2026-11-07. [tasks did: create_task] '
+        '[touched: task sort Honey] (asked: "download the new Caribou album and add a task '
+        'to sort it this weekend")',
+        "",
+        "The last exchange:",
+        'The person said: "download the new Caribou album and add a task to sort it this weekend"',
+        'What you said then (your words, not a record): "Queued “Honey” by Caribou and '
+        'added “sort Honey” for the weekend. Say undo to move it to the trash."',
+    ]
+)
+
 CASES: tuple[Case, ...] = (
     # --- the routing goldens, as plans -------------------------------------------
     Case("tasks-due", "what's due today?", (one(READ_TASKS),), "golden"),
@@ -370,6 +408,21 @@ CASES: tuple[Case, ...] = (
         ),
         "cross",
         state(last=_LAST_S3, recent='album "Honey" by Caribou (music:album:55)'),
+    ),
+    # #168: the same words over the State S15 really has at turn 2. Music
+    # names the album or asks which (music#102), so the task must wait on
+    # its name ({s1}): a task with no ref, or a plan with no music step,
+    # writes a task for an album nobody chose. Asking first is fine.
+    Case(
+        "s15-turn2-as-run",
+        "do the same for their other album",
+        (
+            one(M("ask", "music", ("caribou",)), M("ask", "tasks", ref=True)),
+            one(M("ask_user")),
+            one(M("ask_user"), M("ask", "music"), M("ask", "tasks", ref=True)),
+        ),
+        "cross",
+        _S15_TURN2,
     ),
     # --- references and resolution -------------------------------------------------
     Case(

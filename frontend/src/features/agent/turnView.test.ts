@@ -371,6 +371,16 @@ describe('pauses and resumes', () => {
     expect(note('app_confirm')).toBe('You said yes to the app’s question')
   })
 
+  it('turns an app’s own question into a question you answer in words (#168)', () => {
+    const asked = landed(1, { receipts: [{ source: 'app', tool: 'download_album', outcome: 'refused', reason: 'already asked for' }] })
+    const question = 'MusicBrainz lists these other albums by Caribou: Suddenly (2020). Which one do you want?'
+    const turn = live(streamOf([['turn_started', beat], ['plan', plan], ['receipt', asked], ['paused', { reason: 'app_question', question, app: 'music', step: 's1' }]]))
+    expect(turn.pause).toEqual({ kind: 'question', question, options: [] })
+    expect(turn.steps.map((s) => s.state)).toEqual(['done', 'queued'])
+    const resumed = live(streamOf([['turn_started', beat], ['resumed', { reason: 'app_question', step: 's1', answer: 'Suddenly' }], ['plan', plan]]))
+    expect(resumed.resumedNote).toBe('Resumed the plan · you answered Suddenly')
+  })
+
   it('keeps the plan and its question on screen after the turn that paused ends', () => {
     const ended = streamOf([['turn_started', beat], ['plan', asking], ['paused', paused], ['turn_ended', { stop_reason: 'completed', message_id: 2 }]])
     const messages = [msg({ id: 1, content: 'move the dentist thing' }), msg({ id: 2, role: 'assistant', content: 'Which dentist task? (Dentist appointment / Book dentist)', stop_reason: 'completed' })]

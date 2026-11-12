@@ -231,7 +231,8 @@ export interface LivePlan {
 }
 
 export interface TurnPause {
-  reason: 'ask_user' | 'gate' | 'app_confirm'
+  /** `app_question`: an app that did nothing asked the person something (#168). */
+  reason: 'ask_user' | 'gate' | 'app_confirm' | 'app_question'
   question: string | null
   app: string | null
   step: string | null
@@ -241,7 +242,7 @@ export interface TurnPause {
  * the step it waited on (null for an app's own question); `answer` is an
  * `ask_user` answer exactly as `{s1}` will read it. */
 export interface TurnResumed {
-  reason: 'ask_user' | 'gate' | 'app_confirm' | 'proposal'
+  reason: 'ask_user' | 'gate' | 'app_confirm' | 'app_question' | 'proposal'
   step: string | null
   /** An `ask_user` answer as `{s1}` reads it: the picked option's title, or their words. */
   answer: string | null
