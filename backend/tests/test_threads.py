@@ -272,6 +272,19 @@ def test_a_thread_that_did_nothing_says_so_without_a_model(timeline: Timeline) -
     assert provider.requests == []
 
 
+def test_a_thread_whose_only_turn_failed_says_the_app_was_unreachable() -> None:
+    failed = {"app": "music", "tool": "ask", "outcome": "failed"}
+    end = ThreadEnd(title="Album", entries=[failed, failed])
+    note = thread_note.thread_note(end, surface=None, chat=None)
+    assert (
+        note.reply
+        == "Side thread “Album” closed. Could not reach music, so nothing was done there."
+    )
+    assert note.path == "fallback"
+    mixed = ThreadEnd(title="Album", entries=[failed, {"app": "tasks", "outcome": "done"}])
+    assert mixed.did_anything
+
+
 def test_a_closed_thread_is_found_by_timeline_search_as_its_note(timeline: Timeline) -> None:  # noqa: F811
     thread = _start(timeline.client, title="Garage")
     _task(_in_thread(timeline, thread["id"]))

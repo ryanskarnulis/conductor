@@ -73,7 +73,17 @@ class ThreadEnd:
 
     @property
     def did_anything(self) -> bool:
-        return bool(self.entries or self.running)
+        return bool(self.running or any(e.get("outcome") != "failed" for e in self.entries))
+
+    @property
+    def failed_apps(self) -> list[str]:
+        """Apps whose turn failed (it was unavailable), once each, in order."""
+        apps: list[str] = []
+        for entry in self.entries:
+            app = str(entry.get("app") or "the app")
+            if entry.get("outcome") == "failed" and app not in apps:
+                apps.append(app)
+        return apps
 
 
 def thread_note(end: ThreadEnd, *, surface: str | None, chat: Chat | None) -> Narration:
@@ -102,7 +112,12 @@ def fallback(end: ThreadEnd, surface: str | None) -> str:
     """Code's note: the thread by name and only what its receipts say."""
     subject = f"Side thread {_name(end)}"
     if not end.did_anything:
-        text = f"{subject} closed. Nothing was changed or found there."
+        failed = end.failed_apps
+        if failed:
+            names = " and ".join(failed) if len(failed) < 3 else ", ".join(failed)
+            text = f"{subject} closed. Could not reach {names}, so nothing was done there."
+        else:
+            text = f"{subject} closed. Nothing was changed or found there."
     else:
         said = [fact.say for fact in _facts(end)[1:]]
         text = f"{subject} closed: {'; '.join(said)}." if said else f"{subject} closed."
