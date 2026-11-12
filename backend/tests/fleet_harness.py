@@ -11,12 +11,17 @@ own ``.venv`` (code used read-only), and gives each one nothing real to touch:
   ``alembic upgrade head``, a library and trace files, all in one temp folder.
   The subprocess runs from that folder with a minimal environment, so neither
   a checkout's ``.env`` nor this process's variables reach it;
-- **no network**: music's one way out is yt-dlp, and ``YT_DLP_BIN`` (music's
-  own test seam, ``music/backend/tests/conftest.py``) points it at
-  :data:`FAKE_YT_DLP`, which writes a silent mp3 and logs its argv.
-  MusicBrainz, the likes poller, Genius, Spotify and SoundCloud stay off or
-  unconfigured, and every proxy variable points at a dead port with only
-  loopback exempt, so a stray HTTP client fails instead of leaving;
+- **no network**: music's ways out are yt-dlp and MusicBrainz. ``YT_DLP_BIN``
+  (music's own test seam, ``music/backend/tests/conftest.py``) points it at
+  :data:`FAKE_YT_DLP`, which writes a silent mp3 and logs its argv, and
+  ``MUSICBRAINZ_BASE_URL`` at :class:`FakeMusicBrainz` on loopback, which
+  knows ``fake_world``'s Caribou catalogue, so ``download_album`` resolves
+  albums by name as it does in use (music#96, #102). The likes poller,
+  Genius, Spotify and SoundCloud stay off or unconfigured, and every proxy
+  variable points at a dead port with only loopback exempt, so a stray HTTP
+  client fails instead of leaving. Music's download worker is off: a queued
+  album stays queued, as it does for the minutes a real one takes, so the
+  next turn finds it held;
 - **a watch on both**: :class:`Watch` samples the processes' sockets (``ss``)
   and open files (``/proc``) the whole time; a peer off loopback, or a
   database, mp3 or trace file outside the scratch folder, is a finding.
@@ -56,7 +61,7 @@ import httpx
 import yaml
 
 from app import clock
-from tests.fake_world import Receipt
+from tests.fake_world import Album, Receipt, World
 from tests.session_harness import TurnRecord
 
 FLAG = "CONDUCTOR_FLEET_SMOKE"
@@ -157,6 +162,112 @@ if "--yes-playlist" in args:
 else:
     emit(1, title)
 """
+
+
+# --- the fake MusicBrainz -------------------------------------------------------------------
+
+# Every fake track is this long, so a matcher comparing lengths sees one.
+FAKE_TRACK_MS = 200_000
+
+
+class FakeMusicBrainz:
+    """MusicBrainz's web service at the wire shape music reads (its
+    ``musicbrainz.py``), on loopback, over a catalogue: ``fake_world``'s
+    albums by default, so the smoke and the session evals name the same
+    ones. A release-group search by artist (and title), an album's editions,
+    an edition's tracks; a recording search (music's tagging) finds nothing.
+    Records every path it was asked for."""
+
+    def __init__(self, catalog: Iterable[Album] | None = None) -> None:
+        self.catalog = list(catalog if catalog is not None else World().catalog)
+        self.asked: list[str] = []
+        fake = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format: str, *args: Any) -> None:
+                return
+
+            def do_GET(self) -> None:
+                fake.asked.append(self.path)
+                body = fake.answer(self.path)
+                data = json.dumps(body).encode()
+                self.send_response(200 if body is not None else 404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server.daemon_threads = True
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self._server.server_address[1]}/ws/2"
+
+    def answer(self, path: str) -> dict[str, Any] | None:
+        from urllib.parse import parse_qs, urlparse
+
+        url = urlparse(path)
+        params = {key: values[0] for key, values in parse_qs(url.query).items()}
+        route = url.path.removeprefix("/ws/2/")
+        if route == "release-group":
+            query = params.get("query", "")
+            artist = re.search(r'artist:"([^"]*)"', query)
+            title = re.search(r'releasegroup:"([^"]*)"', query)
+            found = [
+                a
+                for a in self.catalog
+                if artist is not None
+                and a.artist.casefold() == artist.group(1).replace("\\", "").casefold()
+                and (title is None or a.title.casefold() == title.group(1).casefold())
+            ]
+            return {"release-groups": [self._group(a) for a in found]}
+        if route == "release":
+            album = self._by_id(params.get("release-group", ""))
+            if album is None:
+                return {"releases": []}
+            return {
+                "releases": [
+                    {
+                        "id": f"{album.mbid}-release",
+                        "date": f"{album.year}-01-01",
+                        "status": "Official",
+                        "media": [{"track-count": len(album.tracks)}],
+                    }
+                ]
+            }
+        if route.startswith("release/"):
+            album = self._by_id(route.removeprefix("release/").removesuffix("-release"))
+            if album is None:
+                return None
+            tracks = [
+                {"title": t, "length": FAKE_TRACK_MS, "artist-credit": [{"name": album.artist}]}
+                for t in album.tracks
+            ]
+            return {"media": [{"tracks": tracks}]}
+        if route == "recording":
+            return {"recordings": []}
+        return None
+
+    def _by_id(self, mbid: str) -> Album | None:
+        return next((a for a in self.catalog if a.mbid == mbid), None)
+
+    @staticmethod
+    def _group(album: Album) -> dict[str, Any]:
+        artist_id = f"artist-{album.artist.casefold().replace(' ', '-')}"
+        return {
+            "id": album.mbid,
+            "score": 100,
+            "title": album.title,
+            "primary-type": "Album",
+            "secondary-types": [],
+            "first-release-date": f"{album.year}-01-01",
+            "artist-credit": [
+                {"name": album.artist, "artist": {"id": artist_id, "name": album.artist}}
+            ],
+        }
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
 
 
 # --- the call meter ----------------------------------------------------------------------
@@ -520,7 +631,7 @@ def pcc_app(backend: Path, root: Path, meter: Meter) -> ScratchApp:
     return ScratchApp("tasks", "project-command-center", backend, free_port(), root, env)
 
 
-def music_app(backend: Path, root: Path, meter: Meter) -> ScratchApp:
+def music_app(backend: Path, root: Path, meter: Meter, musicbrainz: str) -> ScratchApp:
     root = root / "music"
     root.mkdir(parents=True)
     fake = root / "fake-yt-dlp"
@@ -536,10 +647,14 @@ def music_app(backend: Path, root: Path, meter: Meter) -> ScratchApp:
         YT_DLP_CACHE_DIR=str(root / "yt-dlp-cache"),
         FAKE_YTDLP_LOG=str(root / "yt-dlp-argv.jsonl"),
         FAKE_YTDLP_AUDIO=str(audio),
-        MUSICBRAINZ_ENABLED="false",
+        MUSICBRAINZ_ENABLED="true",
+        MUSICBRAINZ_BASE_URL=musicbrainz,
+        MUSICBRAINZ_MIN_INTERVAL_SECONDS="0",
         LIKES_WORKER_ENABLED="false",
-        DOWNLOAD_WORKER_ENABLED="true",
-        DOWNLOAD_WORKER_POLL_SECONDS="0.5",
+        # An album stays queued, held, as it is for the minutes a real one
+        # takes: the fake yt-dlp's searches find nothing, so a running album
+        # would fail at once and hold nothing (music#102).
+        DOWNLOAD_WORKER_ENABLED="false",
     )
     return ScratchApp("music", "music", backend, free_port(), root, env)
 
@@ -620,8 +735,11 @@ class ScratchFleet:
         self.workspace = workspace
         self.root = root
         self.meter = Meter()
+        self.musicbrainz = FakeMusicBrainz()
         self.pcc = pcc_app(workspace / "project-command-center" / "backend", root, self.meter)
-        self.music = music_app(workspace / "music" / "backend", root, self.meter)
+        self.music = music_app(
+            workspace / "music" / "backend", root, self.meter, self.musicbrainz.url
+        )
         self.apps = (self.pcc, self.music)
         self.conductor_llm = self.meter.url("conductor")
         self.conductor_trace = root / "conductor-trace.jsonl"
@@ -660,6 +778,7 @@ class ScratchFleet:
         self.watch.sample()
         self.watch.stop()
         self.meter.close()
+        self.musicbrainz.close()
 
     # -- reads of the apps' end state, through their own APIs --
 
