@@ -1537,6 +1537,31 @@ def test_a_lost_ref_gets_the_repair(fleet: Fleet) -> None:
     assert _problems(named, fleet) == []  # a name the person said is no lost ref
 
 
+@pytest.mark.parametrize(
+    ("first", "later", "lost"),
+    [
+        # #188: S15/S15p's misses, a compound or possessive ask and a task with no ref.
+        ("download the other album by Caribou, if it isn't queued yet", "add a task to sort the other album by Caribou this weekend", True),
+        ("download the other album by Caribou and let me know which one", "add a task to sort the other Caribou album", True),
+        ("download the person's other album", "add a task to sort the other album this weekend", True),
+        ("download the new Caribou album and save it to the house folder", "sort the new Caribou album on Monday", True),
+        # An ask for several of them: the later step picks one, no single ref names it.
+        ("download the new albums from Bonobo and Caribou", "sort the new Bonobo album on Saturday", False),
+        ("download the new Bonobo album and the new Caribou album", "sort the new Bonobo album on Saturday", False),
+        ("download the new albums by Bonobo, Caribou and Four Tet", "sort the Caribou album on Sunday", False),
+        # A name the later step says itself, or the ref written.
+        ("download the other album by Caribou, and queue it", "add a task to sort Suddenly", False),
+        ("download the other album by Caribou, and queue it", "add a task to sort {s1}", False),
+    ],
+)  # fmt: skip
+def test_a_compound_ask_no_longer_hides_a_lost_ref(
+    fleet: Fleet, first: str, later: str, lost: bool
+) -> None:
+    found = _problems(steps(ask("music", first), ask("tasks", later)), fleet)
+    lost_refs = [p for p in found if "which only s1 will find out" in p]
+    assert bool(lost_refs) is lost, found
+
+
 def test_an_ask_carrying_another_apps_work_gets_the_split_repair(fleet: Fleet) -> None:
     # S15's miss (#127): one ask to music with the task in it.
     for mixed in (

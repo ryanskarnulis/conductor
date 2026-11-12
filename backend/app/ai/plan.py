@@ -439,7 +439,7 @@ _BARE_REF = re.compile(r"(?<![{\w])(?:step\s+)?(s(?:[1-9]|1[0-2]))(?![\w}])", re
 # its real title. (An ask that names it, "the song Odessa", gives no trouble.)
 _NOUNS = r"(?P<noun>album|song|track|playlist|record|ep|episode|mix|single)s?"
 _UNNAMED = re.compile(
-    r"\b(?:(?:the|their|his|her|its|my|that)\s+(?:\w+\s+){0,2}?(?:new|newest|latest|recent|"
+    r"\b(?:(?:the|their|his|her|its|my|that)\s+(?:[\w'’]+\s+){0,2}?(?:new|newest|latest|recent|"
     r"other|next)\s+(?:[\w'’]+\s+){0,3}?|(?:this|that)\s+)" + _NOUNS + r"\b",
     re.IGNORECASE,
 )
@@ -447,7 +447,7 @@ _UNNAMED = re.compile(
 
 # An ask that leaves the person's pointer unresolved: the app can't see State.
 _UNRESOLVED = re.compile(
-    r"\b(?:(?:their|his|her)\s+(?:[\w'’]+\s+){0,2}?|(?:the|my)\s+(?:other|next)\s+)"
+    r"\b(?:(?:their|his|her|the\s+person['’]s)\s+(?:[\w'’]+\s+){0,2}?|(?:the|my)\s+(?:other|next)\s+)"
     + _NOUNS
     + r"\b(?!\s+(?:by|from|of)\b)",
     re.IGNORECASE,
@@ -490,14 +490,14 @@ def _lost_refs(steps: list[Step]) -> list[str]:
                 bare = True
         if isinstance(step, Ask | Open) and not bare and not REF.search(text):
             for prior in earlier:
-                # Several similar asks to one app, or one ask for a list of
-                # things, aren't a lost ref: each names its own.
+                # Several similar asks to one app, or one ask for several of
+                # a thing, aren't a lost ref: each names its own. A compound
+                # ask for one thing ("the other album by Caribou, if it isn't
+                # queued") is no list (#188: S15's task ran with no ref).
                 if not isinstance(prior, Ask) or getattr(step, "app", None) == prior.app:
                     continue
-                if "," in prior.request or " and " in prior.request:
-                    continue
                 unnamed = _UNNAMED.search(prior.request)
-                if unnamed is None:
+                if unnamed is None or _asks_for_several(prior.request):
                     continue
                 described = _described(unnamed.group("noun").lower()).search(text)
                 if described is not None:
@@ -508,6 +508,17 @@ def _lost_refs(steps: list[Step]) -> list[str]:
                     break
         earlier.append(step)
     return found
+
+
+def _asks_for_several(request: str) -> bool:
+    """An ask for several of a thing it will find: a plural ("the new albums
+    from Bonobo and Caribou") or two described ones ("the new Bonobo album and
+    the new Caribou album"). A later step naming one of them is picking, not
+    a lost ref: ``{sN}`` would join them all."""
+    found = list(_UNNAMED.finditer(request))
+    return len(found) > 1 or any(
+        not match.group(0).lower().endswith(match.group("noun").lower()) for match in found
+    )
 
 
 def _work_for(noun: str) -> re.Pattern[str]:

@@ -263,7 +263,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   means the step doesn't run and the plan ends, with the reason on the
   record; so does an ask its app turned down with nothing done (#168). Never
   guess a name or splice in an app's reply text. The validator repairs a lost
-  ref: a bare `s1`, a step re-describing what an earlier ask will find, an ask
+  ref: a bare `s1`, a step re-describing what an earlier ask will find (a
+  compound ask for one thing too, #188; not an ask for several), an ask
   pointing at State ("their other album"), or a recall or memory lookup for
   one (`plan.recalls_unnamed`, a nudge, #168); and it
   splits an ask carrying a second app's work ("… and add a task", #127) into
