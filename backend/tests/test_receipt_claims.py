@@ -57,6 +57,13 @@ CORPUS: list[tuple[str, list[R], list[str]]] = [
     ("That would trash the Kitchen project and its tasks. Go ahead?", [], []),
     # not operational at all
     ("Two things today: groceries and call mom.", [], []),
+    # a decision someone made is no write (#188: T1, S5)
+    ("Yesterday's decision made it the steel rack.", [], []),
+    ("The decision you made on Tuesday was the steel rack.", [], []),
+    ("Decisions made about the garage: the steel rack.", [], []),
+    ("A decision was made to go with the steel rack.", [], []),
+    ("You made the decision to buy the steel rack.", [], []),
+    ("Made a task to buy the steel rack.", [], ["create"]),
     ("About 7 minutes for a jammy egg.", [], []),
 ]
 
