@@ -376,7 +376,8 @@ describe('pauses and resumes', () => {
     const question = 'MusicBrainz lists these other albums by Caribou: Suddenly (2020). Which one do you want?'
     const turn = live(streamOf([['turn_started', beat], ['plan', plan], ['receipt', asked], ['paused', { reason: 'app_question', question, app: 'music', step: 's1' }]]))
     expect(turn.pause).toEqual({ kind: 'question', question, options: [] })
-    expect(turn.steps.map((s) => s.state)).toEqual(['done', 'queued'])
+    // The ask did nothing and waits on the answer: never shown done (#189).
+    expect(turn.steps.map((s) => s.state)).toEqual(['wait', 'queued'])
     const resumed = live(streamOf([['turn_started', beat], ['resumed', { reason: 'app_question', step: 's1', answer: 'Suddenly' }], ['plan', plan]]))
     expect(resumed.resumedNote).toBe('Resumed the plan · you answered Suddenly')
   })
