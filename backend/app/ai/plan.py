@@ -360,6 +360,8 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
     asks: dict[str, int] = {}
     found += _lost_refs(steps)
     found += _mixed_asks(steps, checks.fleet)
+    misrouted = _misrouted(steps, checks.fleet)
+    found += misrouted.values()
     for index, step in enumerate(steps):
         expected = f"s{index + 1}"
         if step.id != expected:
@@ -375,7 +377,10 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
             app = checks.fleet.get(step.app)
             if step.app != MEMORY_APP and (app is None or not app.has_agent):
                 found.append(f"{step.id} asks {step.app}, which has no agent")
-            asks[step.app] = asks.get(step.app, 0) + 1
+            if step.id not in misrouted:
+                # The budget counts an app's own asks (#186): one that is
+                # another app's work goes there, never into a merge.
+                asks[step.app] = asks.get(step.app, 0) + 1
             if not step.request.strip():
                 found.append(f"{step.id} asks {step.app} nothing")
         if isinstance(step, Open):
@@ -559,6 +564,50 @@ def _mixed_asks(steps: list[Step], fleet: Fleet) -> list[str]:
             )
             break
     return found
+
+
+# Where one request's parts split: commas, semicolons, "and", "then".
+_PARTS = re.compile(r"\s*(?:[,;]|\band\s+then\b|\band\b|\bthen\b)\s*", re.IGNORECASE)
+# What may open a part without changing its work: "and also", "please".
+_PART_LEAD = re.compile(r"^(?:(?:also|please|can\s+you|could\s+you|just)\s+)+")
+
+
+def _misrouted(steps: list[Step], fleet: Fleet) -> dict[str, str]:
+    """Asks with a part that is another app's listed work (#186): a part of
+    the request, word for word, is one of that app's manifest examples and
+    none of this app's ("sort my music" asked of tasks, in long-cleanup's
+    four tasks asks and in the merge the budget repair made of them). The
+    repair sends that part to its app. A part that only names the other
+    app's things ("remind me to sort my music on Sunday") is no example."""
+    listed: dict[str, set[str]] = {
+        app.name: {_words(example) for example in app.agent.examples if _words(example)}
+        for app in fleet.agent_apps()
+        if app.agent is not None
+    }
+    found: dict[str, str] = {}
+    for step in steps:
+        if not isinstance(step, Ask) or step.app not in listed:
+            continue
+        own = listed[step.app]
+        for part in _PARTS.split(step.request):
+            said = _PART_LEAD.sub("", _words(part))
+            if not said or said in own:
+                continue
+            other = next((name for name, examples in listed.items() if said in examples), None)
+            if other is None or other == step.app:
+                continue
+            found[step.id] = (
+                f'{step.id} asks {step.app} to "{" ".join(part.split())}", which is {other}\'s '
+                f'work ({other} lists "{said}"): ask {other} for it in its own step, and leave '
+                f"it out of the asks to {step.app}"
+            )
+            break
+    return found
+
+
+def _words(text: str) -> str:
+    """Lowercase words, punctuation gone: "Sort my music!" is "sort my music"."""
+    return " ".join(re.findall(r"[a-z0-9']+", text.lower().replace("’", "'")))
 
 
 # A call line in State or recall and the person's words on it: this

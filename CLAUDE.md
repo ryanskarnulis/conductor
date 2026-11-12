@@ -94,7 +94,9 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   the flag, code's gate asks first (a `destructive` ask pauses on it). `open_`
   apps confirm their own resets; "resign the game" is a plain handoff.
 - **Delegate calls are budgeted** (3 per app per turn: the validator sends a
-  plan over it back, the tool refuses past it) and every one emits a
+  plan over it back, counting only an app's own asks: a part that is another
+  app's manifest example, "sort my music" asked of tasks, goes back to that
+  app instead, #186; the tool refuses past it) and every one emits a
   `delegate_call` structlog event; never raw transcripts into a model's
   context.
 - **No chat turns are replayed** (#64). Each turn's one user message opens

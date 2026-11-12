@@ -10,6 +10,7 @@ couldn't run gets one more repair, then code's question or honest line.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -1902,3 +1903,74 @@ def test_an_apps_question_is_read_from_its_agents_note_after_a_long_record() -> 
         "albums by Caribou: Suddenly (2020) and Swim (2010). Which one would you like, or do "
         "you have a link?"
     )
+
+
+# --- #186: the budget repair merges only an app's own asks ----------------------------------
+
+
+@pytest.fixture
+def examples_fleet(tmp_path: Path) -> Fleet:
+    """The fixture fleet with the real manifests' examples for tasks and music."""
+    root = write_fixture_fleet(tmp_path / "fleet")
+    for directory, examples in (
+        ("project-command-center", ["what's due today", "mark the groceries task done"]),
+        ("music", ["download this song", "sort my music", "organize my library into folders"]),
+    ):
+        path = root / directory / "app.yaml"
+        text = path.read_text(encoding="utf-8")
+        listed = ", ".join(json.dumps(example) for example in examples)
+        path.write_text(re.sub(r"examples: \[[^\]]*\]", f"examples: [{listed}]", text, count=1))
+    return discover_fleet(root)
+
+
+_CLEANUP = (
+    ask("tasks", "trash the groceries task", destructive=True),
+    ask("tasks", "mark fix the drawer done"),
+    ask("tasks", "move paint cabinets to Sunday"),
+)
+
+
+def test_an_ask_that_is_another_apps_listed_work_goes_back_to_that_app(
+    examples_fleet: Fleet,
+) -> None:
+    # long-cleanup's miss: four asks to tasks, one of them music's own example.
+    over = steps(*_CLEANUP, ask("tasks", "sort my music"), {"do": "cancel", "target": "job 17"})
+    (objection,) = _problems(over, examples_fleet)
+    assert objection.startswith('s4 asks tasks to "sort my music", which is music\'s work')
+    assert "ask music for it in its own step" in objection
+    # Not "4 asks to tasks": merging s4 in would keep the misroute.
+    assert "at most 3 per turn" not in objection
+    # The budget repair's merge, misroute kept: split back out.
+    merged = steps(
+        ask(
+            "tasks",
+            "trash the groceries task, mark fix the drawer done, move paint cabinets to Sunday, "
+            "and sort my music",
+            destructive=True,
+        ),
+        {"do": "cancel", "target": "job 17"},
+    )
+    (objection,) = _problems(merged, examples_fleet)
+    assert objection.startswith('s1 asks tasks to "sort my music", which is music\'s work')
+    routed = steps(*_CLEANUP, ask("music", "sort my music"), {"do": "cancel", "target": "job 17"})
+    assert _problems(routed, examples_fleet) == []
+
+
+def test_an_app_over_its_budget_on_its_own_work_still_merges(examples_fleet: Fleet) -> None:
+    over = steps(*_CLEANUP, ask("tasks", "add a task to call the plumber"))
+    (objection,) = _problems(over, examples_fleet)
+    assert objection.startswith("4 asks to tasks; at most 3 per turn")
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        "remind me to sort my music on Sunday",
+        "add a task to sort my music",
+        "sort my music folder notes into the house project",
+    ],
+)
+def test_naming_another_apps_work_inside_a_task_is_no_misroute(
+    examples_fleet: Fleet, request_: str
+) -> None:
+    assert _problems(steps(ask("tasks", request_)), examples_fleet) == []
