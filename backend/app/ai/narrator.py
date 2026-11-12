@@ -241,18 +241,36 @@ def _did_nothing(record: ToolCallRecord) -> bool:
 def app_asks(record: ToolCallRecord) -> str | None:
     """An app's own question to the person (#168), when it did nothing and
     its reply asks something: music's "MusicBrainz lists these other albums
-    by Caribou: …. Which one do you want?" after refusing a repeat. The
-    reply's sentences up to its last question, as the app wrote them; the
-    plan ends there (:mod:`app.ai.interpreter`) and the question reaches the
-    person through :func:`narrate`. ``None`` for anything else: a
-    ``confirm_required`` question is :func:`live_confirm`'s."""
+    by Caribou: …. Which one would you like?" after refusing a repeat. The
+    question is read from the reply's last paragraph that asks one (a v1.1
+    app's reply leads with its record and ends with its agent's labelled
+    note, ``The agent's note (…): "…"``, whose quoted words are taken), up to
+    its last question, as the app wrote it. The plan pauses there
+    (:mod:`app.ai.interpreter`) and the question reaches the person through
+    :func:`narrate`. ``None`` for anything else: a ``confirm_required``
+    question is :func:`live_confirm`'s."""
     if not _did_nothing(record):
         return None
-    sentences = _sentences(_note(record.result))
-    last = max((n for n, s in enumerate(sentences) if s.rstrip(_QUOTES).endswith("?")), default=-1)
-    if last < 0:
-        return None
-    return " ".join(sentences[: last + 1])
+    for paragraph in reversed(re.split(r"\n\s*\n", record.result or "")):
+        text = " ".join(paragraph.split())
+        if not text or _APP_DID.match(text):
+            continue
+        labelled = _LABELLED.match(text)
+        if labelled is not None:
+            text = labelled.group("said")
+        sentences = _sentences(text)
+        last = max(
+            (n for n, s in enumerate(sentences) if s.rstrip(_QUOTES).endswith("?")), default=-1
+        )
+        if last >= 0:
+            return " ".join(sentences[: last + 1])
+    return None
+
+
+# Conductor's own ``[app did: …]`` paragraph after an app's reply.
+_APP_DID = re.compile(r"\[\w[\w-]* did:")
+# A labelled paragraph whose words are quoted: ``The agent's note (…): "…"``.
+_LABELLED = re.compile(r'^[^"“:]{1,120}:\s*["“](?P<said>.+)["”]$')
 
 
 def app_declined(record: ToolCallRecord) -> bool:

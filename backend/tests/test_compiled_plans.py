@@ -1809,3 +1809,32 @@ def test_an_amend_or_cancel_reaches_a_plan_paused_on_an_apps_question(
     run_with(ScriptedProvider([plan_turn(cancel)]), "never mind")
     assert _plans(db_session)[-2].status == "cancelled"  # the paused plan ends
     assert [w.title for w in world.writes()] == ["Honey", "Swim", "sort Swim"]
+
+
+def test_an_apps_question_is_read_from_its_agents_note_after_a_long_record() -> None:
+    # Real music's reply (fleet smoke, #174): the record first, cut where it
+    # is long, then its agent's labelled note; conductor's activity note after.
+    from app.ai import narrator
+    from app.ai.runtime import ToolCallRecord
+
+    reply = (
+        "Music's record of this run (built by the app from its tool results; nothing outside "
+        '"Done" was saved or changed):\nDone:\n- nothing\nRefused:\n- #1 download_album '
+        '{"artist":"Caribou"} -> Honey (2024) by Caribou was already asked for, so nothing was '
+        "queued. MusicBrainz lists these other albums by Caribou: Suddenly (2020); Swim (2010). "
+        "Say it was…\n\nThe agent's note (its reading of the results, not a record): \"The album "
+        "Honey by Caribou was already asked for. MusicBrainz lists these other albums by Caribou: "
+        'Suddenly (2020) and Swim (2010). Which one would you like, or do you have a link?"'
+        "\n\n[music did: download_album(failed)]"
+    )
+    asked = ToolCallRecord(
+        tool="ask_music",
+        arguments={},
+        result=reply,
+        app_record=[{"tool": "download_album", "outcome": "refused", "untrusted": True}],
+    )
+    assert narrator.app_asks(asked) == (
+        "The album Honey by Caribou was already asked for. MusicBrainz lists these other "
+        "albums by Caribou: Suddenly (2020) and Swim (2010). Which one would you like, or do "
+        "you have a link?"
+    )

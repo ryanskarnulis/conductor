@@ -33,6 +33,7 @@ compiled-plan runtime both sit on top of.
 from __future__ import annotations
 
 import difflib
+import json
 import re
 import textwrap
 import threading
@@ -1165,6 +1166,15 @@ class MusicApp:
             )
         self.world.read("music", "albums")
         stored = f"{error.rstrip('.')}. {next_step}."
+        # The reply as music's ``run_record.handoff`` builds it: its record,
+        # then its agent's note, labelled and quoted (the fleet smoke's shape).
+        args = json.dumps({"artist": album.artist}, separators=(",", ":"))
+        text = (
+            "Music's record of this run (built by the app from its tool results; nothing "
+            'outside "Done" was saved or changed):\nDone:\n- nothing\nRefused:\n'
+            f"- #1 download_album {args} -> {_music_clip(stored)}\n\n"
+            f'The agent\'s note (its reading of the results, not a record): "{text}"'
+        )
         call = ToolCallRead(tool="download_album", arguments={"artist": album.artist}, error=stored)
         refused = RecordEntry(
             tool="download_album",
