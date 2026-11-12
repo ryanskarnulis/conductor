@@ -643,7 +643,7 @@ def about_you(plan: Plan, words: str) -> list[str]:
 _ABOUT_SAYS: dict[str, str] = {
     "an app": "something an app keeps or does is planned as its steps, never a direct answer",
     "conductor itself": (
-        "a question about you is never general knowledge, a decline, a recall or a think: "
+        "a question about you is never general knowledge, a decline or a think: "
         'answer {"answer": "self"} from State, or ask memory what you know about them'
     ),
     "general knowledge": 'general knowledge is {"answer": "knowledge"}',
@@ -679,8 +679,10 @@ def _agrees(about: str, plan: Plan) -> bool:
     if about in ("general knowledge", "small talk"):
         return False
     if about == "conductor itself":
-        # What you did or said is in State: never a search or a think.
-        return any(step.do not in ("recall", "think") for step in plan.steps)
+        # Never only a think. A recall passes (#180): "what did we decide
+        # about X?" is labelled so and is right; a recall for what was just
+        # said is :func:`about_you`'s, which reads the words.
+        return any(step.do != "think" for step in plan.steps)
     if about == "a running job":
         kinds = {step.do for step in plan.steps}
         return "ask" not in kinds or bool(kinds & {"cancel", "amend"})
@@ -904,7 +906,12 @@ def unrunnable(plan: Plan) -> list[str]:
     kinds = {step.id: step.do for step in plan.steps}
     found: list[str] = []
     for step in plan.steps:
+        # A think reads its inputs whole (#180): its problem's ``{s2}`` for a
+        # look it was given is a pointer, not a name to fill.
+        given = set(step.inputs) if isinstance(step, Think) else set()
         for ref in dict.fromkeys(REF.findall(step_text(step))):
+            if ref in given:
+                continue
             kind = kinds.get(ref)
             if kind is not None and kind not in NAMERS:
                 a = "an" if kind[0] in "aeiou" else "a"

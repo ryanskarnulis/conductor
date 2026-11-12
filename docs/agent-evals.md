@@ -1916,3 +1916,58 @@ no prompt change:
 | `yes-nothing-waiting` | 4/20 | **20/20** (0: the first reply is still a confirm; every repair is chat) |
 | `amend-nothing-waiting` | 4/20 | **18/20** (8): 10 repairs to amend; misses are 2 cancels |
 | `self-said-just-now` | 15/20 | **20/20** (12): the 8 recalls all repaired to self |
+
+### #180: which plan cases need the repair, and why
+
+Per-case first-try from the reports (score/first-try of 20; "#179" is the
+#179 section's run, "pre-#151" the #151 section's main):
+
+| case | pre-#151 | #160 | #179 | why the first reply goes back |
+|---|---|---|---|---|
+| `s3-album-task` | 20/14 | 20/5 | 20/2 | "add a task to sort the Caribou album": the lost-ref repair asks for `{s1}` |
+| `cross-playlist-task` | 20/15 | 20/16 | 20/2 | "… the playlist I just downloaded": the same repair |
+| `s15-same-again` | 18/18 | 16/16 | 13/12 | a `recall` first for "their other album" (the #168 path, not repaired) |
+| `memory-paraphrase-carport` | – | – | 20/6 | a recall labelled `conductor itself`: `plan.disagrees` sent it back |
+| `memory-control-treehouse` | – | – | 20/9 | the same |
+| `memory-control-passport` | – | – | 20/11 | the same |
+| `long-fence-weekend` | 20/14 | 20/3 | 20/1 | the think's problem writes `{s2}` for the look it is given: `plan.unrunnable` |
+| `long-cleanup` | 13/12 | 19/19 | 13/12 | "sort my music" sent to tasks (4 asks to tasks, over the budget) |
+
+- **memory**: `plan.disagrees` (#151) sent back every recall whose `about` was
+  `conductor itself`, there for "what did you say just now?". The 12B labels
+  "what did we decide about the treehouse?" so too, and the recall is right:
+  36 of the 41 times the rule fired in the #179 run it sent back a right plan
+  (all `memory`), 5 times `self-said-just-now`. Now `conductor itself` with a
+  recall agrees; a think alone still doesn't, and a recall for what conductor
+  just said goes back through `plan.about_you` (#176), which reads the words.
+- **long-fence-weekend**: a think reads its inputs whole (`given`), and code
+  never fills a think's problem, but `plan.unrunnable` treated its `{s2}` (a
+  look) as a name to fill and sent the plan for a third call, which turned
+  the look into an ask. Now a think's ref to one of its own inputs passes,
+  and the filed problem writes it as the step id `given` labels ("s2").
+- **cross**: no code fix. Measured with #138's memory line reverted, the two
+  lost-ref cases read 14/40 first-try against 3/40 on this branch (cross
+  first-try 107/140 against 94/140; scores 133/140 each); #138's "neutral
+  forget" variant (concrete remember example, `"forget that <a fact they
+  saved>"`) read 1/40. So #138's forget placeholder costs `{s1}` on the first
+  reply, the lost-ref repair recovers every one, and restoring a concrete
+  forget example is what #138 removed (it was copied into half the forget
+  plans). Recorded, not changed.
+- **long-cleanup**: no clear cause. Its miss ("sort my music" to tasks) is
+  the same mode before #151 (7/20); the case reads 13, 19, 13, 14 /20 across
+  runs. Recorded, not changed.
+
+The three groups after this change (with #176), against the #179 run, each
+cell passed then first-try; none is significantly below it by #150's rule:
+
+| group | #179 | this change |
+|---|---|---|
+| cross | 133, 96 /140 | 133, 94 |
+| memory | 315, 276 /320 | 312, **311** |
+| long | 153, 133 /160 | 154, **153** |
+
+`memory-paraphrase-carport`, `memory-control-treehouse` and
+`memory-control-passport` 20/20 first-try each; `long-fence-weekend` 20/20
+first-try (17 kept the look). `memory-caribou` 17/20 (three `look music,
+recall` first replies, no nudge involved). `long-cleanup` 14/20, the same
+miss.

@@ -146,6 +146,16 @@ def test_what_runs_and_what_needs_another_repair(fleet: Fleet) -> None:
         {"do": "ask_user", "question": "which?", "options": []}, ask("tasks", "move {s1}")
     )
     assert found(asked) == []
+    # #180: a think reads its inputs whole, so its problem may point at a look
+    # it was given (long-fence-weekend); one it wasn't given still goes back.
+    fence = [
+        {"do": "recall", "query": "the fence project"},
+        {"do": "look", "app": "tasks"},
+    ]
+    given = {"do": "think", "problem": "plan around {s1} and {s2}", "inputs": ["s1", "s2"]}
+    assert found(steps(*fence, given)) == []
+    (unread,) = found(steps(*fence, {**given, "inputs": ["s1"]}))
+    assert "s3 uses {s2}, but s2 is a look" in unread
 
 
 def test_the_ack_says_what_is_about_to_happen() -> None:
@@ -407,8 +417,9 @@ def test_a_running_job_or_a_waiting_question_is_offered_only_when_state_has_one(
         ("conductor itself", {"answer": "self"}, True),
         ("conductor itself", steps(ask("memory", "what do you know about me?")), True),
         ("conductor itself", {"answer": "knowledge"}, False),
-        # What it just did or said is in State: never a search or a think.
-        ("conductor itself", steps({"do": "recall", "query": "what I just said"}), False),
+        # Never only a think. A recall passes (#180: "what did we decide about
+        # the treehouse?" is labelled so); what it just said is about_you's.
+        ("conductor itself", steps({"do": "recall", "query": "the treehouse"}), True),
         (
             "conductor itself",
             steps({"do": "think", "problem": "what did I say", "inputs": []}),
