@@ -45,6 +45,8 @@
 .cd-step .k{font-family:var(--font-mono);font-size:12px;color:var(--violet)}
 .cd-step .app{font-size:12px;color:var(--muted)}
 .cd-step .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* A long status ("failed · chess didn't answer") wraps inside the row instead of pushing the panel wider (#189). */
+.cd-step .cd-pill{min-width:0;white-space:normal;overflow-wrap:anywhere;text-align:center}
 .cd-step[data-state="done"]{border-color:rgba(143,220,170,.4)}
 .cd-step[data-state="run"],.cd-step[data-state="job"]{border-color:rgba(155,231,255,.4)}
 .cd-step[data-state="wait"]{border-color:rgba(238,201,138,.5)}
