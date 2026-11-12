@@ -1596,9 +1596,12 @@ dead port, so the planner prompt is production's). Its delegate client, glance
 and job cancel are wrapped to refuse any other upstream.
 
 Nothing leaves loopback: music's yt-dlp is a fake (`YT_DLP_BIN`, music's own
-test seam) that writes a silent mp3 and logs its argv; MusicBrainz and the
-likes poller are off; Genius, Spotify and SoundCloud are unset; every proxy
-variable points at a dead port. The subprocesses run from the temp folder with
+test seam) that writes a silent mp3 and logs its argv; MusicBrainz is a fake
+on loopback with `fake_world`'s Caribou catalogue (since #174; it was off,
+so real music could resolve no album by name); the likes poller and the
+download worker are off (an album stays queued, so the next turn finds it
+held); Genius, Spotify and SoundCloud are unset; every proxy variable points
+at a dead port. The subprocesses run from the temp folder with
 a minimal environment, so no checkout's `.env` is read. A watcher samples the
 apps' sockets (`ss`) and open files (`/proc`) throughout and fails the module
 on a peer off loopback or a database, audio or trace file outside the temp
@@ -2044,3 +2047,178 @@ S8, S9, S16, M1, M2, M3, T1, T2). Frontier: S3, S10, S12, TH1, TH2 5/5; S14
 4/5 (0 dated garage tasks); S11 2/5 ("the task wasn't undone": "undo that"
 cancelled the running download instead; the batch run's 3/5 had the same miss);
 S15 1/5 and S13 0/5, as before (out of scope here).
+
+## "Which album?": an app's question waits on the person (#168, #174; 2026-11-11)
+
+ryanskarnulis/music#105 (music#102) changed what S15's turn 2 gets back:
+`download_album` with the artist alone, when the artist's newest studio album
+is already queued or downloaded, queues nothing. Its record is one `refused`
+entry with no ref, flagged `untrusted`, whose reason lists the artist's other
+studio albums as `Title (year)` (cut to music's 160-character record field);
+music's agent then asks which one. A title still queues, held or not.
+
+**The fake now matches** (`tests/fake_world.py`): the artist alone is the
+newest album unless one held, then that refusal and a reply asking which; a
+cancelled job holds nothing; a request that opens with "download" is a
+download (the fake used to file "download the album “sort Honey”" as a
+sort), and a quoted title matches whole, as music's lookup does. The #163
+fake answered "the other album" with a list and no record at all.
+
+### Why S15 failed on it
+
+S15 at n=20 on `d7f7c81` (main) over the new fake: **2/20**. Turn 2's plans:
+
+| turn-2 plan | n | what happened |
+|---|---|---|
+| ask music "the other album by Caribou", tasks `{s1}` | 10 | music refused and asked; the tasks step didn't run (no name); 2 passed (once only on the word "which" in "no record of which other album"), otherwise "an earlier part gave no name to pass on" |
+| `recall` "what is the other album?", music `{s1}`, tasks `{s1}` | 9 | the recall named nothing (5: nothing ran, "no record of another album") or the task "sort Honey" (4: music filed songs, task "sort sort Honey") |
+| music, then tasks with no ref | 1 | music refused; the task "sort the other Caribou album" was written anyway |
+
+Three causes, three layers, no planner-prompt change:
+
+- **Narrator/interpreter**: nothing guaranteed an app's own question reaches
+  the person, and nothing stopped a later step after the app asked. Now an
+  ask whose app did nothing (no `done` or `looked_up` entry; v1.1 record) and
+  whose reply asks something **pauses the plan** (`app_question`, beside
+  `ask_user`, a gate and `app_confirm`). The reply is the app's question,
+  quoted as its own words (narrator passthrough, like a confirm question):
+  "Music asks: “Honey was already asked for… MusicBrainz lists these other
+  albums by Caribou: Suddenly (2020); Swim (2010). Which one do you want, or
+  do you have a link?”". The next turn's `resume` sends the person's words
+  back to that step ("… (the person's answer to your question: Suddenly)")
+  and the rest of the plan runs with `{s1}` from the new record; amend and
+  cancel work as on any paused plan. An ask whose app only refused ends the
+  plan like a failed step.
+- **Validator**: `plan.recalls_unnamed` (a nudge, one repair): a recall or a
+  memory lookup that feeds a later ask, when the words name the thing as
+  "their other album" / "another song", goes back for the ask itself, worded
+  as the lost-ref repair. Only `s15-same-again` and the new case meet it among
+  the plan cases.
+- **Fake**: the sort-on-"download" misread above (4 of the 9 recall plans
+  wrote through it).
+
+A first version ended the plan on the app's question instead of pausing; S15
+read 18/20 with it, but the follow-up (S15p below) was 2/20: "Suddenly" met a
+State that said a question was waiting and no plan to resume, and 16 of 20
+compiled to nothing ("I couldn't put that together").
+
+### Measured (n=20, gemma-4-12b, the worktree's code)
+
+| | main `d7f7c81` | pause (`ce7bdc8`) | final (`522d6e5`) |
+|---|---|---|---|
+| S15 (session, frontier) | 2/20 (Wilson 0.03–0.26) | 19/20 | **19/20** (0.80–0.99) |
+| S15p (new: S15, then "Suddenly") | – | 17/20 | **19/20** (0.80–0.99) |
+| `s15-same-again` (plan) | 13/20 (first-try 12) | 19/20 (10) | (plan inputs unchanged) |
+| `s15-turn2-as-run` (plan, new) | 12/20 (first-try 0) | 16/20 (0) | (plan inputs unchanged) |
+
+S15's check is unchanged (it was corrected for music#96 in #163 and already
+asks for no turn-2 write and a reply naming the albums or asking). Its golden
+script lost the narrator turn (the question passes through). Remaining
+misses on the final code: S15 1/20, a turn-2 ask "download the person's other
+album" (no artist; the fake answers without a question, so nothing paused)
+beside a task with no ref, which ran; S15p 1/20, the paused plan's task had
+no ref ("sort the other album by Caribou"). On `ce7bdc8` S15p's other two
+misses were turn-2 plans of a lone recall (nothing asked, so "Suddenly" had
+nothing to answer). The last commit only changes how the question is read
+(below), so the plan evals' inputs are those of `ce7bdc8`/`87549d9`.
+
+**`s15-turn2-as-run`** (#168) is S15's turn 2 over the State the session
+really builds (captured from the scripted S15, moved to the plan cases'
+Thursday): no "Last plan" line (the shipped State never had one;
+`s15-same-again` keeps its synthetic one), the album as a recent entity and in
+the record of this conversation's turns. Accepted: ask music naming Caribou
+then tasks with `{s1}`, or asking first (`ask_user`, alone or before those).
+A tasks step with no ref, or no music step (#168's "only made a task"), is a
+miss: the task would name an album nobody chose. Its first reply is always
+repaired (the lost-ref repair for "their other album"), on main too. Misses
+here: 4 tasks without `{s1}` ("sort that album"); 0 dropped music steps in
+the 60 samples above.
+
+### Fleet smoke (#174)
+
+The harness had MusicBrainz off, so real music could resolve no album by name
+and S3 could never pass. It now serves a fake MusicBrainz on loopback with
+`fake_world`'s catalogue and keeps music's download worker off. Checks: S3,
+Honey queued by name and one weekend task naming it; S15, Honey the only
+album and its task the only task, the reply naming the albums or asking;
+S15p (new), Suddenly queued and its weekend task made.
+
+Run against music `d7b472a` (#105) and PCC `96577be`, 3 samples each, scratch
+state, the watch clean (0 sockets off loopback, 0 files outside the scratch
+root, 0 yt-dlp calls):
+
+| scenario | on `87549d9` | final |
+|---|---|---|
+| S2 | 3/3 | (not rerun) |
+| S3 | 3/3 (was 0/3, #143) | (not rerun) |
+| S9 | 3/3 | (not rerun) |
+| S15 | 0/3 | **3/3** |
+| S15p | 0/3 | **3/3** |
+
+The first run found what the fake had hidden: real music's reply is its
+record ("Music's record of this run … Refused: …"), then its agent's note,
+labelled and quoted, and the question sat past the 400 characters the
+narrator's note view keeps, so conductor saw no question, ended the plan as
+"music turned down its part" and the narrator said "no record of other
+albums". The question is now read from the reply's last paragraph that asks
+one, a labelled note's quoted words taken; the fake's refusal reply now has
+music's handoff shape. Final, turn 2 replies "Music asks: “The album Honey by
+Caribou was already asked for. MusicBrainz lists these other albums by
+Caribou: Suddenly (2020) and Swim (2010). Which one would you like, or do you
+have a link?”", and "Suddenly" sends music "download the other album by
+Caribou (the person's answer to your question: Suddenly)", which queues
+Suddenly, then tasks "add a task to sort “Suddenly” this weekend".
+
+Seen in passing (not changed here): the narrator says "Downloaded" for a
+queued album and names real music's job ref ("Caribou - Honey", the job's
+query) as a second thing; PCC titles the task `Sort "Honey"` with the quote
+marks `{s1}` carries.
+
+### The gate on this branch's final code
+
+Plan evals at n=20 on `87549d9` (1890 s, 13 passed, 1 skipped; the last
+commit touches only the interpreter's reading of an app's reply, which no
+plan eval runs, so their inputs are the final code's) and session evals on
+the final `522d6e5` (gate tier 5, frontier 5; 874 s, infra 0/12, claims
+backed 151/152), gemma-4-12b, embeddings up, held-out set not run. Against
+the #176/#180/#183 section's
+gate, each plan cell passed then first-try. `cross` gained
+`s15-turn2-as-run`; without it, 139, 97 /140. Nothing is significantly
+below the baseline by #150's rule (upper bound under the baseline's lower
+bound, 1.645), on score or first-try.
+
+| group | floor | #176/#180/#183 | this branch |
+|---|---|---|---|
+| golden | 0.8 | 400, 400 /420 | 400, 400 |
+| cross | 0.8 | 134, 99 /140 | 155, 97 /160 (139, 97 /140) |
+| ref | 0.85 | 75, 75 /80 | 75, 75 |
+| control | 0.8 | 179, 141 /180 | 180, 139 |
+| memory | 0.8 | 313, 312 /320 | 313, 309 |
+| knowledge | 0.65 | 60, 60 /60 | 60, 60 |
+| hard | 0.5 | 19, 19 /20 | 20, 20 |
+| self | 0.55 | 100, 94 /100 | 99, 90 |
+| mixed | 0.85 | 198, 178 /200 | 200, 181 |
+| long | 0.7 | 158, 155 /160 | 152, 152 |
+| stale | 0.8 | 100, 100 /100 | 100, 100 |
+
+- Closest to the rule: `long` 152/160 (upper 0.972 against 0.963), all
+  `long-cleanup` 12/20 (`ask tasks, ask tasks, cancel` 8, #186's miss; it
+  read 11 to 19 /20 across earlier runs). `self` first-try 90/100 (upper
+  0.939 against 0.888).
+- Main's code on the same day, `cross` only (with the new case): 145, 105
+  /160; without it 133, 105 /140. The first-try difference (97 against 105
+  /140) is inside the noise by the rule (0.753 against 0.685).
+- Cases below 20/20: `chess-analysis` 0/20 (known), `s15-same-again` 19/20,
+  `s15-turn2-as-run` 16/20, `s7-dennis` 15/20, `memory-paraphrase-tune`
+  15/20, `memory-dont-forget` 18/20, `self-said-just-now` 19/20,
+  `long-cleanup` 12/20.
+
+Session evals on `522d6e5`: every gate scenario 5/5 but T1 4/5 (an
+unbacked-claim false positive: "The note … indicates a decision was made …"
+read as a `create`). Frontier: S3, S10, S12, S14, S15, S15p, TH1, TH2 5/5;
+S11 3/5 ("the task wasn't undone": "undo that" cancelled the download or
+answered "one thing at a time", #185's mode); S13 0/5 (the brief, as
+before). The run on `87549d9` read the same: gate 5/5 but S5 4/5 (the same
+false-positive family, "decisions made"); S11 4/5, S12 4/5 (one plan asked
+music "how did my last game go?"), S14 4/5, S13 1/5, the rest 5/5. 4/5
+against 5/5 is not significant by the rule (upper 0.954 against 0.649).

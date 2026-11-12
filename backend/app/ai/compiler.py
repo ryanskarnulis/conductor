@@ -208,8 +208,9 @@ def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Check
     a question about you filed as general knowledge; a plan its own
     ``about`` contradicts (#151); a new ask for a running job the words
     narrow (#160); a new ask, search or think for words that change
-    something when State shows nothing they could change (#176); and a
-    cancel, amend or undo for "forget that" with nothing to act on (#183).
+    something when State shows nothing they could change (#176); a
+    cancel, amend or undo for "forget that" with nothing to act on (#183);
+    and a recall feeding an ask for "their other album" (#168).
     The first plan gets them once; a repaired plan that keeps its choice
     still runs, since each of these plans can run and a turn that answers
     beats code's "couldn't put that together"."""
@@ -221,6 +222,7 @@ def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Check
         + plans.narrows_job(plan, words, checks.context)
         + plans.points_at_nothing(plan, words, checks)
         + plans.forgets_by_control(plan, words, checks)
+        + plans.recalls_unnamed(plan, words)
     )
 
 

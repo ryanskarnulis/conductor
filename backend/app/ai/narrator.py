@@ -37,11 +37,14 @@ placeholder-looking ones ~40% of the time. Descriptive rules don't bind the
   when nothing matched says there's no record rather than guess;
 - on voice surfaces, at most two sentences and no markdown.
 
-Two kinds of turn are passthroughs and skip the narrator:
+Three kinds of turn are passthroughs and skip the narrator:
 
 - an ``open_*`` handoff gets code's one short line;
 - a live ``confirm_required`` (#68) is the app's question, word for word,
-  built by code (after a code line for anything else the turn did).
+  built by code (after a code line for anything else the turn did);
+- an app that did nothing and asked the person something (#168: music
+  naming the albums to pick from) is quoted as its own words, after the same
+  code line; the plan waits on the answer (``app_question``).
 
 A turn where no call ran has nothing to narrate. A narrator provider failure
 falls back to the code-built record reply, so the turn is never lost. Pure
@@ -71,6 +74,7 @@ Path = Literal[
     "planner",  # nothing ran: the planner's words stand
     "handoff",  # an open_* handoff's one line
     "confirm",  # an app's question, word for word
+    "app_question",  # an app that did nothing asked the person: its words, quoted (#168)
     "narrated",  # the narrator's words, every fact present
     "respoken",  # the narrator's second try had every fact
     "appended",  # code appended facts the narrator dropped
@@ -185,6 +189,8 @@ def narrate(
     asking = live_confirm(records)
     if asking is not None:
         return _confirm(records, asking, surface)
+    if app_asks(ran[-1]) is not None:
+        return _app_question(records, ran[-1], surface)
     if all(_is_handoff(record) or record.tool in run_record.READ_TOOLS for record in ran) and any(
         _is_handoff(record) for record in ran
     ):
@@ -216,6 +222,96 @@ def _confirm(
     line = _appendix(_facts(before), spoken=surface in SPOKEN)
     reply = f"{line} {question}" if line else question
     return Narration(reply, "confirm")
+
+
+def _did_nothing(record: ToolCallRecord) -> bool:
+    """An ask that came back, whose app's v1.1 record says it did and found
+    nothing (an empty record, or only refusals and steps not run). A v1 app
+    sends no record, so nothing can be said of it."""
+    return (
+        record.tool.startswith("ask_")
+        and record.result is not None
+        and record.error is None
+        and not record.app_confirm
+        and record.app_record is not None
+        and not any(e.get("outcome") in ("done", "looked_up") for e in record.app_record)
+    )
+
+
+def app_asks(record: ToolCallRecord) -> str | None:
+    """An app's own question to the person (#168), when it did nothing and
+    its reply asks something: music's "MusicBrainz lists these other albums
+    by Caribou: …. Which one would you like?" after refusing a repeat. The
+    question is read from the reply's last paragraph that asks one (a v1.1
+    app's reply leads with its record and ends with its agent's labelled
+    note, ``The agent's note (…): "…"``, whose quoted words are taken), up to
+    its last question, as the app wrote it. The plan pauses there
+    (:mod:`app.ai.interpreter`) and the question reaches the person through
+    :func:`narrate`. ``None`` for anything else: a ``confirm_required``
+    question is :func:`live_confirm`'s."""
+    if not _did_nothing(record):
+        return None
+    for paragraph in reversed(re.split(r"\n\s*\n", record.result or "")):
+        text = " ".join(paragraph.split())
+        if not text or _APP_DID.match(text):
+            continue
+        labelled = _LABELLED.match(text)
+        if labelled is not None:
+            text = labelled.group("said")
+        sentences = _sentences(text)
+        last = max(
+            (n for n, s in enumerate(sentences) if s.rstrip(_QUOTES).endswith("?")), default=-1
+        )
+        if last >= 0:
+            return " ".join(sentences[: last + 1])
+    return None
+
+
+# Conductor's own ``[app did: …]`` paragraph after an app's reply.
+_APP_DID = re.compile(r"\[\w[\w-]* did:")
+# A labelled paragraph whose words are quoted: ``The agent's note (…): "…"``.
+_LABELLED = re.compile(r'^[^"“:]{1,120}:\s*["“](?P<said>.+)["”]$')
+
+
+def app_declined(record: ToolCallRecord) -> bool:
+    """An ask whose app refused its part and did nothing else (#168): a
+    record of refusals only. Like a failed step, it ends the plan."""
+    return _did_nothing(record) and any(
+        e.get("outcome") == "refused" for e in record.app_record or []
+    )
+
+
+def _app_question(
+    records: Sequence[ToolCallRecord], asking: ToolCallRecord, surface: str | None
+) -> Narration:
+    """An app's question passes through in its own words, quoted (its titles
+    are outside text: the person reads them, nothing acts on them), after a
+    code line for what else the plan did or left undone, so the question is
+    the last thing said. Spoken, it keeps the question and the sentence before it."""
+    spoken = surface in SPOKEN
+    words = _sentences(app_asks(asking) or "")
+    if spoken:
+        words = words[-2:]
+    while len(words) > 1 and len(" ".join(words)) > MAX_NOTE_CHARS:
+        words = words[1:]
+    question = _quotable(words)
+    app = confirmation.record_app(asking.tool, asking.arguments) or "the app"
+    before = [record for record in records if record is not asking]
+    line = _appendix(_facts(before), spoken=spoken)
+    said = f"{app[:1].upper()}{app[1:]} asks: “{question}”"
+    reply = f"{line} {said}" if line else said
+    return Narration(reply, "app_question")
+
+
+def _quotable(sentences: Sequence[str]) -> str:
+    """App text safe to quote whole, longer than a record field: one line,
+    no control characters, its own double quotes made single."""
+    text = _CONTROL.sub(" ", " ".join(sentences))
+    text = "".join("'" if char in '"“”«»' else char for char in text)
+    text = " ".join(text.split())
+    if len(text) > MAX_NOTE_CHARS:
+        text = text[: MAX_NOTE_CHARS - 1].rstrip() + "…"
+    return text
 
 
 def _is_handoff(record: ToolCallRecord) -> bool:

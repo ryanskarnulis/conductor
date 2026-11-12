@@ -1586,3 +1586,255 @@ def test_a_chat_answer_sees_the_facts_and_the_structured_about_you_check(run_wit
     speaker_call = provider.requests[1]
     assert speaker_call["response_format"]["json_schema"]["name"] == "answer"
     assert "water the plants" in speaker_call["messages"][-1]["content"]
+
+
+# --- #168: an app that asks the person, or turns down its part, ends the plan --------------
+
+
+def _caribou_queued(world: World) -> None:
+    """S3's turn: Honey queued, so music now refuses an artist-alone repeat."""
+    client_factory(world)(type("A", (), {"name": "music"})()).send_message(
+        1, "download the new Caribou album"
+    )
+
+
+_MUSIC_ASKS = (
+    "Music asks: “Honey was already asked for, so I didn't queue it again. MusicBrainz "
+    "lists these other albums by Caribou: Suddenly (2020); Swim (2010). Which one do "
+    "you want, or do you have a link?”"
+)
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        "add a task to sort {s1} this weekend",
+        "add a task to sort music this weekend",  # no {s1}: still waits
+    ],
+)
+def test_an_apps_question_pauses_the_plan_and_reaches_the_person_in_its_words(
+    run_with: Any, world: World, db_session: Session, task: str
+) -> None:
+    _caribou_queued(world)
+    plan = steps(ask("music", "download the other album by Caribou"), ask("tasks", task))
+    provider = ScriptedProvider([plan_turn(plan)])  # no narrator turn: it passes through
+    reply = run_with(provider, "do the same for their other album")
+    assert [w.title for w in world.writes()] == ["Honey"]  # nothing more, no task
+    compiled = _plans(db_session)[-1]
+    assert (compiled.status, compiled.pause, compiled.resume_at, compiled.pause_app) == (
+        "paused",
+        "app_question",
+        0,
+        "music",
+    )
+    assert compiled.note == "s1 waits on the person: music asked"
+    assert [outcome for _, _, outcome in _steps(db_session)] == ["done"]  # the rest waits
+    # The app's question, quoted whole: the albums to pick from and the ask.
+    assert reply["content"] == _MUSIC_ASKS
+
+
+def test_the_answer_to_an_apps_question_goes_back_to_it_and_the_plan_goes_on(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    _caribou_queued(world)
+    plan = steps(
+        ask("music", "download the other album by Caribou"),
+        ask("tasks", "add a task to sort {s1} this weekend"),
+    )
+    run_with(ScriptedProvider([plan_turn(plan)]), "do the same for their other album")
+    provider = ScriptedProvider(
+        [plan_turn({"resume": "Suddenly"}), text_turn("Queued “Suddenly”; added “sort Suddenly”.")]
+    )
+    reply = run_with(provider, "Suddenly")
+    sent = [call["arguments"]["message"] for call in reply["tool_calls"]]
+    assert sent == [
+        "download the other album by Caribou (the person's answer to your question: Suddenly)",
+        "add a task to sort “Suddenly” this weekend",
+    ]
+    assert [(w.kind, w.title) for w in world.writes()][1:] == [
+        ("queue", "Suddenly"),
+        ("create", "sort Suddenly"),
+    ]
+    resumed = _plans(db_session)[-1]
+    assert resumed.status == "ran" and resumed.body is not None
+    assert "(the person's answer to your question: Suddenly)" in json.dumps(resumed.body)
+    # The planner was offered a resume: the paused plan was waiting.
+    planner = provider.requests[0]
+    schema = json.dumps(planner["response_format"])
+    assert '"resume"' in schema
+
+
+def test_an_unrelated_next_turn_lapses_an_apps_question(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    _caribou_queued(world)
+    plan = steps(
+        ask("music", "download the other album by Caribou"),
+        ask("tasks", "add a task to sort {s1} this weekend"),
+    )
+    run_with(ScriptedProvider([plan_turn(plan)]), "do the same for their other album")
+    other = steps(ask("tasks", "add a task to water the plants tomorrow"))
+    run_with(ScriptedProvider([plan_turn(other), text_turn("Added it.")]), "add a task")
+    assert [w.title for w in world.writes()] == ["Honey", "water the plants"]
+    # The question has lapsed: a later "Suddenly" isn't offered a resume.
+    provider = ScriptedProvider(
+        [plan_turn(steps(ask("music", "download Suddenly by Caribou"))), text_turn("Queued.")]
+    )
+    run_with(provider, "Suddenly")
+    assert '"resume"' not in json.dumps(provider.requests[0]["response_format"])
+
+
+def test_a_question_spoken_keeps_the_list_and_the_question() -> None:
+    from app.ai import narrator
+    from app.ai.runtime import ToolCallRecord
+
+    asked = ToolCallRecord(
+        tool="ask_music",
+        arguments={"message": "download the other album by Caribou"},
+        result=(
+            'Honey was "already" asked for. MusicBrainz lists these: Suddenly (2020). '
+            "Which one? I can also take a link."
+        ),
+        app_record=[{"tool": "download_album", "outcome": "refused", "reason": "held"}],
+    )
+    told = narrator.narrate("words", None, [asked], surface="voice", chat=lambda m, n: None)  # type: ignore[arg-type,return-value]
+    assert told.path == "app_question"
+    assert told.reply == "Music asks: “MusicBrainz lists these: Suddenly (2020). Which one?”"
+    screen = narrator.narrate("words", None, [asked], surface=None, chat=lambda m, n: None)  # type: ignore[arg-type,return-value]
+    assert screen.reply is not None and "Honey was 'already' asked for." in screen.reply
+
+
+@pytest.mark.parametrize(
+    ("result", "record", "asks", "declined"),
+    [
+        ("Which album?", [], True, False),  # v1.1, nothing ran, a question
+        ("Which album?", None, False, False),  # v1: no record, nothing can be said
+        ("Queued it. Want another?", [{"tool": "q", "outcome": "done"}], False, False),
+        ("Found 3. Which one?", [{"tool": "l", "outcome": "looked_up"}], False, False),
+        ("No such album, so nothing was queued.", [{"tool": "d", "outcome": "refused"}], False, True),
+        ("The library has 7 songs.", [], False, False),  # an answer, not a question
+    ],
+)  # fmt: skip
+def test_what_counts_as_an_app_asking_or_turning_down_its_part(
+    result: str, record: list[dict[str, Any]] | None, asks: bool, declined: bool
+) -> None:
+    from app.ai import narrator
+    from app.ai.runtime import ToolCallRecord
+
+    call = ToolCallRecord(tool="ask_music", arguments={}, result=result, app_record=record)
+    assert (narrator.app_asks(call) is not None) is asks
+    assert narrator.app_declined(call) is declined
+
+
+def test_an_app_that_turns_down_its_part_ends_the_plan(
+    run_with: Any, fleet: Fleet, world: World, db_session: Session
+) -> None:
+    from app.fleet.delegate import RecordEntry
+
+    def send(app_name: str, original: Any, *args: Any, **kwargs: Any) -> Any:
+        exchange = original(*args, **kwargs)
+        if app_name == "music":
+            exchange.assistant_message.content = "The lookup is down, so nothing was queued."
+            exchange.assistant_message.record = [
+                RecordEntry(tool="download_album", outcome="refused", reason="lookup down")
+            ]
+        return exchange
+
+    build_delegate_tools(fleet, _wrapped(world, send))
+    plan = steps(
+        ask("music", "download Suddenly by Caribou"),
+        ask("tasks", "add a task to water the plants"),
+    )
+    provider = ScriptedProvider([plan_turn(plan), text_turn("Music turned it down.")])
+    run_with(provider, "words")
+    assert [w.kind for w in world.writes()] == ["queue"]  # the fake queued; tasks never asked
+    compiled = _plans(db_session)[-1]
+    assert compiled.note == "stopped after s1: music turned down its part"
+    assert [outcome for _, _, outcome in _steps(db_session)] == ["done", "not_run"]
+
+
+@pytest.mark.parametrize(
+    ("words", "body", "sent_back"),
+    [
+        # S15's recall-first plan (#168): a recall for a thing not had yet, fed to an ask.
+        (
+            "do the same for their other album",
+            steps(
+                {"do": "recall", "query": "what is the other album?"},
+                ask("music", "download the album {s1}"),
+                ask("tasks", "add a task to sort {s1} this weekend"),
+            ),
+            True,
+        ),
+        ("grab another song by them", steps({"do": "recall", "query": "which artist?"}, ask("music", "download {s1}")), True),
+        # The same lookup through memory, conductor's own app.
+        ("do the same for their other album", steps(ask("memory", "what other album did I mention?"), ask("music", "download the album {s1}")), True),
+        # The ask the repair asks for, a recall that feeds nothing, or no "other".
+        ("do the same for their other album", steps(ask("music", "download the other album by Caribou")), False),
+        ("what was their other album called?", steps({"do": "recall", "query": "their other album"}), False),
+        ("download the album we talked about", steps({"do": "recall", "query": "the album"}, ask("music", "download {s1}")), False),
+    ],
+)  # fmt: skip
+def test_a_recall_for_one_not_had_yet_goes_back_for_the_ask(
+    words: str, body: dict[str, Any], sent_back: bool
+) -> None:
+    found = plans.recalls_unnamed(plans.load(body), words)
+    assert bool(found) is sent_back
+    if found:
+        assert "Leave s1 out and ask music for it directly" in found[0]
+        assert 'like "the other' in found[0]
+
+
+def test_an_amend_or_cancel_reaches_a_plan_paused_on_an_apps_question(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    _caribou_queued(world)
+    plan = steps(
+        ask("music", "download the other album by Caribou"),
+        ask("tasks", "add a task to sort {s1} this weekend"),
+    )
+    run_with(ScriptedProvider([plan_turn(plan)]), "do the same for their other album")
+    amend = steps({"do": "amend", "target": "last", "change": "Swim"})
+    provider = ScriptedProvider([plan_turn(amend), text_turn("Queued “Swim”; added “sort Swim”.")])
+    reply = run_with(provider, "make it Swim")
+    sent = [call["arguments"]["message"] for call in reply["tool_calls"]]
+    assert sent == [
+        "download the other album by Caribou (change: Swim)",
+        "add a task to sort “Swim” this weekend",
+    ]
+    assert [w.title for w in world.writes()] == ["Honey", "Swim", "sort Swim"]
+    # And a cancel ends it: nothing more is sent.
+    run_with(ScriptedProvider([plan_turn(plan)]), "do the same for their other album")
+    cancel = steps({"do": "cancel", "target": "last"})
+    run_with(ScriptedProvider([plan_turn(cancel)]), "never mind")
+    assert _plans(db_session)[-2].status == "cancelled"  # the paused plan ends
+    assert [w.title for w in world.writes()] == ["Honey", "Swim", "sort Swim"]
+
+
+def test_an_apps_question_is_read_from_its_agents_note_after_a_long_record() -> None:
+    # Real music's reply (fleet smoke, #174): the record first, cut where it
+    # is long, then its agent's labelled note; conductor's activity note after.
+    from app.ai import narrator
+    from app.ai.runtime import ToolCallRecord
+
+    reply = (
+        "Music's record of this run (built by the app from its tool results; nothing outside "
+        '"Done" was saved or changed):\nDone:\n- nothing\nRefused:\n- #1 download_album '
+        '{"artist":"Caribou"} -> Honey (2024) by Caribou was already asked for, so nothing was '
+        "queued. MusicBrainz lists these other albums by Caribou: Suddenly (2020); Swim (2010). "
+        "Say it was…\n\nThe agent's note (its reading of the results, not a record): \"The album "
+        "Honey by Caribou was already asked for. MusicBrainz lists these other albums by Caribou: "
+        'Suddenly (2020) and Swim (2010). Which one would you like, or do you have a link?"'
+        "\n\n[music did: download_album(failed)]"
+    )
+    asked = ToolCallRecord(
+        tool="ask_music",
+        arguments={},
+        result=reply,
+        app_record=[{"tool": "download_album", "outcome": "refused", "untrusted": True}],
+    )
+    assert narrator.app_asks(asked) == (
+        "The album Honey by Caribou was already asked for. MusicBrainz lists these other "
+        "albums by Caribou: Suddenly (2020) and Swim (2010). Which one would you like, or do "
+        "you have a link?"
+    )

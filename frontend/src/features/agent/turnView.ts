@@ -243,6 +243,8 @@ export function streamPause(stream: TurnStream): PauseView | null {
     return { kind: 'question', question, options: (step?.options ?? []).filter((o): o is string => typeof o === 'string' && o !== '') }
   }
   if (!paused.question) return null
+  // An app's own question (#168): the person answers it in words; their answer goes back to it.
+  if (paused.reason === 'app_question') return { kind: 'question', question: paused.question, options: [] }
   const app = appLabel(paused.app ?? 'conductor')
   const why = paused.reason === 'gate' ? `Conductor checks before asking ${app}. Say “yes”, or tap.` : `${app} asks before this write. Say “yes”, or tap.`
   return { kind: 'confirm', appKey: paused.app ? paused.app.replace(/-/g, '_') : null, app, question: paused.question, why }
@@ -255,6 +257,7 @@ export function streamResumedNote(stream: TurnStream): string | null {
   if (resumed.reason === 'ask_user') return resumed.answer ? `Resumed the plan · you answered ${resumed.answer}` : 'Resumed the plan · you answered'
   if (resumed.reason === 'gate') return 'Resumed the plan · you said yes'
   if (resumed.reason === 'proposal') return 'Running the proposed plan · you said yes'
+  if (resumed.reason === 'app_question') return resumed.answer ? `Resumed the plan · you answered ${resumed.answer}` : 'Resumed the plan · you answered'
   return 'You said yes to the app’s question'
 }
 

@@ -144,7 +144,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   is a tool-less call on a typed receipt of what ran (`app/ai/narrator.py`);
   the persona lives only there. Code guarantees the facts (titles, counts,
   undo, a plan's unrun steps and why, quoted outside text, two sentences on
-  voice); handoffs and an app's confirm question pass through verbatim.
+  voice); handoffs and an app's confirm question pass through verbatim, and
+  so does an app's own question when it did nothing (quoted as its words, #168).
 - **The ledger** (#69, `app/services/ledger.py`) is the record of what
   happened: a turn opens with the person's words before it runs and closes
   with its plan (a control step split off first is its own plan), one step
@@ -174,9 +175,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   then the rest, unless it left a question waiting or the rest depended on
   it (then not run, and said). Plans have no designed length; 12 steps is a runaway
   ceiling. A destructive
-  ask to an app without `confirms` pauses on code's question; `ask_user` and
-  an app's `confirm_required` pause too, and the next turn resumes the same
-  plan. The planner prompt and the ten step kinds stay byte-stable: plan-level
+  ask to an app without `confirms` pauses on code's question; `ask_user`, an
+  app's `confirm_required` and an app's own question (`app_question`, #168:
+  the answer goes back to the step that asked) pause too, and the next turn
+  resumes the same plan. The planner prompt and the ten step kinds stay byte-stable: plan-level
   evals (`tests/test_plan_evals.py`, `CONDUCTOR_PLAN_EVALS=1`) gate any change
   to them, to the compiler, or to a manifest.
 - **`look(app)` reads a glance, never asks an agent** (#73). An app's
@@ -255,9 +257,11 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   Code fills `{sN}` from step N's receipt: its main touched title (job refs
   skipped, up to 3 joined), cleaned and quoted. No title, or more than 3,
   means the step doesn't run and the plan ends, with the reason on the
-  record. Never guess a name or splice in an app's reply text. The validator
-  repairs a lost ref: a bare `s1`, a step re-describing what an earlier ask
-  will find, or an ask pointing at State ("their other album"); and it
+  record; so does an ask its app turned down with nothing done (#168). Never
+  guess a name or splice in an app's reply text. The validator repairs a lost
+  ref: a bare `s1`, a step re-describing what an earlier ask will find, an ask
+  pointing at State ("their other album"), or a recall or memory lookup for
+  one (`plan.recalls_unnamed`, a nudge, #168); and it
   splits an ask carrying a second app's work ("… and add a task", #127) into
   two steps. The plan is
   fixed before any step runs, so a title can't steer control flow. An

@@ -673,11 +673,42 @@ S15 = Scenario(
             ask("music", "download the other album by Caribou"),
             ask("tasks", "add a task to sort {s1} this weekend"),
         ),
-        _say(
-            "Music can't tell which Caribou album is the other one: it has Honey, Suddenly "
-            "and Swim. I haven't added a task, since the album step gave no name to pass on. "
-            "Which one do you want?"
-        ),
+        # Music refuses the repeat and asks which album (music#102): its
+        # question passes through in its own words, so no narrator turn (#168).
+    ],
+)
+
+
+def _s15_picked(session: Session) -> None:
+    # #168: S15, then the person names one of the albums music listed. That
+    # one is queued, and the work that waited on its name (the weekend task)
+    # goes ahead: nothing else is written, and nothing more is queued.
+    _s15(session)
+    picked = session.turn("pick")
+    queued = [r.title for r in session.writes(picked) if r.kind == "queue"]
+    assert queued == ["Suddenly"], f"queued {queued or 'nothing'} for the pick, not Suddenly"
+    _weekend_task_titled(session, "suddenly")
+    only_writes(
+        session,
+        {("queue", "honey"), ("create", "honey"), ("queue", "suddenly"), ("create", "suddenly")},
+    )
+
+
+S15_PICKED = Scenario(
+    "S15p",
+    "S15, then 'Suddenly': the album music listed is queued and its task is made",
+    (
+        Say(_S3_TEXT),
+        Say("do the same for their other album", label="same"),
+        Say("Suddenly", label="pick"),
+    ),
+    (_s15_picked,),
+    script=lambda w: [
+        *(S15.script(w) if S15.script else []),
+        # Music's question paused the plan: "Suddenly" resumes it, the
+        # answer goes back to music and the task waits on its name.
+        text_turn(json.dumps({"about": "the waiting question", "resume": "Suddenly"})),
+        _say("Queued “Suddenly” by Caribou and added “sort Suddenly” for the weekend."),
     ],
 )
 
@@ -1009,6 +1040,7 @@ SCENARIOS: tuple[Scenario, ...] = (
     S13,
     S14,
     S15,
+    S15_PICKED,
     S16,
     REMEMBER_USED,
     FORGET_GONE,

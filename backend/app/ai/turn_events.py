@@ -79,7 +79,7 @@ def receipt(seq: int, record: ToolCallRecord) -> None:
 
 
 def paused(
-    reason: Literal["ask_user", "gate", "app_confirm"],
+    reason: Literal["ask_user", "gate", "app_confirm", "app_question"],
     *,
     question: str | None,
     app: str | None = None,
@@ -109,7 +109,7 @@ def job(conversation_id: int, payload: dict[str, Any]) -> None:
 
 
 def resumed(
-    reason: Literal["ask_user", "gate", "app_confirm", "proposal"],
+    reason: Literal["ask_user", "gate", "app_confirm", "app_question", "proposal"],
     *,
     step: str | None = None,
     answer: str | None = None,

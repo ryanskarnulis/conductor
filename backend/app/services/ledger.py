@@ -263,7 +263,7 @@ def paused_plan(
             and plan.acted
             and plan.status == "paused"
             and plan.body is not None
-            and plan.pause in ("ask_user", "gate", "app_confirm")
+            and plan.pause in ("ask_user", "gate", "app_confirm", "app_question")
             and plan.resume_at is not None
         ):
             return PausedPlan(

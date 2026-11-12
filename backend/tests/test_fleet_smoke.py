@@ -1,4 +1,4 @@
-"""Fleet smoke (#143): S2, S3, S9 and S15 through conductor against real PCC and music.
+"""Fleet smoke (#143): S2, S3, S9, S15 and S15p through conductor against real PCC and music.
 
 Session evals hold conductor's choices to account over a fake world. This is
 the other half: the same person's side of four scenarios, through the same
@@ -31,6 +31,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 import yaml
 from fastapi.testclient import TestClient
@@ -55,6 +56,7 @@ from tests.fake_world import World, weekend_targets
 from tests.fleet_harness import (
     ENABLED,
     FLAG,
+    FakeMusicBrainz,
     Meter,
     MeteredCall,
     ScratchFleet,
@@ -78,7 +80,7 @@ from tests.session_harness import (
     WorldHolder,
     run_sample,
 )
-from tests.session_scenarios import S2, S3, S9, S15
+from tests.session_scenarios import S2, S3, S9, S15, S15_PICKED
 
 _RUNS = int(os.environ.get("CONDUCTOR_FLEET_RUNS", "3"))
 _COST = os.environ.get("CONDUCTOR_FLEET_COST") == "1"
@@ -115,6 +117,42 @@ def test_the_fleet_dir_points_dead_siblings_nowhere(tmp_path: Path) -> None:
     assert "upstream: 127.0.0.1:5" in (fleet / "project-command-center" / "app.yaml").read_text()
     assert "upstream: 127.0.0.1:1" in (fleet / "chess" / "app.yaml").read_text()
     assert not (fleet / "music").exists()
+
+
+def test_the_fake_musicbrainz_answers_music_s_three_lookups() -> None:
+    # music's musicbrainz.py: a release-group search (artist alone, or with a
+    # title), an album's editions, an edition's tracks; tagging finds nothing.
+    fake = FakeMusicBrainz()
+    try:
+        with httpx.Client(base_url=fake.url, trust_env=False) as client:
+
+            def get(path: str, **params: Any) -> Any:
+                response = client.get(f"/{path}", params={**params, "fmt": "json"})
+                return response.status_code, response.json()
+
+            query = 'artist:"Caribou" AND (primarytype:album OR primarytype:ep)'
+            _, found = get("release-group", query=query, limit=100)
+            groups = found["release-groups"]
+            assert sorted((g["title"], g["first-release-date"][:4]) for g in groups) == [
+                ("Honey", "2024"),
+                ("Suddenly", "2020"),
+                ("Swim", "2010"),
+            ]
+            assert all(g["primary-type"] == "Album" and not g["secondary-types"] for g in groups)
+            query = 'releasegroup:"Suddenly" AND artist:"Caribou"'
+            _, named = get("release-group", query=query, limit=100)
+            (suddenly,) = named["release-groups"]
+            _, editions = get("release", **{"release-group": suddenly["id"]})
+            (edition,) = editions["releases"]
+            assert edition["media"] == [{"track-count": 4}]
+            _, release = get(f"release/{edition['id']}", inc="recordings artist-credits")
+            titles = [t["title"] for t in release["media"][0]["tracks"]]
+            assert titles == ["Sister", "You and I", "Sunny's Time", "Home"]
+            assert get("recording", query="x")[1] == {"recordings": []}
+            assert get("release/nope", inc="x")[0] == 404
+        assert fake.asked and all(path.startswith("/ws/2/") for path in fake.asked)
+    finally:
+        fake.close()
 
 
 def test_receipts_come_from_done_entries_and_skip_job_refs() -> None:
@@ -386,11 +424,24 @@ def s2_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
     return (end_state,)
 
 
+def _albums_queued(fleet: ScratchFleet) -> list[str]:
+    """The albums music queued by name, oldest first (music#96: a job that
+    names its album, by MusicBrainz's title and release-group id)."""
+    jobs = sorted(fleet.jobs(), key=lambda job: int(job["id"]))
+    return [str(job["album_title"]) for job in jobs if job.get("album_id")]
+
+
 def s3_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
+    # Music resolves "the new Caribou album" to Honey (music#96, against the
+    # harness's MusicBrainz), and the task carries that name (#174).
     def end_state(session: Session) -> None:
-        caribou = _fetched(fleet, "caribou") + _fetched(fleet, "honey")
-        assert caribou, f"no Caribou album asked of music (asked: {_fetched(fleet, '') or 'none'})"
+        albums = _albums_queued(fleet)
+        assert albums == ["Honey"], (
+            f"albums queued {albums or 'none'} (jobs: {_fetched(fleet, '') or 'none'}), not Honey"
+        )
         _weekend_task(fleet, "honey")
+        made = [t["title"] for t in fleet.new_tasks()]
+        assert len(made) == 1, f"{len(made)} tasks created: {made}"
         _nothing_trashed(fleet)
 
     return (end_state,)
@@ -413,10 +464,35 @@ def s9_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
 
 
 def s15_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
+    # Music, asked for "their other album" with the artist alone while Honey
+    # is held, queues nothing and asks which album (music#102): Honey stays
+    # the only album and its task the only task, and the reply passes the
+    # question on (#168, #174; the session evals' S15).
     def end_state(session: Session) -> None:
-        caribou = _fetched(fleet, "caribou")
-        assert len(caribou) >= 2, f"music asked for {caribou or 'nothing'}, not two Caribou albums"
+        albums = _albums_queued(fleet)
+        assert albums == ["Honey"], f"albums queued {albums or 'none'}, not Honey alone"
+        made = [t["title"] for t in fleet.new_tasks()]
+        assert len(made) == 1 and "honey" in made[0].lower(), (
+            f"tasks created {made}, not S3's Honey task alone"
+        )
+        reply = (session.turn("same").reply or "").lower()
+        assert re.search(r"suddenly|swim|which|link|\?", reply), (
+            "didn't name the albums to pick from or ask which one"
+        )
+
+    return (end_state,)
+
+
+def s15p_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
+    # Then "Suddenly": music queues it, and the task that waited on its name
+    # is made for the weekend (#168).
+    def end_state(session: Session) -> None:
+        albums = _albums_queued(fleet)
+        assert albums == ["Honey", "Suddenly"], f"albums queued {albums or 'none'}"
         _weekend_task(fleet, "suddenly")
+        made = [t["title"] for t in fleet.new_tasks()]
+        assert len(made) == 2, f"{len(made)} tasks created: {made}"
+        _nothing_trashed(fleet)
 
     return (end_state,)
 
@@ -426,6 +502,7 @@ _SMOKE: dict[str, tuple[Scenario, Callable[[ScratchFleet], tuple[Any, ...]]]] = 
     "S3": (S3, s3_checks),
     "S9": (S9, s9_checks),
     "S15": (S15, s15_checks),
+    "S15p": (S15_PICKED, s15p_checks),
 }
 
 
