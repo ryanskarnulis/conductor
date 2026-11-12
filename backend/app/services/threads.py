@@ -363,8 +363,31 @@ def ending(db: Session, thread: Conversation) -> Ending:
         .order_by(LedgerJob.id)
     ).scalars()
     running = [(job.app, job.title, bool(job.untrusted)) for job in jobs]
+    # A failed ask leaves a step and no receipt (#189): name the app, so a
+    # thread whose every turn failed doesn't read as one that found nothing.
+    failed = list(
+        dict.fromkeys(
+            db.execute(
+                select(LedgerStep.app)
+                .join(LedgerPlan, LedgerPlan.id == LedgerStep.plan_id)
+                .join(LedgerTurn, LedgerTurn.id == LedgerPlan.turn_id)
+                .where(
+                    LedgerTurn.conversation_id == thread.id,
+                    LedgerTurn.incognito.is_(False),
+                    LedgerTurn.forgotten_at.is_(None),
+                    LedgerStep.outcome == "failed",
+                    LedgerStep.app.is_not(None),
+                    LedgerStep.app.not_in(_NOT_APP_WORK),
+                )
+                .order_by(LedgerStep.id)
+            ).scalars()
+        )
+    )
     end = ThreadEnd(
-        title=thread.title or thread_note.DEFAULT_TITLE, entries=entries, running=running
+        title=thread.title or thread_note.DEFAULT_TITLE,
+        entries=entries,
+        running=running,
+        failed=[app for app in failed if app],
     )
     return Ending(end, receipts)
 

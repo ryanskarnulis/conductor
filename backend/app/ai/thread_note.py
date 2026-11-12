@@ -65,15 +65,25 @@ class ThreadEnd:
     ``entries`` are receipt entries in the v1.1 record's shape (``app``,
     ``tool``, ``outcome``, ``touched``, ``count``, ``untrusted``, ``reason``),
     oldest first. ``running`` are its jobs still going, as ``(app, title,
-    untrusted)``."""
+    untrusted)``. ``failed`` are the apps that didn't answer, once each."""
 
     title: str
     entries: list[dict[str, Any]] = field(default_factory=list)
     running: list[tuple[str, str | None, bool]] = field(default_factory=list)
+    # Apps whose step failed with nothing to show for it (#189): a failed ask
+    # leaves a step row and no receipt, so it never reaches ``entries``.
+    failed: list[str] = field(default_factory=list)
 
     @property
     def did_anything(self) -> bool:
         return bool(self.entries or self.running)
+
+
+def narrator_join(names: list[str]) -> str:
+    """ "music", "music and tasks", "music, tasks and chess"."""
+    if len(names) < 3:
+        return " and ".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def thread_note(end: ThreadEnd, *, surface: str | None, chat: Chat | None) -> Narration:
@@ -102,7 +112,11 @@ def fallback(end: ThreadEnd, surface: str | None) -> str:
     """Code's note: the thread by name and only what its receipts say."""
     subject = f"Side thread {_name(end)}"
     if not end.did_anything:
-        text = f"{subject} closed. Nothing was changed or found there."
+        if end.failed:
+            names = narrator_join(end.failed)
+            text = f"{subject} closed. {names} didn't answer, so nothing was done there."
+        else:
+            text = f"{subject} closed. Nothing was changed or found there."
     else:
         said = [fact.say for fact in _facts(end)[1:]]
         text = f"{subject} closed: {'; '.join(said)}." if said else f"{subject} closed."

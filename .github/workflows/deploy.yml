@@ -26,6 +26,24 @@ jobs:
           before=$(git rev-parse HEAD)
           git pull --ff-only origin main
           docker compose up -d --build
+          # Check the API the way a browser and the gateway reach it: through
+          # nginx. The backend's own healthcheck can pass while nginx still
+          # proxies to a previous container's address (PCC#523, #190), so a
+          # green deploy would serve 502s. Any 5xx here after a minute fails
+          # the deploy.
+          port=$(docker compose port frontend 80 | sed 's/.*://')
+          ok=""
+          for _ in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:${port}/api/agent/conversations" || true)
+            case "$code" in
+              5*|000) sleep 5 ;;
+              *) ok=1; break ;;
+            esac
+          done
+          if [ -z "$ok" ]; then
+            echo "::error title=API unreachable through nginx::/api/agent/conversations answered ${code} for a minute after the deploy."
+            exit 1
+          fi
           if ! git diff --quiet "$before" HEAD -- app.yaml; then
             cd "$HOME/deploy/gateway"
             python3 gen.py
