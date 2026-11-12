@@ -223,6 +223,18 @@
   min-height: 42px;
 }
 
+/* At a narrow window the panel is ~340px: the controls drop under the words
+   instead of squeezing the textarea to a few characters (#189). The phone
+   sheet keeps its single tight row. */
+.shell:not([data-view='phone']) .agent-composer {
+  flex-wrap: wrap;
+}
+
+.shell:not([data-view='phone']) .agent-composer textarea {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
 .agent-stop {
   display: inline-flex;
   align-items: center;
