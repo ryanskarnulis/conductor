@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -925,8 +925,7 @@ def _facts(records: Sequence[ToolCallRecord]) -> list[_Fact]:
                     )
                 )
             if total > len(named):
-                kind = str((refs or entry.get("touched") or [{}])[0].get("kind") or "item")
-                noun = kind.replace("_", " ") + ("" if total == 1 else "s")
+                noun = _count_noun(refs or entry.get("touched") or [], total, outcome)
                 facts.append(_Fact("count", str(total), f"{verb} {total} {noun}"))
             if started:
                 # Accepted, not done (#188): the reply says so, by code's check.
@@ -950,6 +949,20 @@ def _facts(records: Sequence[ToolCallRecord]) -> list[_Fact]:
     if undo is not None:
         facts.append(_Fact("undo", "undo", f"say undo to {undo}"))
     return facts
+
+
+def _count_noun(refs: Sequence[Mapping[str, Any]], total: int, outcome: object) -> str:
+    """What a count counts: the refs' one kind, where that can't be wrong (#195).
+
+    A count past the refs listed may span kinds (a project trashed with its 3
+    tasks is ``count: 4``), so a write's extra rows are "items". A look-up's rows
+    are one query's, so they keep the kind its refs share.
+    """
+    kinds = {str(ref.get("kind") or "") for ref in refs}
+    kind = kinds.pop() if len(kinds) == 1 else ""
+    if not kind or (total > len(refs) and outcome != "looked_up"):
+        kind = "item"
+    return kind.replace("_", " ") + ("" if total == 1 else "s")
 
 
 def _unrun_fact(record: ToolCallRecord, reason: str) -> _Fact:
