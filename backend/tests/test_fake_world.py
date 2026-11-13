@@ -360,3 +360,16 @@ def test_without_a_ref_other_still_means_the_newest(world: World) -> None:
     """A v1.1 ask, words alone: music can't know which album is "the other"."""
     [entry] = _music_record(world, "download the other album by Caribou")
     assert entry.outcome == "done" and entry.touched[0].title == "Honey"
+
+
+def test_an_answer_naming_an_album_queues_it_over_other_than(world: World) -> None:
+    """Music's answer to "Which one?" comes back after the request, with the
+    ref still in context: the album named wins, as ``album`` does over
+    ``other_than``."""
+    music = client_factory(world)(_App("music"))
+    reply = music.send_message(
+        1,
+        "download their other album (the person's answer: Suddenly)",
+        context={"refs": [_honey(world)]},
+    ).assistant_message
+    assert [r.title for r in world.receipts] == ["Suddenly"] and reply.needs_input is None

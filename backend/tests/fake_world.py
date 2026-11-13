@@ -1213,7 +1213,10 @@ class MusicApp:
             for ref in (context or {}).get("refs") or []
             if ref.get("app") == "music" and ref.get("kind") == "album"
         ]
-        if mine and re.search(r"\b(other|another|different)\b", text):
+        # A title it was given still names its album, as music's
+        # ``download_album`` takes ``album`` over ``other_than``: the person's
+        # answer to its question ("Suddenly") is that.
+        if mine and len(named) != 1 and re.search(r"\b(other|another|different)\b", text):
             return self._other_than(mine[0], artist_albums)
         # Real music's ``download_album(artist, album=None)`` (music#96, #102):
         # a title it was given names its album, held or not; the artist alone
