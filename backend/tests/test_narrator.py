@@ -270,6 +270,40 @@ def test_counts_and_undo_offers_are_appended_when_dropped(fleet: _Fleet) -> None
     )
 
 
+@pytest.mark.parametrize(
+    ("outcome", "touched", "count", "said"),
+    [
+        # #195: a project trashed with its 3 tasks is 4 rows, not 4 projects.
+        ("done", [("project", "Kitchen")], 4, "trash project 4 items"),
+        ("done", [("task", "A"), ("project", "B")] * 3, 6, "trash project 6 items"),
+        # One query's rows share the kind of the refs it lists.
+        ("looked_up", [("task", f"T{n}") for n in range(5)], 12, "found 12 tasks"),
+        ("looked_up", [("task", "A"), ("project", "B")] * 3, 9, "found 9 items"),
+    ],
+)
+def test_a_count_never_borrows_the_first_refs_kind(
+    outcome: str, touched: list[tuple[str, str]], count: int, said: str
+) -> None:
+    record = ToolCallRecord(
+        tool="ask_tasks",
+        arguments={"message": "…"},
+        result="ok",
+        app_record=[
+            {
+                "tool": "trash_project" if outcome == "done" else "list_tasks",
+                "outcome": outcome,
+                "touched": [
+                    {"kind": kind, "id": str(n), "title": title}
+                    for n, (kind, title) in enumerate(touched)
+                ],
+                "count": count,
+            }
+        ],
+    )
+    counts = [fact.say for fact in narrator._facts([record]) if fact.kind == "count"]
+    assert counts == [said]
+
+
 def test_a_reply_that_already_says_it_all_is_left_alone(fleet: _Fleet) -> None:
     fleet.tasks = ("ok", _task_record("Water the plants"))
     said = "Added “Water the plants” for tomorrow. Say undo to trash it."
