@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from app.db.models import ConversationRole
 from app.schemas.common import NonBlankStr, UTCDateTime
@@ -33,6 +33,32 @@ class ConversationRead(BaseModel):
     updated_at: UTCDateTime
 
 
+# Bounds on the voice client's heard report (#77): an hour of audio, and a
+# reply far longer than any spoken one.
+MAX_HEARD_MS = 3_600_000
+MAX_HEARD_CHARS = 100_000
+
+
+class HeardReport(BaseModel):
+    """How much of the last spoken reply the person heard before they cut in
+    (#77): the voice client's ``Heard`` (``frontend/src/voice/tts.ts``), its
+    fields in snake case. Characters are the browser's (UTF-16 code units)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    played_ms: Annotated[int, Field(ge=0, le=MAX_HEARD_MS)]
+    total_ms: Annotated[int, Field(ge=0, le=MAX_HEARD_MS)] | None = None
+    heard_chars: Annotated[int, Field(ge=0, le=MAX_HEARD_CHARS)] | None = None
+    total_chars: Annotated[int, Field(ge=0, le=MAX_HEARD_CHARS)]
+
+    @model_validator(mode="after")
+    def _within_the_reply(self) -> HeardReport:
+        # The client rounds an estimate; a report is never worth a lost turn.
+        if self.heard_chars is not None and self.heard_chars > self.total_chars:
+            self.heard_chars = self.total_chars
+        return self
+
+
 class MessageCreate(BaseModel):
     content: AgentMessageText
     # Where the person is (#64), for the state block: the surface they are on
@@ -42,6 +68,9 @@ class MessageCreate(BaseModel):
     # Incognito (#82): this turn's words and reply are never written. The page
     # carries the switch per request and turns it off itself.
     incognito: bool = False
+    # Barge-in (#77): the person spoke over the last reply; how much of it they
+    # heard. Kept on that reply's ledger turn, never for an incognito turn.
+    heard: HeardReport | None = None
 
 
 class ToolCallRead(BaseModel):

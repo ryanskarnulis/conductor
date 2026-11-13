@@ -143,8 +143,9 @@ class DelegateThread(Base, TimestampMixin):
 # its steps, the apps' receipts for each step, the jobs those started and the
 # entities they touched. Episodic memory, the source for undo and "do the same",
 # and the job store (#56). Append-only: rows are never edited after their turn
-# ends, except a job's latest report, an entity's latest title and memory's
-# code-built index (terms and topics, #80). No soft
+# ends, except a job's latest report, an entity's latest title, memory's
+# code-built index (terms and topics, #80) and what the person heard of a
+# reply they spoke over (``LedgerTurn.heard``, #77). No soft
 # delete: trashing a conversation leaves what the apps did on the record
 # (forgetting is #81's, on purpose).
 
@@ -191,6 +192,11 @@ class LedgerTurn(Base, TimestampMixin):
     # (``words`` holds the placeholder); its receipts are kept, and memory,
     # recall, the planner's context and search skip it.
     incognito: Mapped[bool] = mapped_column(default=False, server_default="0")
+    # Barge-in (#77): the person spoke over this turn's spoken reply. The voice
+    # client's report, set by the next turn: ``played_ms``, ``total_ms``,
+    # ``heard_chars`` and ``total_chars`` (UTF-16 units of the reply). Null:
+    # heard to the end, or never spoken.
+    heard: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
 
     plans: Mapped[list[LedgerPlan]] = relationship(back_populates="turn", order_by="LedgerPlan.id")
 

@@ -55,6 +55,7 @@ from sqlalchemy.orm import Session
 from app.ai import confirmation, facts, incognito, memory, narrator, run_record, think
 from app.ai.runtime import AgentRunResult, ToolCallRecord
 from app.ai.plan import Ledgered, PausedPlan, RunningJob, Touched, TurnPlan, UndoReceipt
+from app.ai import state_block
 from app.ai.state_block import Entity
 from app.db.models import (
     Conversation,
@@ -375,6 +376,9 @@ def self_report(db: Session, conversation_id: int, *, since: datetime | None = N
             reply = db.get(ConversationMessage, turn.assistant_message_id)
             if reply is not None and reply.content:
                 lines.append(f'- you said: "{_clip(reply.content, SELF_REPORT_REPLY_CHARS)}"')
+                cut = _heard_of(turn, reply)
+                if cut is not None:
+                    lines.append(_heard_line(cut))
     for job in running_jobs(db, conversation_id, limit=5):
         if job.app == think.APP:
             lines.append(f"Running: {think.running_line(job.ref, job.title, job.status)}")
@@ -384,6 +388,96 @@ def self_report(db: Session, conversation_id: int, *, since: datetime | None = N
     if not lines:
         return "Nothing on record yet in this conversation."
     return "\n".join(lines)
+
+
+# --- what the person heard (#77) ----------------------------------------------------------
+
+
+def _last_reply_turn(
+    db: Session, conversation_id: int, since: datetime | None
+) -> LedgerTurn | None:
+    """The newest ended turn in the window that conductor ran and answered:
+    the reply the voice client last spoke."""
+    return db.execute(
+        select(LedgerTurn)
+        .where(
+            LedgerTurn.conversation_id == conversation_id,
+            LedgerTurn.kind == "message",
+            LedgerTurn.status == "ended",
+            *_since(since),
+        )
+        .order_by(LedgerTurn.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _lends(db: Session, turn: LedgerTurn | None) -> ConversationMessage | None:
+    """The turn's reply, when it may say anything: never an incognito or
+    forgotten turn's (#82, #81)."""
+    if turn is None or turn.incognito or turn.forgotten_at is not None:
+        return None
+    if turn.assistant_message_id is None:
+        return None
+    reply = db.get(ConversationMessage, turn.assistant_message_id)
+    return reply if reply is not None and reply.content else None
+
+
+def record_heard(
+    db: Session, conversation_id: int, report: dict[str, Any], *, since: datetime | None = None
+) -> bool:
+    """Keep the voice client's report on the turn whose reply the person
+    spoke over: the newest answered turn in the window. Dropped (False) when
+    there is none, it was incognito or forgotten, or the report's length isn't
+    that reply's: then it describes something else and would mislead. The
+    caller never sends one for an incognito turn."""
+
+    def write() -> bool:
+        turn = _last_reply_turn(db, conversation_id, since)
+        reply = _lends(db, turn)
+        if turn is None or reply is None or reply.content is None:
+            return False
+        if state_block.utf16_len(reply.content) != report.get("total_chars"):
+            logger.info("heard_mismatch", turn_id=turn.id, total_chars=report.get("total_chars"))
+            return False
+        turn.heard = dict(report)
+        db.flush()
+        logger.info("heard_recorded", turn_id=turn.id, heard_chars=report.get("heard_chars"))
+        return True
+
+    return bool(_safely(db, "ledger_heard_failed", write))
+
+
+def last_heard(
+    db: Session, conversation_id: int, *, since: datetime | None = None
+) -> state_block.Heard | None:
+    """The last reply, when the person spoke over it, for the state block.
+    Re-checked on every read: a turn forgotten since lends nothing."""
+    turn = _last_reply_turn(db, conversation_id, since)
+    reply = _lends(db, turn)
+    if turn is None or reply is None:
+        return None
+    return _heard_of(turn, reply)
+
+
+def _heard_of(turn: LedgerTurn, reply: ConversationMessage) -> state_block.Heard | None:
+    if not turn.heard or turn.incognito or turn.forgotten_at is not None or not reply.content:
+        return None
+    chars = turn.heard.get("heard_chars")
+    return state_block.Heard(reply.content, chars if isinstance(chars, int) else None)
+
+
+def _heard_line(heard: state_block.Heard) -> str:
+    """The self-report's line under "you said" (#77): what the person heard of
+    it, so "what did you just say?" never assumes they heard the rest."""
+    parts = state_block.split_heard(heard)
+    if parts is None:
+        return "  - the person spoke over it partway; how much they heard is unknown"
+    said, unsaid = parts
+    if not unsaid:
+        return "  - the person spoke over its very end; they heard it all"
+    if not said:
+        return "  - the person spoke over it before any of it played; they heard none of it"
+    return f'  - the person spoke over it: they heard only "{_clip(said, SELF_REPORT_REPLY_CHARS)}"'
 
 
 # How far back an undo looks (#74): the last plan, plus a few before it for a

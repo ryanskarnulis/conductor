@@ -620,6 +620,10 @@ def _post_message(
     thread = conversation if threads_service.is_thread(conversation) else None
     since = None if thread is not None else _window(db, conversation.id)
     turns = _stored_turns(db, conversation.id, since)
+    if data.heard is not None and not hidden:
+        # Barge-in (#77): the person spoke over the last reply. Kept on its
+        # turn before the opening is built, so this turn's State says it.
+        ledger.record_heard(db, conversation.id, data.heard.model_dump(), since=since)
     turn_opening = turn_context.build(
         clock.local_today(),
         Now(surface=data.surface, panel=data.panel),
@@ -638,6 +642,8 @@ def _post_message(
             if thread is not None
             else facts_service.for_state(db, data.content)
         ),
+        # Incognito shows nothing of it (#82).
+        heard=None if hidden else lambda: ledger.last_heard(db, conversation.id, since=since),
     )
     user_message = conversations_service.append_user_message(
         db, conversation, data.content, hidden=hidden

@@ -210,7 +210,7 @@ def test_the_opening_stays_bounded_with_matches() -> None:
     matched = [line for line in block.splitlines() if line.startswith("- music song")]
     assert len(matched) == state_block.MAX_MATCHES
     assert sum(len(line) for line in matched) + 90 <= state_block.MATCHES_MAX_CHARS
-    assert turn_context.MAX_CHARS <= 11_500
+    assert turn_context.MAX_CHARS <= 12_000
 
 
 # --- through the route ----------------------------------------------------------------------

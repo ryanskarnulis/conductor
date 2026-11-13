@@ -1,4 +1,5 @@
 import { apiClient, apiUrl } from './client'
+import type { Heard } from '../voice/tts'
 import type {
   AgentMessage,
   ConversationDetail,
@@ -44,6 +45,19 @@ export async function getConversation(id: number): Promise<ConversationDetail> {
 export interface SendOptions {
   surface?: Surface
   incognito?: boolean
+  /** Barge-in (#77): how much of the last spoken reply the person heard
+   * before they spoke over it, as the voice client reports it. */
+  heard?: Heard
+}
+
+/** A heard report as the API takes it: the voice client's fields, in snake case. */
+function heardBody(heard: Heard) {
+  return {
+    played_ms: heard.playedMs,
+    total_ms: heard.totalMs,
+    heard_chars: heard.heardChars,
+    total_chars: heard.totalChars,
+  }
 }
 
 export async function postMessage(
@@ -51,10 +65,11 @@ export async function postMessage(
   content: string,
   options: SendOptions = {},
 ): Promise<MessageExchange> {
+  const { heard, ...rest } = options
   const res = await apiClient(`/api/agent/conversations/${conversationId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, ...options }),
+    body: JSON.stringify({ content, ...rest, ...(heard ? { heard: heardBody(heard) } : {}) }),
     timeoutMs: AGENT_RUN_TIMEOUT_MS,
   })
   return (await res.json()) as MessageExchange
