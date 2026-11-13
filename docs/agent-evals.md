@@ -2222,3 +2222,58 @@ before). The run on `87549d9` read the same: gate 5/5 but S5 4/5 (the same
 false-positive family, "decisions made"); S11 4/5, S12 4/5 (one plan asked
 music "how did my last game go?"), S14 4/5, S13 1/5, the rest 5/5. 4/5
 against 5/5 is not significant by the rule (upper 0.954 against 0.649).
+
+## The batch of 2026-11-12, one pass on the final code (`6e28536`)
+
+Built at once, measured once at the end (the person's choice, as on
+2026-11-11): #190 (#192), #189 (#193, #194), #188, #185, #186 (#194) and #77
+(#197), with ryanskarnulis/music#107 and ryanskarnulis/project-command-center#526
+(a delegate's closing turn is peeked and stopped at its first words, the note
+built by code) in the apps. gemma-4-12b, embeddings up, a quiet GPU, held-out
+set not run. Plan evals n=20 (95 cases, 2679 s), session evals gate tier 5
+and frontier 5 (1253 s, infra 0/12, claims backed 158/159).
+
+Each plan cell is passed then first-try. `control` gained the four
+`correct-*` cases (#77) and `s11-undo-job-running` (#185), so its total grew. Nothing is significantly below
+the #168/#174 section's gate by #150's rule, on score or first-try.
+
+| group | floor | #168/#174 | this batch |
+|---|---|---|---|
+| golden | 0.8 | 400, 400 /420 | 400, 400 |
+| cross | 0.8 | 155, 97 /160 | 158, 93 |
+| ref | 0.85 | 75, 75 /80 | 75, 75 |
+| control | 0.8 | 180, 139 /180 | 280, 206 /280 |
+| memory | 0.8 | 313, 309 /320 | 316, 316 |
+| knowledge | 0.65 | 60, 60 /60 | 60, 60 |
+| hard | 0.5 | 20, 20 /20 | 19, 19 |
+| self | 0.55 | 99, 90 /100 | 100, 99 |
+| mixed | 0.85 | 200, 181 /200 | 197, 177 |
+| long | 0.7 | 152, 152 /160 | 160, 148 |
+| stale | 0.8 | 100, 100 /100 | 100, 100 |
+
+- `long-cleanup` 20/20 (12/20 before): #186's route-aware budget repair.
+- `control` first-try 206/280: the new `correct-*` cases are mostly reached
+  by repair (the 12B reads "no, Saturday" as a confirm no, #198).
+- Cases below 20/20: `chess-analysis` 0/20 (known), `s7-dennis` 16/20,
+  `ho-lyrics-task` 17/20, `memory-caribou` 18/20, `memory-paraphrase-tune`
+  18/20, `s15-same-again` 19/20, `s15-turn2-as-run` 19/20 (16/20 before),
+  `s6-that-song` 19/20, `s14-plan-week` 19/20.
+
+Session evals: every gate scenario 5/5 but S16 4/5 (the recap left out the
+task's name, the known miss). Frontier: S3, S10, S11, S12, S15, S15p, TH1,
+TH2 and the new BI1 and BI2 (#77) 5/5; S11 was 3/5 before #185. S14 3/5 (no
+dated tasks; one sample waited 297 s on a think), S13 0/5 (the brief, as
+before).
+
+Fleet smoke on the merged apps (`31ff6c1`, `028761d`; 3 samples each): S2
+3/3, S3 3/3, S9 3/3, S15 3/3, S15p 2/3; 0 sockets off loopback, 0 files
+outside the scratch root. The fake music world still differs from real music
+(#196).
+
+Delegated song, end to end (`CONDUCTOR_FLEET_COST=1`, n=3): 4 model calls,
+median 3.84 s per turn (3.81 to 4.62). Music's second call, the peeked one,
+took 787 to 865 ms here against about 133 ms when music measured it alone
+(ryanskarnulis/music#107), so the peek saved nothing measurable in this run;
+the compiler's own call was 1.0 to 1.8 s with a colder cache. Not
+comparable with #155's 2.4 s, which was a different day and load. Open:
+why the first content delta is late inside the fleet (#200).
