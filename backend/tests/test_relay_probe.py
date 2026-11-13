@@ -69,7 +69,13 @@ class _Music:
         return 1
 
     def send_message(
-        self, conversation_id: int, message: str, *, confirm_token: str | None = None
+        self,
+        conversation_id: int,
+        message: str,
+        *,
+        confirm_token: str | None = None,
+        context: dict[str, Any] | None = None,
+        mode: str | None = None,
     ) -> MessageExchange:
         now = datetime.now(UTC)
         song = EntityRef(app="music", kind="song", id="812", title=self.title, untrusted=True)

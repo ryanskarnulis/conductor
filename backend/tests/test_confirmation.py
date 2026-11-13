@@ -125,7 +125,13 @@ class FakeClient:
         return 7
 
     def send_message(
-        self, conversation_id: int, message: str, *, confirm_token: str | None = None
+        self,
+        conversation_id: int,
+        message: str,
+        *,
+        confirm_token: str | None = None,
+        context: dict[str, Any] | None = None,
+        mode: str | None = None,
     ) -> MessageExchange:
         self.log.append(("send", conversation_id, message, confirm_token))
         effect = self._effects.pop(0)

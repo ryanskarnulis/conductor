@@ -59,6 +59,10 @@ class AgentSpec:
     # passes destructive asks straight through; without it, conductor asks
     # first (#68).
     confirms: bool = False
+    # ``context: true``: the app takes delegate v1.2 (#202): ``context`` and
+    # ``mode: "read"`` on a message, and ``needs_input`` when it asks. Conductor
+    # sends those only to an app that declares it (a v1.1 app may 422 them).
+    context: bool = False
 
 
 @dataclass(frozen=True)
@@ -244,6 +248,7 @@ def _parse_agent(block: Any) -> AgentSpec | None:
         actions=actions,
         # Only a literal true: anything else keeps conductor's own question.
         confirms=block.get("confirms") is True,
+        context=block.get("context") is True,
     )
 
 

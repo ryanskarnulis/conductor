@@ -33,6 +33,7 @@ compiled-plan runtime both sit on top of.
 from __future__ import annotations
 
 import difflib
+import copy
 import json
 import re
 import textwrap
@@ -53,6 +54,7 @@ from app.fleet.delegate import (
     JobRef,
     MessageExchange,
     MessageRead,
+    NeedsInputRead,
     RecordEntry,
     ToolCallRead,
     Undo,
@@ -356,6 +358,8 @@ class World:
         self.threads: dict[str, list[int]] = {}  # app → conversation id per send
         # Every message an app received, as sent: (app, message), in order.
         self.sent: list[tuple[str, str]] = []
+        # Every message's delegate v1.2 fields (#202): (app, context, mode).
+        self.sent_v12: list[tuple[str, dict[str, Any] | None, str | None]] = []
         self.cancel_requested: dict[str, bool] = {}
         self.on_write: Callable[[Receipt], None] | None = None
         self.tasks: dict[int, Task] = {}
@@ -438,6 +442,19 @@ class World:
         if self.on_write is not None:
             self.on_write(receipt)
         return receipt
+
+    # What a read-mode message must leave as it found (#202).
+    _WRITABLE = ("tasks", "projects", "songs", "catalog", "jobs")
+
+    def writable(self) -> dict[str, Any]:
+        """A copy of everything an app write can change."""
+        return {name: copy.deepcopy(getattr(self, name)) for name in self._WRITABLE}
+
+    def restore(self, saved: dict[str, Any], receipts: int) -> None:
+        """Put back :meth:`writable`'s copy and drop the receipts after ``receipts``."""
+        for name, value in saved.items():
+            setattr(self, name, value)
+        del self.receipts[receipts:]
 
     def read(self, app: str, what: str) -> None:
         self.reads.append((app, what, self.turn))
@@ -614,6 +631,11 @@ class AppReply:
     # What a read found, as the real apps' v1.1 records name it. Writes need
     # none: the client builds their entries from the receipts they left.
     found: list[RecordEntry] = field(default_factory=list)
+    # A question the real app asks by code (delegate v1.2's ``needs_input``,
+    # #202): PCC's ``ask_user``, music's ``ask_folder`` and its album refusal.
+    # A question its model words alone ("What should the task be called?") is
+    # not one.
+    asks: bool = False
 
 
 def _tool(tool_name: str, **arguments: Any) -> ToolCallRead:
@@ -693,6 +715,22 @@ def _write_entry(receipt: Receipt) -> RecordEntry:
     # A queued download is a job (delegate-api "Jobs"): accepted now, done later.
     job = JobRef(ref=ident, status="submitted", done=0, total=receipt.detail.get("total"))
     return RecordEntry(tool="queue_download", outcome="done", touched=refs, undo=no_undo, job=job)
+
+
+def _needs_input(reply: AppReply, written: list[Receipt]) -> NeedsInputRead | None:
+    """The fake apps' typed question (#202), as the real apps build it: only
+    from a code-asked question, in a call that wrote nothing."""
+    if written or not reply.asks:
+        return None
+    asked = [s for s in re.split(r"(?<=[.?!])\s+", reply.text.strip()) if s.endswith("?")]
+    question = asked[-1].strip('"') if asked else reply.text
+    candidates = [
+        ref.model_dump(exclude_none=True)
+        for entry in reply.found
+        if entry.outcome == "refused"
+        for ref in getattr(entry, "candidates", None) or []
+    ]
+    return NeedsInputRead(question=question, candidates=candidates)
 
 
 def _record(reply: AppReply, written: list[Receipt]) -> list[RecordEntry]:
@@ -892,7 +930,7 @@ class TasksApp:
         target = best_match(message, {t.id: t.title for t in self.world.live_tasks()})
         due = parse_date(message, self.world.today)
         if target is None:
-            return AppReply("Which task do you mean? I couldn't tell from that.")
+            return AppReply("Which task do you mean? I couldn't tell from that.", asks=True)
         if due is None:
             return AppReply(f'When should "{self.world.tasks[target].title}" move to?')
         task = self.world.tasks[target]
@@ -923,7 +961,7 @@ class TasksApp:
     def _complete(self, message: str) -> AppReply:
         target = best_match(message, {t.id: t.title for t in self.world.live_tasks()})
         if target is None:
-            return AppReply("Which task do you mean? I couldn't tell from that.")
+            return AppReply("Which task do you mean? I couldn't tell from that.", asks=True)
         task = self.world.tasks[target]
         task.done = True
         self.world.record("tasks", "complete", f"task:{task.id}", task.title)
@@ -953,7 +991,7 @@ class TasksApp:
             )
         target = best_match(message, {t.id: t.title for t in self.world.live_tasks()})
         if target is None:
-            return AppReply("Which task do you mean? I couldn't tell from that.")
+            return AppReply("Which task do you mean? I couldn't tell from that.", asks=True)
         title = self.world.tasks[target].title
         return self._gate(
             thread,
@@ -1087,7 +1125,7 @@ class MusicApp:
         folder = folder_match.group(1).split()[-1] if folder_match else None
         songs = self._resolve_song(message)
         if not folder:
-            return AppReply("Which folder should it go in?")
+            return AppReply("Which folder should it go in?", asks=True)
         if len(songs) != 1:
             if not songs:
                 return AppReply("I can't find that song in the library.")
@@ -1221,7 +1259,7 @@ class MusicApp:
             reason=_music_clip(stored),
             untrusted=True,
         )
-        return AppReply(text, [call], found=[refused])
+        return AppReply(text, [call], found=[refused], asks=True)
 
     def _queue_job(self, kind: str, title: str, total: int, **detail: Any) -> AppReply:
         job = Job(len(self.world.jobs) + 1, kind, title, total, album_id=detail.get("album_id"))
@@ -1277,17 +1315,45 @@ class FakeDelegateClient:
         return thread_id
 
     def send_message(
-        self, conversation_id: int, message: str, *, confirm_token: str | None = None
+        self,
+        conversation_id: int,
+        message: str,
+        *,
+        confirm_token: str | None = None,
+        context: dict[str, Any] | None = None,
+        mode: str | None = None,
     ) -> MessageExchange:
         self._world.threads.setdefault(self._app_name, []).append(conversation_id)
         self._world.sent.append((self._app_name, message))
+        self._world.sent_v12.append((self._app_name, context, mode))
         before = len(self._world.receipts)
+        saved = self._world.writable() if mode == "read" else None
         if self._app is None:
             reply = AppReply("Done — nothing else to report.")
         elif isinstance(self._app, TasksApp):
             reply = self._app.handle(conversation_id, message, confirm_token)
         else:
             reply = self._app.handle(conversation_id, message)
+        if saved is not None and len(self._world.receipts) > before:
+            # Read mode (#202): the real apps stop a write before their service
+            # layer, so here it never happened: the world is put back and the
+            # write is ``not_run``, as their records say.
+            undone = self._world.receipts[before:]
+            self._world.restore(saved, before)
+            reply = AppReply(
+                "Nothing was changed: this message was read-only.",
+                found=[
+                    *reply.found,
+                    *(
+                        RecordEntry(
+                            tool=_write_entry(r).tool,
+                            outcome="not_run",
+                            reason="not run: read mode",
+                        )
+                        for r in undone
+                    ),
+                ],
+            )
         now = datetime.now(UTC)
         return MessageExchange(
             user_message=MessageRead(
@@ -1307,6 +1373,7 @@ class FakeDelegateClient:
                 created_at=now,
                 confirm_required=reply.confirm,
                 record=_record(reply, self._world.receipts[before:]),
+                needs_input=_needs_input(reply, self._world.receipts[before:]),
             ),
         )
 

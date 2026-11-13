@@ -82,7 +82,7 @@ from __future__ import annotations
 import contextvars
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
@@ -105,6 +105,7 @@ from app.ai import (
     turn_events,
 )
 from app.ai import glance as glances
+from app.ai.state_block import Entity
 from app.ai import plan as plans
 from app.ai import trace as run_trace
 from app.ai.confirmation import PendingConfirm
@@ -136,6 +137,11 @@ from app.fleet.manifests import Fleet
 from app.fleet.tools import ask_tool_name, look_tool_name, open_tool_name
 
 logger = structlog.get_logger(__name__)
+
+# Delegate v1.2 (#202): how many of an app's own recent entities ride its ask
+# as ``context.refs``, and the contract's cap on refs per message.
+STATE_REFS = 5
+MAX_CONTEXT_REFS = 20
 
 # How a recall step reads the ledger (#80): its query in, what memory found out.
 MemoryReader = Callable[[str], memory.Recalled]
@@ -193,6 +199,10 @@ class _Run:
     # The saved facts (#134), newest first: read once, when an app ask needs them.
     saved_facts: Callable[[], Sequence[str]] | None = None
     saved: list[str] | None = None
+    # What this window's steps touched, newest first (#202): a v1.2 app's ask
+    # carries its own as ``context.refs``. Read once, when an ask needs them.
+    entities: Callable[[], Sequence[Entity] | None] | None = None
+    touched: list[Entity] | None = None
     # The turn's plan, once compiled: what the ledger journals.
     plan: TurnPlan | None = None
     # Where this plan's records start: a control step split off and run first
@@ -245,6 +255,7 @@ class Interpreter:
         recall: MemoryReader | None = None,
         memory_app: MemoryApp | None = None,
         saved_facts: Callable[[], Sequence[str]] | None = None,
+        entities: Callable[[], Sequence[Entity] | None] | None = None,
     ) -> AgentRunResult:
         """Run one turn. Always returns, except on a failure stop.
 
@@ -294,6 +305,7 @@ class Interpreter:
             memory=recall,
             memory_app=memory_app,
             saved_facts=saved_facts,
+            entities=entities,
         )
         started = time.monotonic()
         with (
@@ -678,7 +690,7 @@ class Interpreter:
                 results = self._dispatch_all(
                     state,
                     [
-                        (ask_tool_name(s.app), self._ask_arguments(state, s, s.request))
+                        (ask_tool_name(s.app), self._ask_arguments(state, s, s.request, values))
                         if isinstance(s, plans.Ask)
                         else _call_for(s)
                         for s in group
@@ -728,7 +740,7 @@ class Interpreter:
                     record = self._dispatch(
                         state,
                         ask_tool_name(step.app),
-                        self._ask_arguments(state, step, filled.text),
+                        self._ask_arguments(state, step, filled.text, values),
                     )
                 if record is not None and record.app_confirm and record.app_confirm.get("question"):
                     return self._app_asked(state, turn, steps, position + 1, step, values)
@@ -769,7 +781,13 @@ class Interpreter:
             index += 1
         return self._finish(state, turn, [])
 
-    def _ask_arguments(self, state: _Run, step: plans.Ask, message: str) -> dict[str, Any]:
+    def _ask_arguments(
+        self,
+        state: _Run,
+        step: plans.Ask,
+        message: str,
+        values: Mapping[str, dataflow.Value] | None = None,
+    ) -> dict[str, Any]:
         """An app ask's arguments: the request as the plan wrote it (refs
         filled), and the saved facts its words clearly point at (#134), which
         the ask tool sends after it as quoted context. Matched on the plan's
@@ -785,7 +803,59 @@ class Interpreter:
         if attached:
             arguments[facts.ARGUMENT] = attached
             logger.info("plan_facts_attached", step=step.id, app=step.app, count=len(attached))
+        app = self._fleet.get(step.app)
+        if app is not None and app.agent is not None and app.agent.context:
+            # Delegate v1.2 (#202): what the words point at goes as refs, with
+            # ids, beside the titles spliced in; a step code runs as a read
+            # goes ``mode: "read"``, so a wrong guess costs a refused write.
+            refs = self._context_refs(state, step, values or {})
+            if refs:
+                arguments[run_record.CONTEXT_REFS] = refs
+            if plans.reads_only(step):
+                arguments[run_record.READ_MODE] = True
         return arguments
+
+    def _context_refs(
+        self, state: _Run, step: plans.Ask, values: Mapping[str, dataflow.Value]
+    ) -> list[dict[str, Any]]:
+        """The refs a v1.2 app's ask carries: each ``{sN}``'s, then the app's
+        own entities this window touched, newest first (:data:`STATE_REFS`), so
+        "their other album" reaches music with the album's id. Deduplicated,
+        at most :data:`MAX_CONTEXT_REFS`."""
+        refs: list[dict[str, Any]] = []
+        for match in plans.REF.finditer(step.request):
+            value = values.get(match.group(1))
+            if value is not None:
+                refs += [dict(ref) for ref in value.refs]
+        own = [e for e in self._touched(state) if e.app == step.app][:STATE_REFS]
+        refs += [
+            {"app": e.app, "kind": e.kind, "id": e.id, "title": e.title, "untrusted": e.untrusted}
+            for e in own
+        ]
+        seen: set[tuple[str, str, str]] = set()
+        kept: list[dict[str, Any]] = []
+        for ref in refs:
+            key = (str(ref.get("app")), str(ref.get("kind")), str(ref.get("id")))
+            if key in seen or not all(key):
+                continue
+            seen.add(key)
+            kept.append({k: v for k, v in ref.items() if v is not None})
+        return kept[:MAX_CONTEXT_REFS]
+
+    @staticmethod
+    def _touched(state: _Run) -> list[Entity]:
+        """This window's entities, read once a turn; none when the ledger
+        can't be read (the ask still goes, with its ``{sN}`` refs)."""
+        if state.touched is None:
+            state.touched = []
+            if state.entities is not None:
+                try:
+                    state.touched = list(state.entities() or [])
+                except Exception as exc:
+                    logger.warning(
+                        "turn_entities_failed", error=str(exc), error_type=type(exc).__name__
+                    )
+        return state.touched
 
     @staticmethod
     def _saved(state: _Run) -> list[str]:

@@ -264,6 +264,12 @@ def app_asks(record: ToolCallRecord) -> str | None:
     (:mod:`app.ai.interpreter`) and the question reaches the person through
     :func:`narrate`. ``None`` for anything else: a ``confirm_required``
     question is :func:`live_confirm`'s."""
+    if record.app_asks is not None:
+        # A v1.2 app says when it asks (#202): its typed ``needs_input``,
+        # never its wording. ``None`` there means it asked nothing.
+        typed = record.app_asks.get("needs_input")
+        question = typed.get("question") if isinstance(typed, dict) else None
+        return question.strip() or None if isinstance(question, str) else None
     if not _did_nothing(record):
         return None
     # An app that ran nothing at all may ask without a question mark (#189:
@@ -294,9 +300,8 @@ def app_asks(record: ToolCallRecord) -> str | None:
 def asks_for_input(sentence: str) -> bool:
     """Whether one of an app's sentences asks the person for something, worded
     as a request rather than a question ("Please tell me the artist…", "Let
-    me know which one"). The one place this is read from words: delegate v1.2
-    plans a typed ``needs_input`` on the record (conductor#145), which will
-    replace it."""
+    me know which one"). The one place this is read from words, for a v1.1
+    app only: a v1.2 app's typed ``needs_input`` replaces it (#202)."""
     return _REQUESTS_INPUT.search(sentence.strip().lstrip(_QUOTES)) is not None
 
 

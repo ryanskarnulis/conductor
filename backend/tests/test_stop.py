@@ -226,7 +226,13 @@ class _CancellableClient:
         return 7
 
     def send_message(
-        self, conversation_id: int, message: str, *, confirm_token: str | None = None
+        self,
+        conversation_id: int,
+        message: str,
+        *,
+        confirm_token: str | None = None,
+        context: dict[str, Any] | None = None,
+        mode: str | None = None,
     ) -> MessageExchange:
         self.sent += 1
         self.stop.request()

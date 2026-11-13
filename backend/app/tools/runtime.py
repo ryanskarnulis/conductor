@@ -42,3 +42,8 @@ delegated_record: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
 # thread and words (``app.ai.confirmation.AppConfirm`` as JSON). Same lifetime
 # rule; never on the model's message, which gets the question alone.
 delegated_confirm: ContextVar[dict[str, Any] | None] = ContextVar("delegated_confirm", default=None)
+
+# For a delegate call to a v1.2 app (#202): ``{"needs_input": <its question or
+# None>}``, so a typed app's asking is read from ``needs_input`` alone, never
+# from its wording. Unset (``None``) for a v1.1 app. Same lifetime rule.
+delegated_asks: ContextVar[dict[str, Any] | None] = ContextVar("delegated_asks", default=None)

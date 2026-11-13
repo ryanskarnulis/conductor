@@ -114,11 +114,20 @@ class DelegateClientLike(Protocol):
     def create_conversation(self, *, title: str | None = None) -> int: ...
 
     def send_message(
-        self, conversation_id: int, message: str, *, confirm_token: str | None = None
+        self,
+        conversation_id: int,
+        message: str,
+        *,
+        confirm_token: str | None = None,
+        context: dict[str, Any] | None = None,
+        mode: str | None = None,
     ) -> MessageExchange: ...
 
     def cancel(self, conversation_id: int) -> bool: ...
 
+
+# Delegate v1.2's cap on refs per message (agent-standard delegate-api.md).
+MAX_CONTEXT_REFS = 20
 
 # A factory yields a fresh client bound to one app.
 ClientFactory = Callable[[FleetApp], DelegateClientLike]
@@ -190,7 +199,22 @@ def build_delegate_tools(fleet: Fleet, client_factory: ClientFactory) -> list[st
 def _make_ask_tool(app: FleetApp, client_factory: ClientFactory) -> Callable[[str], str]:
     """Build the ``ask_<app>`` callable for one agent-bearing app."""
 
-    def ask_tool(message: str, facts: list[str] | None = None) -> str:
+    def ask_tool(
+        message: str,
+        facts: list[str] | None = None,
+        refs: list[dict[str, Any]] | None = None,
+        read: bool = False,
+    ) -> str:
+        assert app.agent is not None
+        if app.agent.context:
+            # Delegate v1.2 (#202): the words go as written, and the refs and
+            # saved facts beside them as ``context``, data the app reads after
+            # the words; a step that only reads goes ``mode: "read"``.
+            given = {"refs": list(refs or [])[:MAX_CONTEXT_REFS], "facts": list(facts or [])}
+            context = {k: v for k, v in given.items() if v} or None
+            return _delegate(
+                app, client_factory, message, app_context=context, mode="read" if read else None
+            )
         # Saved facts code matched to the request (#134) follow it, quoted
         # and marked as context; a request too long to carry them goes alone.
         sent = attach(message.strip(), facts or [])
@@ -287,8 +311,13 @@ def _delegate(
     message: str,
     *,
     confirm: PendingConfirm | None = None,
+    app_context: dict[str, Any] | None = None,
+    mode: str | None = None,
 ) -> str:
     """Send ``message`` to ``app``'s agent, applying every contract behavior.
+
+    ``app_context`` and ``mode`` are delegate v1.2's (#202), for an app that
+    declares it; they ride every send of this step, its resend included.
 
     With ``confirm``, the message is the person's yes: it goes to the thread
     that asked, with that question's token, and is never recreated on a 404
@@ -335,14 +364,18 @@ def _delegate(
                     subagent_id = client.create_conversation()
                     context.remember_thread(app.name, subagent_id)
                 try:
-                    exchange = _send_once_more_if_dropped(client, subagent_id, message)
+                    exchange = _send_once_more_if_dropped(
+                        client, subagent_id, message, context=app_context, mode=mode
+                    )
                 except DelegateThreadGone:
                     # Contract rule: a pruned thread → recreate once and retry
                     # exactly once. A second 404 propagates and fails the call.
                     context.forget_thread(app.name)
                     subagent_id = client.create_conversation()
                     context.remember_thread(app.name, subagent_id)
-                    exchange = _send_once_more_if_dropped(client, subagent_id, message)
+                    exchange = _send_once_more_if_dropped(
+                        client, subagent_id, message, context=app_context, mode=mode
+                    )
         except DelegateError as exc:
             latency_ms = _elapsed_ms(started)
             context.audit_delegate_call(
@@ -409,6 +442,11 @@ def _finish(
     # which has to know what a turn actually did rather than infer it from a
     # 12B's paraphrase of it.
     _report(hop, assistant.record, [call.tool for call in assistant.tool_calls or []])
+    if app.agent is not None and app.agent.context:
+        # A v1.2 app says when it asks (#202): its asking is read from here
+        # alone, never from its words.
+        typed = assistant.needs_input
+        runtime.delegated_asks.set({"needs_input": None if typed is None else typed.model_dump()})
     asked = assistant.confirm_required
     if assistant.stop_reason == "confirm_required" and asked is not None:
         runtime.delegated_confirm.set(
@@ -441,6 +479,8 @@ def _send_once_more_if_dropped(
     message: str,
     *,
     confirm_token: str | None = None,
+    context: dict[str, Any] | None = None,
+    mode: str | None = None,
 ) -> MessageExchange:
     """Send, and resend once if the connection dropped after the message went out.
 
@@ -452,6 +492,8 @@ def _send_once_more_if_dropped(
     """
 
     def send() -> MessageExchange:
+        if context is not None or mode is not None:
+            return client.send_message(conversation_id, message, context=context, mode=mode)
         if confirm_token is None:
             return client.send_message(conversation_id, message)
         return client.send_message(conversation_id, message, confirm_token=confirm_token)

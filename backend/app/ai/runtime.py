@@ -133,6 +133,11 @@ class ToolCallRecord(BaseModel):
     # token, thread and question kept for the person's yes
     # (``app.ai.confirmation.AppConfirm``). Persisted, never sent to a model.
     app_confirm: dict[str, Any] | None = None
+    # For a delegate call to a v1.2 app (#202): ``{"needs_input": …}``, its
+    # typed question to the person (``{question, candidates}``) or ``None``
+    # when it asked nothing. ``None`` for a v1.1 app, whose asking is read from
+    # its words (``narrator.app_asks``).
+    app_asks: dict[str, Any] | None = None
     # For a call that carries an undo (#74, ``app.ai.control``): the ledger
     # receipts it undoes, marked undone once the app says it did.
     undoes: list[int] | None = None
@@ -246,6 +251,7 @@ class Runtime:
         delegated = runtime.delegated_tools.set(None)
         delegated_record = runtime.delegated_record.set(None)
         delegated_confirm = runtime.delegated_confirm.set(None)
+        delegated_asks = runtime.delegated_asks.set(None)
         try:
             outcome = registry.call_tool(call.name, call.arguments, actor=actor)
         except UnknownToolError as exc:
@@ -262,6 +268,7 @@ class Runtime:
             runtime.delegated_tools.reset(delegated)
             runtime.delegated_record.reset(delegated_record)
             runtime.delegated_confirm.reset(delegated_confirm)
+            runtime.delegated_asks.reset(delegated_asks)
         logger.info("agent_tool_call", tool=call.name, ok=record.error is None, error=record.error)
         return record
 
@@ -381,6 +388,7 @@ def _take_app_report(record: ToolCallRecord) -> None:
     app_record = runtime.delegated_record.get()
     record.app_record = list(app_record) if app_record is not None else None
     record.app_confirm = runtime.delegated_confirm.get()
+    record.app_asks = runtime.delegated_asks.get()
 
 
 def _validation_summary(exc: ValidationError) -> str:

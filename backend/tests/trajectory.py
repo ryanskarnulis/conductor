@@ -461,7 +461,13 @@ class _FaultyClient:
         return int(self._inner.create_conversation(title=title))
 
     def send_message(
-        self, conversation_id: int, message: str, *, confirm_token: str | None = None
+        self,
+        conversation_id: int,
+        message: str,
+        *,
+        confirm_token: str | None = None,
+        context: dict[str, Any] | None = None,
+        mode: str | None = None,
     ) -> MessageExchange:
         run = self._harness.current
         assert run is not None

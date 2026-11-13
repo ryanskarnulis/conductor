@@ -709,6 +709,12 @@ def _post_message(
                     ),
                     # Incognito: no saved fact rides an app's ask (#134's attach).
                     saved_facts=None if hidden else lambda: facts_service.texts(db),
+                    # A v1.2 app's ask carries what this window touched (#202).
+                    entities=lambda: (
+                        threads_service.turn_entities(db, thread)
+                        if thread is not None
+                        else ledger.recent_entities(db, conversation.id, since=since)
+                    ),
                 )
         except AgentRunFailed as exc:
             logger.error(

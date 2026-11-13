@@ -149,9 +149,20 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   voice, and a job's state: queued or started, never done, its query no
   second thing, #188); handoffs and an app's confirm question pass through
   verbatim, and so does an app's own question when it did nothing (quoted as
-  its words, #168). An app that ran nothing may ask without a "?" ("Please
-  tell me the artist…", #189): a few request phrasings read it, until
-  delegate v1.2's typed `needs_input` (#145) replaces them.
+  its words, #168). A v1.2 app's question is its typed `needs_input` alone
+  (#202); for a v1.1 app, one that ran nothing may ask without a "?" ("Please
+  tell me the artist…", #189), and a few request phrasings read it.
+- **Delegate v1.2** (#202, decided in #145): only an app whose `agent:`
+  block says `context: true` gets the v1.2 fields; a v1.1 app keeps every
+  guess. Its ask sends the words as written, plus `context`: the `{sN}`
+  refs with their ids (beside the spliced titles, which stay until that
+  app's evals pass without them), its own entities this window touched
+  (newest `STATE_REFS`), and the saved facts `facts.related` chose (they no
+  longer ride the words). A step `plan.reads_only` calls a read goes
+  `mode: "read"`, so a wrong guess costs a refused write. The step's
+  `refs`/`read` arguments stay out of every model's view, like `facts`. Its
+  question is `needs_input` alone (`ToolCallRecord.app_asks`), never its
+  words. The planner's own read mark and facts by hybrid recall are #204.
 - **The ledger** (#69, `app/services/ledger.py`) is the record of what
   happened: a turn opens with the person's words before it runs and closes
   with its plan (a control step split off first is its own plan), one step
