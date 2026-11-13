@@ -303,6 +303,13 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   running is a cancel even compiled as an undo. A running job takes an undo
   only when it is all the last plan wrote; beside other writes it is left
   running and the reply says so (code's reason, guaranteed like #163's).
+  **Spoken corrections** (#77, `plan.is_correction`: a no, yes or
+  "actually", then what instead: "no, Saturday") change what waits or
+  runs: a confirm, cancel, chat or self for one gets one repair to an amend
+  (`plan.corrects`), a confirm beside an amend is refused
+  (`plan.answers_twice`), and a resume that picks none of an `ask_user`'s
+  options is run as the amend. A finished write isn't amended (amend has no
+  path for it).
 - **Jobs** (#76): a step whose receipt carries a `job` detaches: the reply
   says it's queued, and the ledger's `ledger_jobs` row tracks it. The watcher
   (`app/services/job_watcher.py`, one thread, started with the app, resumes
@@ -372,6 +379,17 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   lands only once its record exists, and `turn_ended` goes out after the
   ledger commit. Queues and turn state are bounded; a lagging follower is
   resynced from a snapshot. `GET …/activity` stays as the poll fallback.
+- **Barge-in** (#77): the page passes `bargeIn` to the vendored MicButton
+  ("Talk over replies", on unless turned off, `localStorage`), and a turn
+  said over a reply carries the voice client's `Heard` (`MessageCreate.heard`,
+  snake case, bounded). Code keeps it on the newest answered turn in the
+  window (`ledger_turns.heard`) only when its `total_chars` is that reply's
+  UTF-16 length; the state block then says the reply was cut and quotes
+  what wasn't heard (capped, `HEARD_MAX_CHARS`), and the self-report says
+  what they heard. Incognito turns send, store and show none of it; a
+  forgotten turn lends nothing, re-checked on every read. The mic calls the
+  page through a latest-callback ref (it keeps the one it started with).
+  Real-audio behaviour (echo tripping the mic) is unverified by tests.
 - **The delegate contract never assumes a text-only client** — voice
   convergence is a master-plan placeholder.
 - **The panel is the accessible truth; the 3D web is decoration** (#88). The

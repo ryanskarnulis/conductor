@@ -197,9 +197,13 @@ def user_message(context: str | None, words: str) -> str:
 
 
 def _problems(plan: plans.Plan, words: str, checks: plans.Checks) -> list[str]:
-    """The validator's objections, and a recalled answer (#127): a plan with
-    any of these doesn't run."""
-    return plans.problems(plan, checks) + plans.recalled_answer(plan, words, checks.context)
+    """The validator's objections, a recalled answer (#127) and a confirm
+    beside an amend (#77): a plan with any of these doesn't run."""
+    return (
+        plans.problems(plan, checks)
+        + plans.recalled_answer(plan, words, checks.context)
+        + plans.answers_twice(plan)
+    )
 
 
 def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Checks) -> list[str]:
@@ -210,6 +214,8 @@ def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Check
     narrow (#160); a new ask, search or think for words that change
     something when State shows nothing they could change (#176); a
     cancel, amend or undo for "forget that" with nothing to act on (#183);
+    a spoken correction ("no, Saturday") filed as a no, a cancel or chat
+    instead of an amend (#77);
     and a recall feeding an ask for "their other album" (#168).
     The first plan gets them once; a repaired plan that keeps its choice
     still runs, since each of these plans can run and a turn that answers
@@ -221,6 +227,7 @@ def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Check
         + plans.disagrees(about, plan)
         + plans.narrows_job(plan, words, checks.context)
         + plans.points_at_nothing(plan, words, checks)
+        + plans.corrects(plan, words, checks)
         + plans.forgets_by_control(plan, words, checks)
         + plans.recalls_unnamed(plan, words)
     )

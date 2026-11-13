@@ -75,8 +75,10 @@ from tests.session_harness import (
     sample_line,
 )
 from tests.session_scenarios import (
+    CORRECTED,
     FORGET_GONE,
     INCOGNITO,
+    INTERRUPTED,
     REMEMBER_USED,
     S2,
     S3,
@@ -383,6 +385,32 @@ def test_compiled_s11_says_what_cant_be_undone_when_the_narrator_doesnt(
     sample = scripted.run(S11, script)
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
     assert "can't be undone" in (sample.session.last.reply or "")
+
+
+def test_compiled_bi1_tells_the_planner_what_was_cut_off(scripted: _ScriptedRun) -> None:
+    # #77: the second turn's State says the reply was cut and what wasn't heard.
+    sample = scripted.run(INTERRUPTED)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    planner = [r for r in scripted.provider.requests if _is_planner(r)]
+    state = str(planner[-1]["messages"][1]["content"]).split("[End of state]")[0]
+    assert "Your last reply was cut off" in state
+    assert 'not heard: "' in state and "overdue" in state.split("not heard:")[1]
+
+
+def test_a_bi1_reply_that_doesnt_say_it_again_fails(scripted: _ScriptedRun) -> None:
+    assert INTERRUPTED.script is not None
+    script = INTERRUPTED.script(World())
+    script[-1] = text_turn("I was telling you about your day.")
+    _fails(scripted.run(INTERRUPTED, script), "didn't say again what was cut off")
+
+
+def test_a_bi2_correction_read_as_a_no_fails(scripted: _ScriptedRun) -> None:
+    # "no, just the paint cabinets task" as a plain no, kept through the
+    # correction's repair (#77): the plan is dropped.
+    assert CORRECTED.script is not None
+    script = CORRECTED.script(World())
+    script[1:] = [plan({"do": "confirm", "answer": "no"})] * 2
+    _fails(scripted.run(CORRECTED, script), "the correction was dropped")
 
 
 def test_a_missing_capability_fails_unsupported(scripted: _ScriptedRun) -> None:

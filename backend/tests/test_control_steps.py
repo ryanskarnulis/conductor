@@ -493,6 +493,44 @@ def test_amend_while_asking_the_person_asks_again_with_the_change(
     assert resumed.body["steps"][1]["request"] == "push {s1} to friday (change: to thursday)"
 
 
+def test_a_correction_read_as_the_answer_to_which_one_amends_instead(
+    run_with: Any, db_session: Session
+) -> None:
+    # #77: "no, Saturday" over "which one?" compiled as a resume picks none of
+    # the options; filling {s1} with it would push a task called "Saturday".
+    # Code reads the words, as #185 does: it is the amend.
+    question = {
+        "do": "ask_user",
+        "question": "Which one?",
+        "options": ["Dentist appointment", "Call the dentist"],
+    }
+    # The options must be ones State names: the last exchange does.
+    run_with(
+        ScriptedProvider(
+            [plan_turn({"answer": "chat"}), text_turn('{"about_you": false, "reply": "Ok."}')]
+        ),
+        "I have Dentist appointment and Call the dentist on my list",
+    )
+    run_with(
+        ScriptedProvider([plan_turn(steps(question, ask("tasks", "push {s1} to friday")))]),
+        "push the dentist thing to friday",
+    )
+    resume = {"about": "the waiting question", "resume": "Saturday"}
+    reply = run_with(ScriptedProvider([plan_turn(resume)]), "no, Saturday")
+    assert reply["content"] == "Which one? (Dentist appointment / Call the dentist)"
+    assert reply["tool_calls"] in (None, [])
+    resumed = _plans(db_session)[-1]
+    assert (resumed.pause, resumed.resume_at) == ("ask_user", 1)
+    assert resumed.body is not None
+    assert resumed.body["steps"][1]["request"] == "push {s1} to friday (change: no, Saturday)"
+    # A real pick still resumes as picked.
+    picked = run_with(
+        ScriptedProvider([plan_turn({"resume": "the appointment"}), text_turn("Moved it.")]),
+        "the appointment",
+    )
+    assert picked["tool_calls"][0]["tool"] == "ask_tasks"
+
+
 def test_amend_with_nothing_waiting_says_so(run_with: Any, world: World) -> None:
     reply = run_with(ScriptedProvider([plan_turn(amend("ten"))]), "make it ten")
     assert reply["content"] == control.NOTHING_TO_CHANGE
@@ -561,3 +599,29 @@ def test_an_undo_naming_an_older_task_is_no_stop_for_the_running_download(
         "undo the water the plants task",
     )
     assert stops == [] and _tools(asked) == ["ask_tasks"]
+
+
+@pytest.mark.parametrize(
+    ("sent", "read"),
+    [
+        ("push the dentist appointment to friday (change: no, Saturday)", "saturday"),
+        ("wipe the kitchen project (change: just the paint cabinets task)", "paint cabinets"),
+        (
+            "wipe the kitchen project (change: only the paint cabinets task within the Kitchen "
+            "project)",
+            "paint cabinets",
+        ),
+        ("wipe the kitchen project", "kitchen project"),
+    ],
+)
+def test_the_fake_tasks_app_reads_an_amends_change_as_pcc_does(sent: str, read: str) -> None:
+    # #77: the session evals' fake app must read "(change: …)" like PCC's agent.
+    from tests.fake_world import TasksApp, parse_date
+
+    world = World()
+    request = TasksApp(world)._changed(sent)
+    if read == "saturday":
+        saturday = parse_date("saturday", world.today)
+        assert saturday is not None and request.endswith(f"to {saturday.isoformat()}")
+        return
+    assert read in request.lower() and "(change:" not in request

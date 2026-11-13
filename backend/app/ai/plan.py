@@ -905,6 +905,80 @@ def points_at_nothing(plan: Plan, words: str, checks: Checks) -> list[str]:
     ]
 
 
+# A spoken correction (#77), often said over the reply: a no, a yes or an
+# "actually" that goes on to say what instead ("no, Saturday", "actually make
+# it Sunday", "no, just the paint cabinets task"). A plain no ("no, leave
+# it") or a stop is not one.
+_CORRECTION_LEAD = re.compile(
+    r"^\W*(?:no|nope|nah|actually|wait|yes|yeah|yep|ok(?:ay)?)\b\W*", re.IGNORECASE
+)
+_INSTEAD_DAY = re.compile(
+    r"\b(?:today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"weekend|next\s+week|morning|afternoon|evening)\b",
+    re.IGNORECASE,
+)
+_NOT_A_CHANGE = re.compile(
+    r"\b(?:stop|cancel|halt|abort|kill|never\s*mind|forget|leave\s+it|don'?t|do\s+not)\b",
+    re.IGNORECASE,
+)
+
+
+def is_correction(words: str) -> bool:
+    """Whether the words correct something just said or under way: a lead
+    word, then what instead (a day, "just"/"only"/"instead", "make it …")."""
+    lead = _CORRECTION_LEAD.match(words)
+    if lead is None or _NOT_A_CHANGE.search(words):
+        return False
+    rest = words[lead.end() :]
+    return bool(_INSTEAD_DAY.search(rest) or _NARROWS.search(rest) or _CHANGES.search(rest))
+
+
+def corrects(plan: Plan, words: str, checks: Checks) -> list[str]:
+    """A spoken correction (#77) filed as something else: a confirm, a
+    cancel, chat or self while a plan waits on the person (the 12B reads
+    "no, Saturday" as a no and drops the plan), or a cancel or confirm for a
+    running job the words only narrow. The repair asks for one amend of what waits or runs,
+    which resumes the same plan with the change. A write already done is
+    not here: amend can't change it."""
+    if not is_correction(words):
+        return []
+    if isinstance(plan, StepPlan) and any(step.do in ("amend", "ask") for step in plan.steps):
+        return []
+    lone = plan.steps[0].do if isinstance(plan, StepPlan) and len(plan.steps) == 1 else None
+    chat = isinstance(plan, Direct) and plan.answer in ("chat", "self")
+    if _waits(checks):
+        if lone not in ("confirm", "cancel") and not chat:
+            return []
+        return [
+            "their words change what is waiting on them, not a yes or no to it: plan exactly "
+            'one step, an amend (target: "pending", change: what they want instead, written '
+            "out, no {sN}); no confirm beside it, since the amend resumes the waiting plan "
+            "with the change and it asks again"
+        ]
+    jobs = running_in(checks.context)
+    if not jobs or lone not in ("cancel", "confirm"):
+        return []
+    ref = f"{jobs[0][0]}:job:{jobs[0][1]}"
+    return [
+        f"{ref} is still running and their words narrow it rather than stop it or answer a "
+        f'question: amend it (target: "{ref}", change: their words), never a cancel or confirm'
+    ]
+
+
+def answers_twice(plan: Plan) -> list[str]:
+    """A confirm beside an amend (#77): both answer the one waiting question,
+    a yes or no and a change, so code can't tell which the person meant."""
+    if not isinstance(plan, StepPlan):
+        return []
+    kinds = {step.do for step in plan.steps}
+    if not {"confirm", "amend"} <= kinds:
+        return []
+    return [
+        "a confirm and an amend both answer the waiting question: plan one of them; when "
+        "their words say what they want instead, it is the amend alone"
+    ]
+
+
 _FORGET = re.compile(r"\bforget\b", re.IGNORECASE)
 
 
