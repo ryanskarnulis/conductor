@@ -1217,11 +1217,15 @@ class MusicApp:
         # album by id (music#112's ``album_id``), no title read.
         picked = next((r for r in mine if r.get("picked")), None)
         if picked is not None:
-            album = next((a for a in self.world.catalog if a.mbid == picked.get("id")), None)
-            if album is None:
+            chosen = next((a for a in self.world.catalog if a.mbid == picked.get("id")), None)
+            if chosen is None:
                 return AppReply("No album with that id, so nothing was queued.")
             return self._queue_job(
-                "album", album.title, len(album.tracks), artist=album.artist, album_id=album.mbid
+                "album",
+                chosen.title,
+                len(chosen.tracks),
+                artist=chosen.artist,
+                album_id=chosen.mbid,
             )
         # A title it was given still names its album, as music's
         # ``download_album`` takes ``album`` over ``other_than``: the person's

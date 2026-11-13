@@ -829,8 +829,16 @@ def _fact_reaches_the_app(session: Session) -> None:
     used = session.turn("used")
     sent = [message for app, message in session.world.sent if app == "tasks"]
     assert sent, "tasks was never asked"
-    assert any(saved.title in message for message in sent), (
-        f"tasks never got the fact {saved.title!r}: {sent[-1]!r}"
+    # A v1.1 app gets the fact after the words; a v1.2 one in ``context.facts``
+    # (#202), whichever the fleet's manifest declares.
+    given = [
+        fact
+        for app, context, _ in session.world.sent_v12
+        if app == "tasks" and context
+        for fact in context.get("facts") or []
+    ]
+    assert any(saved.title in message for message in [*sent, *given]), (
+        f"tasks never got the fact {saved.title!r}: {sent[-1]!r}, context facts {given}"
     )
     made = [r for r in session.writes(used) if r.app == "tasks" and r.kind == "create"]
     assert any("record player" in r.title.lower() for r in made), (
