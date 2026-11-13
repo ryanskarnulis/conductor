@@ -34,6 +34,12 @@ MOVED = R("tasks", "update", "dentist appointment")
 CORPUS: list[tuple[str, list[R], list[str]]] = [
     # backed
     ("Added “water the plants” for tomorrow.", [TASK], []),
+    # A title holding straight quotes, curly-quoted whole (#196's fleet smoke).
+    (
+        'For the record: queued “Honey”; create task “Sort the album downloaded in "Honey"”.',
+        [ALBUM, R("tasks", "create", 'Sort the album downloaded in "Honey"')],
+        [],
+    ),
     ("I've queued Honey — it's on its way.", [ALBUM], []),
     ("Queued Honey and added “water the plants” for Saturday.", [ALBUM, TASK], []),
     ("The Kitchen project went to the trash.", [TRASH], []),

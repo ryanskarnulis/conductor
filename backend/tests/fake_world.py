@@ -322,6 +322,8 @@ PLAYLIST_MISSES = ("Lost Signal", "Paper Moons")
 # ``run_record._MAX_FIELD_CHARS``): at most three albums listed, and the
 # record's ``reason`` cut to 160 characters, so a long list can lose its end.
 MUSIC_MAX_CANDIDATES = 3
+# How real music's note asks after a refusal that lists albums (music#107).
+MUSIC_CANDIDATES_QUESTION = "Which one do you want, or do you have a link?"
 MUSIC_FIELD_CHARS = 160
 
 
@@ -636,6 +638,9 @@ class AppReply:
     # A question its model words alone ("What should the task be called?") is
     # not one.
     asks: bool = False
+    # The question ``needs_input`` carries when it isn't the text's last one
+    # (music's fixed candidates question, music#110).
+    question: str | None = None
 
 
 def _tool(tool_name: str, **arguments: Any) -> ToolCallRead:
@@ -723,7 +728,7 @@ def _needs_input(reply: AppReply, written: list[Receipt]) -> NeedsInputRead | No
     if written or not reply.asks:
         return None
     asked = [s for s in re.split(r"(?<=[.?!])\s+", reply.text.strip()) if s.endswith("?")]
-    question = asked[-1].strip('"') if asked else reply.text
+    question = reply.question or (asked[-1].strip('"') if asked else reply.text)
     candidates = [
         ref.model_dump(exclude_none=True)
         for entry in reply.found
@@ -1048,13 +1053,13 @@ class MusicApp:
     def __init__(self, world: World) -> None:
         self.world = world
 
-    def handle(self, thread: int, message: str) -> AppReply:
+    def handle(self, thread: int, message: str, context: dict[str, Any] | None = None) -> AppReply:
         message, _ = split_context(message)
         text = message.lower()
         if re.match(r"\s*(?:please\s+)?(?:download|queue|fetch|rip)\b", text):
             # A request that opens with a download is one, whatever the title
             # it carries says ("download the album “sort Honey”").
-            return self._download(message)
+            return self._download(message, context)
         if re.search(r"\b(how are|status|progress|how's|how is)\b.*\bdownload", text):
             return self._status()
         if re.search(r"\b(need|needs|still|left|unsorted)\b.*\bsort", text) or re.search(
@@ -1075,7 +1080,7 @@ class MusicApp:
                 "The files are in the library if you want to delete them yourself."
             )
         if re.search(r"\b(download|grab|get|queue|fetch|save|rip)\b", text):
-            return self._download(message)
+            return self._download(message, context)
         self.world.read("music", "library")
         return AppReply(
             f"The library has {len(self.world.songs)} songs; {len(self.world.unsorted())} "
@@ -1091,13 +1096,26 @@ class MusicApp:
             f"downloaded" + (f", {job.failed} didn't match" if job.failed else "")
             for job in self.world.jobs.values()
         ]
-        refs = [
-            EntityRef(app="music", kind="download_job", id=str(j.id), title=j.title)
-            for j in self.world.jobs.values()
-        ]
-        return AppReply(
-            "\n".join(lines), [_tool("list_jobs")], found=[_looked_up("list_jobs", refs)]
-        )
+        # As real music reads its jobs (music#100, music#106): an album job
+        # touches its album, then the job, and both titles are outside text
+        # (MusicBrainz's), so the entry is flagged untrusted.
+        refs: list[EntityRef] = []
+        for j in self.world.jobs.values():
+            album = j.kind == "album"
+            if album and j.album_id:
+                refs.append(
+                    EntityRef(
+                        app="music", kind="album", id=j.album_id, title=j.title, untrusted=True
+                    )
+                )
+            refs.append(
+                EntityRef(
+                    app="music", kind="download_job", id=str(j.id), title=j.title, untrusted=album
+                )
+            )
+        read = _looked_up("list_jobs", refs)
+        read.untrusted = any(ref.untrusted for ref in refs)
+        return AppReply("\n".join(lines), [_tool("list_jobs")], found=[read])
 
     def _unsorted(self) -> AppReply:
         self.world.read("music", "unsorted")
@@ -1162,7 +1180,7 @@ class MusicApp:
             )
         return AppReply(f"Sorted {len(filed)} songs: {names}.", tools)
 
-    def _download(self, message: str) -> AppReply:
+    def _download(self, message: str, context: dict[str, Any] | None = None) -> AppReply:
         text = message.lower()
         if re.search(r"https?://\S*(?:playlist|list=)", text) or "playlist" in text:
             return self._queue_job("playlist", "your playlist", 40)
@@ -1188,6 +1206,32 @@ class MusicApp:
         ]
         if quoted and not named and not artist_albums:
             return AppReply("I couldn't find that. Give me a link, or the artist and title.")
+        # A v1.2 caller's album ref (#196): "their other album" is music's
+        # model passing that album's id as ``other_than`` (music#111).
+        mine = [
+            ref
+            for ref in (context or {}).get("refs") or []
+            if ref.get("app") == "music" and ref.get("kind") == "album"
+        ]
+        # The person's pick from music's own list (#196): music queues that
+        # album by id (music#112's ``album_id``), no title read.
+        picked = next((r for r in mine if r.get("picked")), None)
+        if picked is not None:
+            chosen = next((a for a in self.world.catalog if a.mbid == picked.get("id")), None)
+            if chosen is None:
+                return AppReply("No album with that id, so nothing was queued.")
+            return self._queue_job(
+                "album",
+                chosen.title,
+                len(chosen.tracks),
+                artist=chosen.artist,
+                album_id=chosen.mbid,
+            )
+        # A title it was given still names its album, as music's
+        # ``download_album`` takes ``album`` over ``other_than``: the person's
+        # answer to its question ("Suddenly") is that.
+        if mine and len(named) != 1 and re.search(r"\b(other|another|different)\b", text):
+            return self._other_than(mine[0], artist_albums)
         # Real music's ``download_album(artist, album=None)`` (music#96, #102):
         # a title it was given names its album, held or not; the artist alone
         # is their newest studio album ("the new album" and "the other album"
@@ -1207,59 +1251,99 @@ class MusicApp:
 
     def _album_held(self, album: Album, artist_albums: list[Album]) -> AppReply:
         """Music's refusal for an artist-alone ask whose newest album is held
-        (music#102's ``_album_refusal``): nothing queued, a ``refused`` entry
-        with no ref, flagged as outside text, its reason listing the artist's
-        other studio albums not held, newest first, at most three, cut to
-        music's record field length. Its agent then asks which one."""
+        (music#102, music#107): nothing queued; the artist's other studio
+        albums not held, newest first, at most three, as ``candidates``."""
         held = self.world.held_album_ids()
         others = sorted(
             (a for a in artist_albums if a.mbid not in held), key=lambda a: a.year, reverse=True
         )[:MUSIC_MAX_CANDIDATES]
         have = f"{album.title} ({album.year}) by {album.artist}"
         if others:
-            listed = "; ".join(f"{a.title} ({a.year})" for a in others)
-            error = (
+            many = "album" if len(others) == 1 else "albums"
+            reason = (
                 f"{have} was already asked for, so nothing was queued. "
-                f"MusicBrainz lists these other albums by {album.artist}: {listed}."
-            )
-            next_step = (
-                "Say it was already asked for, name the other albums listed, "
-                "ask which one or for a link, and queue nothing"
-            )
-            text = (
-                f"{album.title} was already asked for, so I didn't queue it again. "
-                f"MusicBrainz lists these other albums by {album.artist}: {listed}. "
-                "Which one do you want, or do you have a link?"
+                f"MusicBrainz lists {len(others)} other {many} by {album.artist}."
             )
         else:
-            error = (
+            reason = (
                 f"{have} was already asked for, so nothing was queued. "
                 f"MusicBrainz lists no other studio album by {album.artist}."
             )
-            next_step = "Say it was already asked for and there is no other album"
-            text = (
-                f"{album.title} was already asked for, and MusicBrainz lists no other "
-                f"studio album by {album.artist}."
+        return self._album_refusal(album.artist, reason, others)
+
+    def _other_than(self, ref: dict[str, Any], artist_albums: list[Album]) -> AppReply:
+        """Music's ``download_album(other_than=…)`` (music#111, conductor#145
+        decision 3): the one studio album of that album's artist left that
+        isn't it and isn't held is queued; several are a refusal with them as
+        candidates; none is a plain no."""
+        that = next((a for a in self.world.catalog if a.mbid == ref.get("id")), None)
+        if that is not None:
+            artist = that.artist
+        elif artist_albums:
+            artist = artist_albums[0].artist
+        else:
+            return AppReply("I couldn't find that. Give me a link, or the artist and title.")
+        held = self.world.held_album_ids()
+        left = sorted(
+            (
+                a
+                for a in self.world.catalog
+                if a.artist == artist and a.mbid != ref.get("id") and a.mbid not in held
+            ),
+            key=lambda a: a.year,
+            reverse=True,
+        )
+        if len(left) == 1:
+            album = left[0]
+            return self._queue_job(
+                "album", album.title, len(album.tracks), artist=album.artist, album_id=album.mbid
             )
+        if left:
+            reason = (
+                f"{artist} has {len(left)} other albums music doesn't have, so nothing was queued."
+            )
+        else:
+            reason = (
+                f"{artist} has no other studio album music doesn't have, so nothing was queued."
+            )
+        return self._album_refusal(artist, reason, left[:MUSIC_MAX_CANDIDATES])
+
+    def _album_refusal(self, artist: str, reason: str, others: list[Album]) -> AppReply:
+        """A refused ``download_album`` as real music answers an agent caller
+        (music#97, music#107): its record, with a short ``reason`` and the
+        albums offered as ``candidates`` (outside text), then code's note,
+        which ends on its question when there is something to pick."""
         self.world.read("music", "albums")
-        stored = f"{error.rstrip('.')}. {next_step}."
-        # The reply as music's ``run_record.handoff`` builds it: its record,
-        # then its agent's note, labelled and quoted (the fleet smoke's shape).
-        args = json.dumps({"artist": album.artist}, separators=(",", ":"))
+        candidates = [
+            EntityRef(app="music", kind="album", id=a.mbid, title=a.title, untrusted=True)
+            for a in others
+        ]
+        note = reason[:1].upper() + reason[1:]
+        if candidates:
+            note += " Albums listed: " + "; ".join(f"“{a.title}”" for a in others) + "."
+            note += f" {MUSIC_CANDIDATES_QUESTION}"
+        args = json.dumps({"artist": artist}, separators=(",", ":"))
         text = (
             "Music's record of this run (built by the app from its tool results; nothing "
             'outside "Done" was saved or changed):\nDone:\n- nothing\nRefused:\n'
-            f"- #1 download_album {args} -> {_music_clip(stored)}\n\n"
-            f'The agent\'s note (its reading of the results, not a record): "{text}"'
+            f"- #1 download_album {args} -> {_music_clip(reason)}\n\n"
+            f"The app's note (built from the record, not the model's words): \"{note}\""
         )
-        call = ToolCallRead(tool="download_album", arguments={"artist": album.artist}, error=stored)
+        call = ToolCallRead(tool="download_album", arguments={"artist": artist}, error=reason)
         refused = RecordEntry(
             tool="download_album",
             outcome="refused",
-            reason=_music_clip(stored),
-            untrusted=True,
+            reason=_music_clip(reason),
+            untrusted=bool(candidates),
+            candidates=candidates,
         )
-        return AppReply(text, [call], found=[refused], asks=True)
+        return AppReply(
+            text,
+            [call],
+            found=[refused],
+            asks=bool(candidates),
+            question=MUSIC_CANDIDATES_QUESTION if candidates else None,
+        )
 
     def _queue_job(self, kind: str, title: str, total: int, **detail: Any) -> AppReply:
         job = Job(len(self.world.jobs) + 1, kind, title, total, album_id=detail.get("album_id"))
@@ -1333,7 +1417,7 @@ class FakeDelegateClient:
         elif isinstance(self._app, TasksApp):
             reply = self._app.handle(conversation_id, message, confirm_token)
         else:
-            reply = self._app.handle(conversation_id, message)
+            reply = self._app.handle(conversation_id, message, context)
         if saved is not None and len(self._world.receipts) > before:
             # Read mode (#202): the real apps stop a write before their service
             # layer, so here it never happened: the world is put back and the

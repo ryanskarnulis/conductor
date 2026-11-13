@@ -199,8 +199,16 @@ def _hedged(clause: str) -> bool:
     return bool(_QUESTION.search(lowered) or _HEDGE.search(lowered) or _NEGATION.search(lowered))
 
 
+# A curly-quoted span is read whole first: the narrator curly-quotes a title,
+# and a title may hold straight quotes of its own (PCC's 'Sort the album
+# downloaded in "Honey"', #196's fleet smoke).
+_CURLY = re.compile(r"“([^“”]{2,80})”")
+
+
 def _quoted(clause: str) -> list[str]:
-    return [a or b for a, b in _QUOTED.findall(clause)]
+    curly = _CURLY.findall(clause)
+    rest = _CURLY.sub(" ", clause)
+    return [*curly, *(a or b for a, b in _QUOTED.findall(rest))]
 
 
 def read_claims(

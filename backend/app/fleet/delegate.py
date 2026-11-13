@@ -240,6 +240,9 @@ class RecordEntry(BaseModel):
     undo: Undo | None = None
     job: JobRef | None = None
     untrusted: bool = False
+    # What a refusal offers instead (agent-standard#39): album refs, for an
+    # album lookup that matched none, several, or only an album the app has.
+    candidates: list[EntityRef] = []
 
 
 def _lenient_record(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:

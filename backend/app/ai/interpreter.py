@@ -142,6 +142,8 @@ logger = structlog.get_logger(__name__)
 # as ``context.refs``, and the contract's cap on refs per message.
 STATE_REFS = 5
 MAX_CONTEXT_REFS = 20
+# Where a paused body keeps a v1.2 app's ``needs_input`` candidates (#196).
+APP_CANDIDATES = "app_candidates"
 
 # How a recall step reads the ledger (#80): its query in, what memory found out.
 MemoryReader = Callable[[str], memory.Recalled]
@@ -203,6 +205,9 @@ class _Run:
     # carries its own as ``context.refs``. Read once, when an ask needs them.
     entities: Callable[[], Sequence[Entity] | None] | None = None
     touched: list[Entity] | None = None
+    # The candidate the person's answer picked from a v1.2 app's question
+    # (#196): the resumed ask carries it, marked ``picked``, as its only ref.
+    picked: dict[str, Any] | None = None
     # The turn's plan, once compiled: what the ledger journals.
     plan: TurnPlan | None = None
     # Where this plan's records start: a control step split off and run first
@@ -822,6 +827,9 @@ class Interpreter:
         own entities this window touched, newest first (:data:`STATE_REFS`), so
         "their other album" reaches music with the album's id. Deduplicated,
         at most :data:`MAX_CONTEXT_REFS`."""
+        if state.picked is not None and state.picked.get("app") == step.app:
+            picked, state.picked = state.picked, None
+            return [picked]
         refs: list[dict[str, Any]] = []
         for match in plans.REF.finditer(step.request):
             value = values.get(match.group(1))
@@ -923,6 +931,12 @@ class Interpreter:
         answer back to it and goes on (:meth:`_resume_app_question`). The
         reply is the app's question in its own words (``narrator``)."""
         question = narrator.app_asks(state.records[-1])
+        typed = (state.records[-1].app_asks or {}).get("needs_input") or {}
+        candidates = typed.get("candidates") if isinstance(typed, dict) else None
+        if candidates and turn.body is not None:
+            # What the person picks from goes with the plan (#196): their
+            # answer is matched to one by code when it resumes.
+            turn.body = {**turn.body, APP_CANDIDATES: list(candidates)}
         turn_events.paused("app_question", question=question, app=step.app, step=step.id)
         turn.status, turn.pause = "paused", "app_question"
         turn.resume_at, turn.pause_app = position, step.app
@@ -943,6 +957,12 @@ class Interpreter:
         asked = steps[paused.resume_at]
         assert isinstance(asked, plans.Ask)
         answer = dataflow.answer(state.words).text
+        candidates = [c for c in paused.body.get(APP_CANDIDATES) or [] if isinstance(c, dict)]
+        chosen = options.pick(state.words, [str(c.get("title") or "") for c in candidates])
+        if chosen is not None:
+            # The answer names one of the app's candidates (#196): the app gets
+            # that ref, with its id and marked as the pick, not a title to reread.
+            state.picked = {**candidates[chosen], "picked": True}
         steps[paused.resume_at] = asked.model_copy(
             update={"request": f"{asked.request} ({APP_ANSWER_LEAD}: {answer})"}
         )
