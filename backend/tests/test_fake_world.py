@@ -373,3 +373,16 @@ def test_an_answer_naming_an_album_queues_it_over_other_than(world: World) -> No
         context={"refs": [_honey(world)]},
     ).assistant_message
     assert [r.title for r in world.receipts] == ["Suddenly"] and reply.needs_input is None
+
+
+def test_a_picked_candidate_is_queued_by_its_id(world: World) -> None:
+    """The person's pick from music's list comes back as a ``picked`` ref
+    (#196): music queues that album by id, whatever the words say."""
+    swim = next(a for a in world.catalog if a.title == "Swim")
+    music = client_factory(world)(_App("music"))
+    music.send_message(
+        1,
+        "download their other album (the person's answer: the older one)",
+        context={"refs": [{"app": "music", "kind": "album", "id": swim.mbid, "picked": True}]},
+    )
+    assert [r.title for r in world.receipts] == ["Swim"]

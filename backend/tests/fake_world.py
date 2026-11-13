@@ -1213,6 +1213,16 @@ class MusicApp:
             for ref in (context or {}).get("refs") or []
             if ref.get("app") == "music" and ref.get("kind") == "album"
         ]
+        # The person's pick from music's own list (#196): music queues that
+        # album by id (music#112's ``album_id``), no title read.
+        picked = next((r for r in mine if r.get("picked")), None)
+        if picked is not None:
+            album = next((a for a in self.world.catalog if a.mbid == picked.get("id")), None)
+            if album is None:
+                return AppReply("No album with that id, so nothing was queued.")
+            return self._queue_job(
+                "album", album.title, len(album.tracks), artist=album.artist, album_id=album.mbid
+            )
         # A title it was given still names its album, as music's
         # ``download_album`` takes ``album`` over ``other_than``: the person's
         # answer to its question ("Suddenly") is that.
