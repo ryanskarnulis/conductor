@@ -312,8 +312,12 @@ def read_usage(tag: str, started: float, ended: float, status: int, body: bytes)
 
 class Meter:
     """A recording pass-through to llama-swap, one port per caller. It
-    forwards each request whole and keeps what the answer said about tokens
-    and the cache; the callers see llama-swap's answer byte for byte."""
+    forwards each request and keeps what the answer said about tokens and the
+    cache; the callers see llama-swap's answer byte for byte, **as it
+    streams** (#200: a buffering meter handed a peek its first words only
+    after the whole reply, so the fleet couldn't see the peek save anything).
+    A caller that stops reading (a peek) closes the upstream stream too, as it
+    would without the meter."""
 
     def __init__(self, upstream: str = LLAMA_SWAP) -> None:
         self.upstream = upstream.rstrip("/")
@@ -339,22 +343,34 @@ class Meter:
                     if k.lower() not in ("host", "content-length", "connection")
                 }
                 started = time.time()
-                answer = meter._client.request(
+                request = meter._client.build_request(
                     self.command, meter.upstream + self.path, content=body, headers=headers
                 )
+                answer = meter._client.send(request, stream=True)
+                kept = bytearray()
+                try:
+                    self.send_response(answer.status_code)
+                    for key, value in answer.headers.items():
+                        if key.lower() not in ("content-length", "transfer-encoding", "connection"):
+                            self.send_header(key, value)
+                    # HTTP/1.0 with no length: the body ends when the
+                    # connection closes, so each chunk goes out as it comes.
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    for chunk in answer.iter_raw():
+                        kept += chunk
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # the caller stopped reading (a peek): so do we
+                finally:
+                    answer.close()
                 ended = time.time()
                 if self.command == "POST" and self.path.endswith("/chat/completions"):
                     with meter._lock:
                         meter.calls.append(
-                            read_usage(tag, started, ended, answer.status_code, answer.content)
+                            read_usage(tag, started, ended, answer.status_code, bytes(kept))
                         )
-                self.send_response(answer.status_code)
-                for key, value in answer.headers.items():
-                    if key.lower() not in ("content-length", "transfer-encoding", "connection"):
-                        self.send_header(key, value)
-                self.send_header("Content-Length", str(len(answer.content)))
-                self.end_headers()
-                self.wfile.write(answer.content)
 
             do_GET = _forward
             do_POST = _forward
