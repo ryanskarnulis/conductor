@@ -17,7 +17,7 @@ from tests.fake_world import (
     parse_date,
     weekend_targets,
 )
-from app.fleet.delegate import DelegateConfirmRefused, RecordEntry
+from app.fleet.delegate import DelegateConfirmRefused, MessageRead, RecordEntry
 
 THURSDAY = date(2026, 11, 5)
 
@@ -171,9 +171,10 @@ def test_the_artist_alone_is_their_newest_album(world: World, message: str) -> N
     assert entry.outcome == "done" and entry.touched[0].title == "Honey"
 
 
-# Asked again with the artist alone once the newest is held, music refuses:
-# nothing queued, a ``refused`` entry with no ref, its reason (outside text)
-# listing the other albums as ``Title (year)``, and its agent asks which one.
+# Asked again with the artist alone once the newest is held, music refuses
+# (music#107): nothing queued, a ``refused`` entry with a short reason that
+# counts the other albums, the albums themselves as ``candidates`` (outside
+# text), and code's note asks which one.
 @pytest.mark.parametrize("message", _ARTIST_ALONE)
 def test_the_artist_alone_again_is_refused_with_the_others_listed(
     world: World, message: str
@@ -188,11 +189,14 @@ def test_the_artist_alone_again_is_refused_with_the_others_listed(
         None,
     )
     assert entry.untrusted is True
-    assert entry.reason is not None and entry.reason.startswith(
+    assert entry.reason == (
         "Honey (2024) by Caribou was already asked for, so nothing was queued. "
-        "MusicBrainz lists these other albums by Caribou: Suddenly (2020); Swim (2010)."
+        "MusicBrainz lists 2 other albums by Caribou."
     )
-    assert len(entry.reason) <= 160
+    assert [(c.kind, c.title, c.untrusted) for c in entry.candidates] == [
+        ("album", "Suddenly", True),
+        ("album", "Swim", True),
+    ]
 
 
 def test_music_does_not_know_what_other_means(world: World) -> None:
@@ -215,7 +219,8 @@ def test_a_title_is_never_second_guessed_and_the_last_album_is_still_named(
     reply = app.handle(1, "download the other album by Caribou")
     assert [r.title for r in world.receipts] == ["Honey", "Honey", "Suddenly"]
     # One album left: still the person's to name, never queued for them.
-    assert "Swim (2010)" in reply.text and reply.found[0].outcome == "refused"
+    assert "“Swim”" in reply.text and reply.found[0].outcome == "refused"
+    assert [c.title for c in reply.found[0].candidates] == ["Swim"]
     app.handle(1, "download Swim by Caribou")
     reply = app.handle(1, "download the other album by Caribou")
     assert reply.found[0].reason is not None and "no other studio album" in reply.found[0].reason
@@ -304,3 +309,54 @@ def test_replies_carry_v1_1_records_like_the_real_apps(world: World) -> None:
 class _App:
     def __init__(self, name: str) -> None:
         self.name = name
+
+
+# --- delegate v1.2: "their other album" with the album as a context ref (#196) -----
+
+
+def _honey(world: World) -> dict[str, object]:
+    honey = next(a for a in world.catalog if a.title == "Honey")
+    return {"app": "music", "kind": "album", "id": honey.mbid, "title": "Honey"}
+
+
+def _other(world: World) -> MessageRead:
+    music = client_factory(world)(_App("music"))
+    return music.send_message(
+        1, "download their other album", context={"refs": [_honey(world)]}
+    ).assistant_message
+
+
+def test_their_other_album_with_one_left_is_queued(world: World) -> None:
+    """music#111's ``other_than``: one album left that isn't the ref and isn't
+    held, so it is queued (conductor#145 decision 3)."""
+    _music_record(world, "download Suddenly by Caribou")
+    reply = _other(world)
+    assert [r.title for r in world.receipts] == ["Suddenly", "Swim"]
+    assert reply.needs_input is None
+
+
+def test_their_other_album_with_several_left_asks_with_them(world: World) -> None:
+    reply = _other(world)
+    assert world.receipts == []
+    [entry] = reply.record or []
+    assert entry.outcome == "refused" and entry.reason == (
+        "Caribou has 2 other albums music doesn't have, so nothing was queued."
+    )
+    assert reply.needs_input is not None
+    assert [c["title"] for c in reply.needs_input.candidates] == ["Suddenly", "Swim"]
+    assert reply.needs_input.question == "Which one do you want, or do you have a link?"
+
+
+def test_their_other_album_with_none_left_is_a_plain_no(world: World) -> None:
+    _music_record(world, "download Suddenly by Caribou")
+    _music_record(world, "download Swim by Caribou")
+    reply = _other(world)
+    [entry] = reply.record or []
+    assert entry.outcome == "refused" and entry.candidates == []
+    assert reply.needs_input is None
+
+
+def test_without_a_ref_other_still_means_the_newest(world: World) -> None:
+    """A v1.1 ask, words alone: music can't know which album is "the other"."""
+    [entry] = _music_record(world, "download the other album by Caribou")
+    assert entry.outcome == "done" and entry.touched[0].title == "Honey"

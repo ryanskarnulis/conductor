@@ -1685,10 +1685,12 @@ def _caribou_queued(world: World) -> None:
     )
 
 
+# Real music's code-built note for an agent caller (music#107), quoted as its
+# words; its own quoted titles turn single inside the quote.
 _MUSIC_ASKS = (
-    "Music asks: “Honey was already asked for, so I didn't queue it again. MusicBrainz "
-    "lists these other albums by Caribou: Suddenly (2020); Swim (2010). Which one do "
-    "you want, or do you have a link?”"
+    "Music asks: “Honey (2024) by Caribou was already asked for, so nothing was queued. "
+    "MusicBrainz lists 2 other albums by Caribou. Albums listed: 'Suddenly'; 'Swim'. "
+    "Which one do you want, or do you have a link?”"
 )
 
 
