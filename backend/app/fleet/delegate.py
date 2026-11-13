@@ -264,6 +264,26 @@ class ConfirmPreview(BaseModel):
     touched: list[EntityRef] = []
 
 
+class NeedsInputRead(BaseModel):
+    """An app's typed question to the person (delegate-api v1.2)."""
+
+    question: str
+    candidates: list[dict[str, Any]] = []
+
+
+def _lenient_needs_input(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+    """A ``needs_input`` conductor can't read is no question: the plan runs on
+    as for a v1.1 reply rather than failing the call."""
+    try:
+        return handler(value)
+    except ValidationError:
+        logger.warning("delegate_needs_input_unreadable")
+        return None
+
+
+NeedsInput = Annotated[NeedsInputRead | None, WrapValidator(_lenient_needs_input)]
+
+
 class ConfirmRequired(BaseModel):
     """A gated call the app armed instead of running (delegate-api
     "Confirmation"): its token, and the question and preview its code built."""
@@ -301,6 +321,9 @@ class MessageRead(BaseModel):
     record: Record = None
     # Set on a ``confirm_required`` stop: the armed call's token and question.
     confirm_required: Confirm = None
+    # v1.2 (#202): the app's own question when it did nothing,
+    # ``{question, candidates}``; read only from an app that declares v1.2.
+    needs_input: NeedsInput = None
 
 
 class FailureBody(BaseModel):
@@ -390,13 +413,17 @@ class DelegateClient:
         *,
         idempotency_key: str | None = None,
         confirm_token: str | None = None,
+        context: dict[str, Any] | None = None,
+        mode: str | None = None,
     ) -> MessageExchange:
         """``POST /conversations/{id}/messages`` → the user + assistant turns.
 
         The delegate contract's request field is ``content``. The
         ``Idempotency-Key`` is ``idempotency_key``, else the current hop's
         (the tool layer mints one per ``ask`` step), else none (v1). A
-        ``confirm_token`` answers the app's question yes (#68).
+        ``confirm_token`` answers the app's question yes (#68). ``context``
+        and ``mode`` are delegate v1.2's (#202), sent only when given: a v1.1
+        app may reject unknown fields.
         """
         hop = run_trace.current_hop()
         key = idempotency_key or (hop.idempotency_key if hop is not None else None)
@@ -408,7 +435,11 @@ class DelegateClient:
         response = self._send(
             "POST",
             f"/conversations/{conversation_id}/messages",
-            json={"content": message},
+            json={
+                "content": message,
+                **({"context": context} if context is not None else {}),
+                **({"mode": mode} if mode is not None else {}),
+            },
             may_have_acted=True,
             extra_headers=headers or None,
         )

@@ -56,6 +56,12 @@ LOOK_FELL_BACK = "glance unavailable, asked the app instead: "
 # The argument of an ask that lists the saved facts code sent with it (#134,
 # ``app.ai.facts.related``): on the record and the ledger, never in a model's view.
 ATTACHED_FACTS = "facts"
+# The delegate v1.2 arguments of an ask (#202): the refs sent as
+# ``context.refs`` and whether it went ``mode: "read"``. Kept out of a
+# model's view like the facts.
+CONTEXT_REFS = "refs"
+READ_MODE = "read"
+_HIDDEN_ARGUMENTS = frozenset({ATTACHED_FACTS, CONTEXT_REFS, READ_MODE})
 
 
 # A cancel sent to a running job (#76): ``cancel_job_<app>``, by code, never
@@ -187,7 +193,7 @@ def shown(arguments: dict[str, Any]) -> dict[str, Any]:
     """A call's arguments as a model may read them: without the saved facts
     code sent along with an ask (#134). They stay on the record and the
     ledger; out of every model's view, a forgotten fact can't come back."""
-    return {name: value for name, value in arguments.items() if name != ATTACHED_FACTS}
+    return {name: value for name, value in arguments.items() if name not in _HIDDEN_ARGUMENTS}
 
 
 def _compact(arguments: dict[str, Any]) -> str:

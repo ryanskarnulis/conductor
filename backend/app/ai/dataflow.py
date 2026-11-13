@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.ai.memory import best_ref
@@ -69,6 +69,9 @@ class Value:
 
     text: str
     untrusted: bool = False
+    # The entity refs behind ``text`` (#202), sent beside it as a v1.2 app's
+    # ``context.refs``: the app gets the id, not only the quoted title.
+    refs: tuple[Mapping[str, Any], ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,7 @@ def from_record(app_record: Iterable[Mapping[str, Any]] | None) -> Value | None:
     titles: list[str] = []
     seen: set[str] = set()
     untrusted = False
+    refs: list[Mapping[str, Any]] = []
     for entry in app_record or []:
         if entry.get("outcome") not in ("done", "looked_up"):
             continue
@@ -111,11 +115,23 @@ def from_record(app_record: Iterable[Mapping[str, Any]] | None) -> Value | None:
             if key not in seen:
                 seen.add(key)
                 titles.append(title)
+                refs.append(_ref(ref, entry, title))
     if not titles or len(titles) > MAX_NAMED:
         return None
     quoted = [f"“{title}”" for title in titles]
     text = quoted[0] if len(quoted) == 1 else f"{', '.join(quoted[:-1])} and {quoted[-1]}"
-    return Value(text, untrusted)
+    return Value(text, untrusted, tuple(refs))
+
+
+def _ref(ref: Mapping[str, Any], entry: Mapping[str, Any], title: str) -> dict[str, Any]:
+    """One touched ref in the contract's shape, its title cleaned as ``{sN}``'s."""
+    return {
+        "app": str(ref.get("app") or ""),
+        "kind": str(ref.get("kind") or ""),
+        "id": str(ref.get("id") or ""),
+        "title": title,
+        "untrusted": bool(ref.get("untrusted") or entry.get("untrusted")),
+    }
 
 
 def from_recall(app_record: Iterable[Mapping[str, Any]] | None) -> Value | None:
