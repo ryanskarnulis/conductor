@@ -142,7 +142,9 @@ def _compile(case: Case, fleet: Fleet, prompt: str) -> tuple[compiler.Compiled, 
             calls.append(time.monotonic() - started)
 
     state = case.state or empty_state()
-    checks = plans.Checks(fleet=fleet, confirmable=case.confirmable, context=state)
+    checks = plans.Checks(
+        fleet=fleet, confirmable=case.confirmable, resumable=case.resumable, context=state
+    )
     try:
         compiled = compiler.compile_turn(
             chat, system_prompt=prompt, context=state, words=case.text, fleet=fleet, checks=checks

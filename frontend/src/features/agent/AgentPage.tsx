@@ -1,6 +1,6 @@
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
-import { EyeOff, ListMusic, SendHorizontal, Square, Volume2, VolumeX } from 'lucide-react'
+import { Ear, EarOff, EyeOff, ListMusic, SendHorizontal, Square, Volume2, VolumeX } from 'lucide-react'
 import { cancelTurn, getTimeline, type SendOptions } from '../../api/agent'
 import {
   Ack,
@@ -20,7 +20,7 @@ import {
 import { earcons, setSound, soundOn } from '../../design/earcons'
 import { prefersReducedMotion } from '../../design/motion'
 import { MicButton } from '../../voice/MicButton'
-import { playText } from '../../voice/tts'
+import { playText, type Heard } from '../../voice/tts'
 import type { AgentStopReason, Surface, Timeline } from '../../types/agent'
 import { ConductorMark } from './ConductorMark'
 import { activityLabel, elapsedSuffix } from './delegateCalls'
@@ -276,6 +276,15 @@ export function AgentPage() {
       return !on
     })
   }
+  // Barge-in (#77): talking over a spoken reply stops it, and the next turn
+  // says how much of it was heard. On unless the person turned it off.
+  const [bargeIn, setBargeIn] = useState(() => localStorage.getItem('agent-barge-in') !== 'off')
+  const toggleBargeIn = () => {
+    setBargeIn((on) => {
+      localStorage.setItem('agent-barge-in', on ? 'off' : 'on')
+      return !on
+    })
+  }
   const toggleSound = () => {
     setSoundState((on) => {
       setSound(!on)
@@ -300,9 +309,11 @@ export function AgentPage() {
     return () => clearInterval(timer)
   }, [incognito, gapMs])
 
-  /** How this turn goes out: its surface, and incognito while it is on (and
-   * the quiet gap hasn't lapsed it). Nothing extra for a plain typed turn. */
-  const sendOptions = (surface?: Surface): SendOptions | undefined => {
+  /** How this turn goes out: its surface, incognito while it is on (and the
+   * quiet gap hasn't lapsed it), and what was heard of a reply the person
+   * spoke over (never with an incognito turn). Nothing extra for a plain
+   * typed turn. */
+  const sendOptions = (surface?: Surface, heard?: Heard): SendOptions | undefined => {
     let hidden = incognito
     if (hidden && incognitoLapsed(incognitoUsedAt.current, Date.now(), gapMs)) {
       hidden = false
@@ -311,9 +322,13 @@ export function AgentPage() {
     }
     if (hidden) incognitoUsedAt.current = Date.now()
     if (!surface && !hidden) return undefined
-    return { ...(surface ? { surface } : {}), ...(hidden ? { incognito: true } : {}) }
+    return {
+      ...(surface ? { surface } : {}),
+      ...(hidden ? { incognito: true } : {}),
+      ...(heard && !hidden ? { heard } : {}),
+    }
   }
-  const say = (words: string, surface?: Surface) => send(words, sendOptions(surface))
+  const say = (words: string, surface?: Surface, heard?: Heard) => send(words, sendOptions(surface, heard))
 
   // Earcons: a finished turn plucks each app string that returned a receipt;
   // a confirmation sounds once. Off unless Sound is on.
@@ -335,11 +350,11 @@ export function AgentPage() {
   // tagged as voice on the timeline (#82).
   const voiceTurnRef = useRef(false)
   const ackedAppsRef = useRef(new Set<string>())
-  const onTranscript = async (text: string) => {
+  const transcribed = async (text: string, heard?: Heard) => {
     voiceTurnRef.current = true
     ackedAppsRef.current = new Set()
     try {
-      const reply = await say(text, 'voice')
+      const reply = await say(text, 'voice', heard)
       if (reply && localStorage.getItem('agent-voice-output') !== 'off') {
         void playText(reply)
       }
@@ -347,6 +362,17 @@ export function AgentPage() {
       voiceTurnRef.current = false
     }
   }
+  // The mic holds the callback it was given when the conversation started,
+  // so it calls through a ref: an incognito switch flipped mid-conversation
+  // applies to the next utterance.
+  const transcribedRef = useRef(transcribed)
+  useEffect(() => {
+    transcribedRef.current = transcribed
+  })
+  const onTranscript = useCallback(
+    (text: string, _interactionId?: string, heard?: Heard) => transcribedRef.current(text, heard),
+    [],
+  )
 
   // Slow-turn acknowledgment on voice turns: "Asking chess…" is spoken once per app.
   useEffect(() => {
@@ -624,7 +650,7 @@ export function AgentPage() {
                     rows={1}
                     disabled={sending || threads.closing}
                   />
-                  <MicButton onTranscript={onTranscript} disabled={sending || threads.closing} />
+                  <MicButton onTranscript={onTranscript} disabled={sending || threads.closing} bargeIn={bargeIn} />
                   <button
                     type="button"
                     className="agent-voice-toggle tl-incognito"
@@ -644,6 +670,16 @@ export function AgentPage() {
                     title={voiceOutput ? 'Spoken replies on' : 'Spoken replies off'}
                   >
                     {voiceOutput ? <Volume2 size={17} aria-hidden="true" /> : <VolumeX size={17} aria-hidden="true" />}
+                  </button>
+                  <button
+                    type="button"
+                    className="agent-voice-toggle"
+                    onClick={toggleBargeIn}
+                    aria-pressed={bargeIn}
+                    aria-label="Talk over replies"
+                    title={bargeIn ? 'Talking over a spoken reply stops it' : 'Spoken replies play to the end'}
+                  >
+                    {bargeIn ? <Ear size={17} aria-hidden="true" /> : <EarOff size={17} aria-hidden="true" />}
                   </button>
                   {sending ? (
                     <button type="button" className="agent-stop" onClick={stopTurn} aria-label="Stop">

@@ -16,6 +16,8 @@ It holds, each line only when there is something to say:
 - the jobs an app reported as still running, as of their last report;
 - what is waiting on the person: a question the last reply asked, or an
   app's question that a yes answers with ``confirm`` (#68);
+- a reply the person spoke over (#77): how much of it they heard, and the
+  start of what they didn't, as data;
 - recent entities: what this conversation's calls touched, newest first,
   from the ledger (#69) when the caller passes them, else from the apps' own
   records on the stored turns (delegate-api v1.1). Outside text is quoted and
@@ -56,8 +58,13 @@ MATCHES_MAX_CHARS = 900
 MAX_FACTS = 8
 MAX_FACT_CHARS = 120
 FACTS_MAX_CHARS = MAX_FACTS * (MAX_FACT_CHARS + 40) + 90
+# A reply the person spoke over (#77): the end of what they heard, the start
+# of what they didn't, and the line's share.
+HEARD_TAIL_CHARS = 80
+UNHEARD_CHARS = 240
+HEARD_MAX_CHARS = HEARD_TAIL_CHARS + UNHEARD_CHARS + 180
 # The block is never longer than this (asserted in the tests).
-MAX_CHARS = 2400 + MATCHES_MAX_CHARS + FACTS_MAX_CHARS
+MAX_CHARS = 2400 + MATCHES_MAX_CHARS + FACTS_MAX_CHARS + HEARD_MAX_CHARS
 
 _HEADER = "[State at the start of this turn — written by conductor, not the person]"
 MATCHES_HEADING = "Matches for words in the message, from earlier conversations (as of then):"
@@ -110,6 +117,16 @@ class Fact:
 
 
 @dataclass(frozen=True)
+class Heard:
+    """The last reply, cut off when the person spoke over it (#77): its text
+    and how many of its characters (UTF-16 units, as the browser counts)
+    played first; ``None`` when the browser couldn't tell."""
+
+    reply: str
+    heard_chars: int | None
+
+
+@dataclass(frozen=True)
 class Now:
     """What the client told conductor about where the person is."""
 
@@ -146,6 +163,7 @@ def render(
     jobs: Sequence[str] | None = None,
     matches: Sequence[Match] = (),
     facts: Sequence[Fact] = (),
+    heard: Heard | None = None,
 ) -> str:
     """The block for a turn starting ``today`` on a conversation with
     ``history`` (stored turns, oldest first, as :func:`app.ai.recall.Recall.of`
@@ -154,7 +172,8 @@ def render(
     jobs as the watcher last read them (#76); ``None`` reads each job's last
     report from the records. ``matches`` are the entity registry's leads from
     earlier conversations (#80). ``facts`` are the ones the person saved (#81),
-    most relevant first."""
+    most relevant first. ``heard`` is the last reply when the person spoke
+    over it (#77)."""
     lines = [_HEADER, *calendar_lines(today)]
     if now.surface is not None:
         lines.append(_SURFACE_LINES[now.surface])
@@ -175,6 +194,8 @@ def render(
         )
     elif question:
         lines.append(f'Waiting on the person: your last reply asked "{question}"')
+    if heard is not None:
+        lines.append(cut_off_line(heard))
     recent = list(entities[:MAX_ENTITIES]) if entities is not None else _entities(records)
     if recent:
         lines.append("Recent entities (newest first, as of then):")
@@ -187,6 +208,61 @@ def render(
         lines += [f"- {_fact(fact)}" for fact in facts[:MAX_FACTS]]
     lines.append(_FOOTER)
     return "\n".join(lines)
+
+
+CUT_OFF_PREFIX = "Your last reply was cut off: the person spoke over it"
+
+
+def utf16_index(text: str, units: int) -> int:
+    """The index in ``text`` where ``units`` UTF-16 code units (the browser's
+    characters) end; past the end is the end."""
+    seen = 0
+    for index, char in enumerate(text):
+        if seen >= units:
+            return index
+        seen += 2 if ord(char) > 0xFFFF else 1
+    return len(text)
+
+
+def utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def split_heard(heard: Heard) -> tuple[str, str] | None:
+    """What was heard and what wasn't, flattened, cut at a word: the cut
+    is an estimate from playback time, so a half-heard word counts as not
+    heard. ``None`` when how much played is unknown."""
+    if heard.heard_chars is None:
+        return None
+    at = utf16_index(heard.reply, heard.heard_chars)
+    if 0 < at < len(heard.reply) and not heard.reply[at].isspace():
+        space = max(heard.reply.rfind(" ", 0, at), heard.reply.rfind("\n", 0, at))
+        at = space + 1 if space >= 0 else 0
+    return " ".join(heard.reply[:at].split()), " ".join(heard.reply[at:].split())
+
+
+def cut_off_line(heard: Heard) -> str:
+    """The state block's line for a reply the person spoke over (#77): how
+    much of it they heard, and what they didn't, quoted as data (capped)."""
+    parts = split_heard(heard)
+    if parts is None:
+        return f"{CUT_OFF_PREFIX} partway; how much of it they heard is unknown."
+    said, unsaid = parts
+    if not unsaid:
+        return f"{CUT_OFF_PREFIX} at its very end; they heard all of it."
+    if len(unsaid) > UNHEARD_CHARS:
+        unsaid = unsaid[: UNHEARD_CHARS - 1] + "…"
+    if not said:
+        return (
+            f"{CUT_OFF_PREFIX} before any of it played; they heard none of it "
+            f'(your words, not heard: "{unsaid}").'
+        )
+    if len(said) > HEARD_TAIL_CHARS:
+        said = "…" + said[-(HEARD_TAIL_CHARS - 1) :]
+    return (
+        f'{CUT_OFF_PREFIX}. They heard up to "{said}" and not the rest '
+        f'(your words, not heard: "{unsaid}").'
+    )
 
 
 def _records(history: Sequence[dict[str, Any]]) -> list[ToolCallRecord]:

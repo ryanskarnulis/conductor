@@ -378,6 +378,15 @@ class Interpreter:
             offered = asked[0].options if asked and isinstance(asked[0], plans.AskUser) else []
             # The person's pick, as the entity State named for it (#120).
             value, picked = options.chosen(plan.resume, options.stored(paused.body, offered))
+            if offered and picked is None and plans.is_correction(state.words):
+                # "No, Saturday" over "which one?" (#77): it picks none of the
+                # options and says what instead, so it changes the waiting
+                # plan; as {s1} it would name a thing called "Saturday".
+                amend = plans.Amend(id="s1", do="amend", target="pending", change=state.words)
+                turn.body = {"steps": [amend.model_dump()]}
+                return control.run(
+                    self, state, turn, amend, state.view, paused=paused, pending=pending
+                )
             values = {"s1": value}
             turn_events.resumed(
                 "ask_user",

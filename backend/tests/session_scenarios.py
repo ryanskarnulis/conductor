@@ -1,5 +1,6 @@
 """Session scenarios: S1–S16 (#56, ``docs/revamp-research-2026-11.md`` §1.1), M1–M3 (#81, #134),
-T1–T2 and S1v (#82: one timeline, incognito, a voice-tagged S1), TH1–TH2 (#139: side threads).
+T1–T2 and S1v (#82: one timeline, incognito, a voice-tagged S1), TH1–TH2 (#139: side threads),
+BI1–BI2 (#77: a reply spoken over, a spoken correction).
 
 Each is the person's side of a conversation plus checks on what came of it.
 Checks read the end state and the replies, never the path: which tools ran in
@@ -1024,6 +1025,72 @@ THREAD_KEEPS_INCOGNITO = Scenario(
 )
 
 
+# --- barge-in (#77) ------------------------------------------------------------------------------
+#
+# Said over the reply: the turn carries the voice client's heard report for it
+# (``Say.cut``, the share that played). Real audio (does the speaker trip the
+# mic?) is the person's to judge; these read what conductor made of it.
+
+
+def _repeated_what_was_missed(session: Session) -> None:
+    no_writes(session)
+    again = session.turn("again")
+    due = [task.title for task in session.world.due_today()]
+    assert due, "the world has nothing due today"
+    assert any(refers_to(again.reply or "", title) for title in due), (
+        f"didn't say again what was cut off (due today: {due})"
+    )
+
+
+INTERRUPTED = Scenario(
+    "BI1",
+    "voice: 'what's due today?', cut a quarter in, 'sorry, what was that?' says it again",
+    (
+        Say("what's due today?", surface="voice", label="due"),
+        Say("sorry, what was that?", surface="voice", cut=0.25, label="again"),
+    ),
+    (_repeated_what_was_missed,),
+    # Unmeasured: added with #77, not yet run live (the batch's eval gate runs it).
+    tier="frontier",
+    script=lambda w: [
+        plan(look("tasks")),
+        _say("Groceries and call mom are due today, and three things are overdue."),
+        answer("self"),
+        _say("I said groceries and call mom are due today, and three things are overdue."),
+    ],
+)
+
+
+def _corrected_not_dropped(session: Session) -> None:
+    assert not session.world.projects.get("Kitchen"), "the Kitchen project went to the trash"
+    cabinets = [t for t in session.world.tasks.values() if t.title == "paint cabinets"]
+    assert cabinets and cabinets[0].trashed, "the correction was dropped: paint cabinets stayed"
+    only_writes(session, {("trash", "paint cabinets")})
+
+
+CORRECTED = Scenario(
+    "BI2",
+    "voice: 'wipe the kitchen project', then over the question 'no, just the paint cabinets "
+    "task': only that task goes",
+    (
+        Say("wipe the kitchen project", surface="voice", label="ask"),
+        Say("no, just the paint cabinets task", surface="voice", cut=0.3, label="fix"),
+        ConfirmIfAsked("yes"),
+    ),
+    (_corrected_not_dropped,),
+    # Unmeasured: added with #77, not yet run live (the batch's eval gate runs it).
+    tier="frontier",
+    # Tasks asks each time (its own question, passed through); the amend
+    # resends the request with the change, and the yes is narrated.
+    script=lambda w: [
+        _ask("tasks", "delete the Kitchen project", destructive=True),
+        plan({"do": "amend", "target": "pending", "change": "just the paint cabinets task"}),
+        YES,
+        _say("Trashed “paint cabinets”."),
+    ],
+)
+
+
 SCENARIOS: tuple[Scenario, ...] = (
     S1,
     S1V,
@@ -1051,4 +1118,6 @@ SCENARIOS: tuple[Scenario, ...] = (
     INCOGNITO,
     THREAD_FLOWS_BACK,
     THREAD_KEEPS_INCOGNITO,
+    INTERRUPTED,
+    CORRECTED,
 )

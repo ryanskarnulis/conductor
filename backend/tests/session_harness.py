@@ -80,9 +80,17 @@ class Driver(Protocol):
         world: since the timeline (#82), the same conversation after a quiet
         gap. Whatever the runtime remembers across it is its memory."""
 
-    def say(self, text: str, *, surface: str, incognito: bool = False) -> TurnRecord:
+    def say(
+        self,
+        text: str,
+        *,
+        surface: str,
+        incognito: bool = False,
+        heard: dict[str, Any] | None = None,
+    ) -> TurnRecord:
         """One person turn through the runtime's real entry point; an
-        ``incognito`` one keeps none of its words (#82)."""
+        ``incognito`` one keeps none of its words (#82); ``heard`` is the
+        voice client's report on the reply the person spoke over (#77)."""
 
     def search(self, query: str) -> list[dict[str, Any]]:
         """The person's timeline search (#82): the turns it finds."""
@@ -119,6 +127,24 @@ class Say:
     surface: str = "desktop"
     # Incognito (#82): the apps see the request; conductor keeps no words.
     incognito: bool = False
+    # Barge-in (#77): said over the last reply, this share of it played first;
+    # the turn carries the voice client's heard report for it.
+    cut: float | None = None
+
+
+def heard_report(reply: str | None, cut: float) -> dict[str, Any] | None:
+    """The voice client's report for a reply cut ``cut`` of the way in, as
+    ``tts.ts`` builds it: characters in the browser's UTF-16 units."""
+    if not reply:
+        return None
+    total = len(reply.encode("utf-16-le")) // 2
+    total_ms = 60 * total  # about the speech service's pace
+    return {
+        "played_ms": round(total_ms * cut),
+        "total_ms": total_ms,
+        "heard_chars": min(total, round(total * cut)),
+        "total_chars": total,
+    }
 
 
 @dataclass(frozen=True)
@@ -363,9 +389,15 @@ def _say(
     label: str | None,
     surface: str,
     incognito: bool = False,
+    cut: float | None = None,
 ) -> TurnRecord:
+    heard = heard_report(session.last.reply, cut) if cut is not None and session.turns else None
     session.world.turn = len(session.turns) + 1
-    record = driver.say(text, surface=surface, incognito=incognito)
+    record = (
+        driver.say(text, surface=surface, incognito=incognito, heard=heard)
+        if heard is not None
+        else driver.say(text, surface=surface, incognito=incognito)
+    )
     record.label = label
     session.turns.append(record)
     session.world.receipts.extend(memory_writes(record))
@@ -399,7 +431,7 @@ def memory_writes(record: TurnRecord) -> list[Receipt]:
 def _run_step(step: Step, driver: Driver, session: Session) -> TurnRecord | None:
     world = session.world
     if isinstance(step, Say):
-        return _say(driver, session, step.text, step.label, step.surface, step.incognito)
+        return _say(driver, session, step.text, step.label, step.surface, step.incognito, step.cut)
     if isinstance(step, Search):
         session.searches[step.label] = driver.search(step.query)
         return None
@@ -580,10 +612,18 @@ class LoopDriver:
         # One timeline (#82): another day is a quiet gap, not a new thread.
         self._pass_time()
 
-    def say(self, text: str, *, surface: str, incognito: bool = False) -> TurnRecord:
+    def say(
+        self,
+        text: str,
+        *,
+        surface: str,
+        incognito: bool = False,
+        heard: dict[str, Any] | None = None,
+    ) -> TurnRecord:
         # A voice turn reaches conductor as the transcribed text plus its
         # surface, as the voice client sends it (#64's ``Now``); an incognito
-        # one carries the page's switch (#82).
+        # one carries the page's switch (#82), and one said over the last
+        # reply its heard report (#77).
         assert self._conversation is not None
         self._reset()
         index = self._holder.world.turn if self._holder.world else 0
@@ -591,6 +631,8 @@ class LoopDriver:
         body: dict[str, Any] = {"content": text, "surface": surface}
         if incognito:
             body["incognito"] = True
+        if heard is not None:
+            body["heard"] = heard
         response = self._client.post(
             f"/api/agent/conversations/{self._conversation}/messages", json=body
         )

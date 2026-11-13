@@ -21,11 +21,11 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.ai import facts
+from app.ai import facts, options
 from app.ai import plan as plans
 from app.ai import recall
 from app.ai.runtime import ToolCallRecord
-from app.ai.state_block import calendar_lines
+from app.ai.state_block import Heard, calendar_lines, cut_off_line
 
 
 @dataclass(frozen=True)
@@ -160,13 +160,27 @@ class Long:
 
 
 @dataclass(frozen=True)
+class PicksNone:
+    """A resume whose answer picks none of the waiting question's options
+    (#77): for a spoken correction, code reads the words and amends the
+    waiting plan instead (``Interpreter``'s resume path), so it is right."""
+
+    options: tuple[str, ...]
+
+    def matches(self, plan: plans.Plan) -> bool:
+        return isinstance(plan, plans.Resume) and options.pick(plan.resume, self.options) is None
+
+
+@dataclass(frozen=True)
 class Case:
     id: str
     text: str
-    expect: tuple[Shape | Long, ...]
+    expect: tuple[Shape | Long | PicksNone, ...]
     group: str
     state: str = ""
     refs: frozenset[str] = field(default_factory=frozenset)
+    # A plan paused on ask_user, which a resume answers (the schema offers it).
+    resumable: bool = False
 
     @property
     def confirmable(self) -> bool:
@@ -190,6 +204,11 @@ def state(**parts: str) -> str:
         lines += ["Running jobs (as of each one's last report):", f"- {parts['jobs']}"]
     if parts.get("waiting"):
         lines.append(f"Waiting on the person: {parts['waiting']}")
+    if parts.get("cut"):
+        # A reply the person spoke over (#77), as the shipped block words it:
+        # "reply|how many of its characters they heard".
+        reply, heard = parts["cut"].rsplit("|", 1)
+        lines.append(cut_off_line(Heard(reply, int(heard))))
     if parts.get("last"):
         lines.append(f"Last plan: {parts['last']}")
     if parts.get("recent"):
@@ -255,6 +274,42 @@ _PENDING = (
     'tasks asked "Trash the Kitchen project and its 12 tasks?" '
     "(pending plan p7, step s1, ref pending:p7)"
 )
+
+# Spoken corrections (#77): "push the dentist thing to friday" paused on which
+# dentist task (an ask_user, the day in the step after it), as the shipped
+# block and recall show it; the app's own question, likewise.
+_PUSH_DENTIST = "push the dentist thing to friday"
+_WHICH_DENTIST_REPLY = (
+    "I can push it to Friday. Which one: “Dentist appointment” or “Call the dentist "
+    "about the bill”?"
+)
+_DENTIST_OPTIONS = ("Dentist appointment", "Call the dentist about the bill")
+_TWO_DENTISTS = (
+    'pcc:task:44 "Dentist appointment" (due Wed); pcc:task:61 "Call the dentist about the '
+    'bill" (due Thu)'
+)
+
+
+def _which_dentist(**parts: str) -> str:
+    waiting = f'your last reply asked "{_WHICH_DENTIST_REPLY.split(". ", 1)[1]}"'
+    last = recall.section(
+        recall.Recall.of(
+            [
+                {"role": "user", "content": _PUSH_DENTIST, "tool_calls": None},
+                {"role": "assistant", "content": _WHICH_DENTIST_REPLY, "tool_calls": None},
+            ]
+        )
+    )
+    return state(waiting=waiting, recent=_TWO_DENTISTS, **parts) + f"\n\n{last}"
+
+
+_KITCHEN_CONFIRM = (
+    'tasks asked "Trash Kitchen and its 3 tasks?" If their message says yes to it, call '
+    'confirm(app="tasks"); if not, don\'t — the question lapses.'
+)
+_ROAD_TRIP_REPLY = "Queued the “Road Trip” playlist, 40 songs. I'll say when it's done."
+_VOICE = "Thursday 2026-11-05, 18:10, kitchen speaker (voice, no screen)"
+
 
 # S15's second turn as the session evals (and real music since music#99) leave
 # it (#168): no "Last plan" line, the album only as a recent entity and in the
@@ -546,6 +601,45 @@ CASES: tuple[Case, ...] = (
         "undo that",
         (one(M("undo")), none("chat"), none("status")),
         "control",
+    ),
+    # Spoken corrections (#77): right after a reply, often over it, the person
+    # changes what is waiting or running. That is an amend of it, never a
+    # "no" that drops it, a new plan beside it, or the answer to its question.
+    Case(
+        "correct-waiting-day",
+        "actually make it Saturday",
+        (one(M("amend", words=("saturday",))), PicksNone(_DENTIST_OPTIONS)),
+        "control",
+        _which_dentist(),
+        resumable=True,
+    ),
+    Case(
+        "correct-over-question",
+        "no, Saturday",
+        (one(M("amend", words=("saturday",))), PicksNone(_DENTIST_OPTIONS)),
+        "control",
+        _which_dentist(now=_VOICE, cut=f"{_WHICH_DENTIST_REPLY}|21"),
+        resumable=True,
+    ),
+    Case(
+        "correct-app-confirm",
+        "no, just the paint cabinets task",
+        (one(M("amend", words=("paint cabinets",))),),
+        "control",
+        state(waiting=_KITCHEN_CONFIRM),
+        frozenset({"pending"}),
+    ),
+    Case(
+        "correct-running-job",
+        "no, just the first ten",
+        (one(M("amend", target_has="17")),),
+        "control",
+        state(
+            now=_VOICE,
+            jobs='music:job:17 downloading playlist "Road Trip" (running, 2 of 40)',
+            cut=f"{_ROAD_TRIP_REPLY}|30",
+        ),
+        frozenset({"music:job:17", "job:17", "17"}),
     ),
     # --- memory ----------------------------------------------------------------------
     Case(

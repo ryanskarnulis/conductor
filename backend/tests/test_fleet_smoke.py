@@ -317,8 +317,15 @@ class FleetDriver(LoopDriver):
         self._world = world
         super().begin(world)
 
-    def say(self, text: str, *, surface: str, incognito: bool = False) -> TurnRecord:
-        record = super().say(text, surface=surface, incognito=incognito)
+    def say(
+        self,
+        text: str,
+        *,
+        surface: str,
+        incognito: bool = False,
+        heard: dict[str, Any] | None = None,
+    ) -> TurnRecord:
+        record = super().say(text, surface=surface, incognito=incognito, heard=heard)
         if self._world is not None:
             self._world.receipts.extend(receipts_from(record))
         return record

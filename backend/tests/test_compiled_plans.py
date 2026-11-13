@@ -575,6 +575,67 @@ def test_words_that_change_something_pass_when_a_question_waits(fleet: Fleet) ->
     assert plans.points_at_nothing(body, "make it ten instead", checks) == []
 
 
+@pytest.mark.parametrize(
+    ("words", "correction"),
+    [
+        ("no, Saturday", True),
+        ("actually make it Sunday", True),
+        ("no, just the paint cabinets task", True),
+        ("Nope — the first ten only", True),
+        ("yes, but make it Friday instead", True),
+        # A plain no, a stop, a yes: not corrections.
+        ("no, leave it", False),
+        ("no", False),
+        ("yes", False),
+        ("actually, stop", False),
+        ("no, just stop it", False),
+        ("no, don't do it on Saturday", False),
+        # Words with no lead word name a new request.
+        ("move the dentist to Saturday", False),
+        ("just add milk", False),
+    ],
+)
+def test_a_spoken_correction_is_a_lead_word_then_what_instead(words: str, correction: bool) -> None:
+    assert plans.is_correction(words) is correction
+
+
+_PUSHING = 'your last reply asked "Which one: “Dentist appointment” or “Call the dentist”?"'
+
+
+@pytest.mark.parametrize(
+    ("words", "parts", "body", "sent_back"),
+    [
+        # #77: something waits; a no or chat drops the plan the words change.
+        ("no, Saturday", {"waiting": _PUSHING}, steps({"do": "confirm", "answer": "no"}), "one step, an amend"),
+        ("actually make it Sunday", {"waiting": _PUSHING}, {"answer": "chat"}, "one step, an amend"),
+        ("no, just the groceries", {"waiting": _PUSHING}, steps({"do": "cancel", "target": "pending"}), "one step, an amend"),
+        # A running job the words only narrow: not a cancel.
+        ("no, just the first ten", {"jobs": "music:job:17 downloading (running)"}, steps({"do": "cancel", "target": "music:job:17"}), 'target: "music:job:17"'),
+        ("no, just the first ten", {"jobs": "music:job:17 downloading (running)"}, steps({"do": "confirm", "answer": "no"}), 'target: "music:job:17"'),
+        ("no, just the paint cabinets task", {"waiting": _PUSHING}, {"answer": "self"}, "one step, an amend"),
+        # Already an amend or an ask, a plain no, or nothing to correct: no objection.
+        ("no, Saturday", {"waiting": _PUSHING}, steps({"do": "amend", "target": "pending", "change": "Saturday"}), None),
+        ("no, leave it", {"waiting": _PUSHING}, steps({"do": "confirm", "answer": "no"}), None),
+        # A write just done: amend can't change it, so no amend is asked for.
+        ("no, Saturday", {"recent": 'pcc:task:88 "Call mom" (due Fri)'}, {"answer": "chat"}, None),
+        ("no, Saturday", {}, {"answer": "chat"}, None),
+        ("no, just stop", {"jobs": "music:job:17 downloading (running)"}, steps({"do": "cancel", "target": "music:job:17"}), None),
+    ],
+)  # fmt: skip
+def test_a_spoken_correction_filed_as_something_else_gets_an_amend_repair(
+    fleet: Fleet, words: str, parts: dict[str, str], body: dict[str, Any], sent_back: str | None
+) -> None:
+    from tests.plan_cases import state
+
+    checks = plans.Checks(fleet=fleet, context=state(**parts))
+    found = plans.corrects(plans.load(body), words, checks)
+    if sent_back is None:
+        assert found == []
+        return
+    (objection,) = found
+    assert sent_back in objection
+
+
 _KEY = "the spare key is under the blue pot"
 
 
@@ -1974,3 +2035,23 @@ def test_naming_another_apps_work_inside_a_task_is_no_misroute(
     examples_fleet: Fleet, request_: str
 ) -> None:
     assert _problems(steps(ask("tasks", request_)), examples_fleet) == []
+
+
+def test_a_correction_case_takes_the_amend_or_a_resume_code_amends() -> None:
+    # #77: over "which one?", "no, Saturday" is the amend, or a resume that
+    # picks no option (code amends); never the no, nor a resume that picks.
+    from app.ai import recall, state_block
+    from tests.plan_cases import CASES
+
+    case = next(case for case in CASES if case.id == "correct-over-question")
+    right = (
+        plans.load(steps({"do": "amend", "target": "pending", "change": "Saturday"})),
+        plans.Resume(resume="Saturday"),
+    )
+    wrong = (
+        plans.load(steps({"do": "confirm", "answer": "no"})),
+        plans.Resume(resume="the dentist appointment"),
+    )
+    assert all(any(shape.matches(plan) for shape in case.expect) for plan in right)
+    assert not any(shape.matches(plan) for plan in wrong for shape in case.expect)
+    assert len(case.state) <= state_block.MAX_CHARS + recall.MAX_CHARS

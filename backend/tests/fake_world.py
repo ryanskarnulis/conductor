@@ -169,6 +169,23 @@ def split_context(message: str) -> tuple[str, str]:
     return (request, context.rstrip(")")) if mark else (message, "")
 
 
+# What conductor's ``amend`` appends to a waiting step's request (#74, #77).
+_CHANGE = re.compile(r"\s*\(change:\s*(?P<change>.*)\)\s*$", re.DOTALL)
+_DAY_WORD = re.compile(
+    r"\b(?:on\s+|to\s+|for\s+)?(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|"
+    r"saturday|sunday)\b",
+    re.IGNORECASE,
+)
+
+
+def split_change(message: str) -> tuple[str, str]:
+    """The request and the person's change to it, which an app's agent reads
+    as overriding what it contradicts: "delete the Kitchen project (change:
+    no, just the paint cabinets task)" is the task alone."""
+    found = _CHANGE.search(message)
+    return (message[: found.start()], found.group("change")) if found else (message, "")
+
+
 def _context_day(context: str, today: date) -> date | None:
     """A weekday the context names as a habit ("on Sundays"): the next one."""
     found = _PLURAL_DAY.search(context.lower())
@@ -713,6 +730,7 @@ class TasksApp:
                 raise DelegateConfirmRefused("409: confirm token unknown", kind="unknown")
             return armed[1]()
         message, context = split_context(message)
+        message = self._changed(message)
         text = message.lower()
         lines = [line.strip(" -*\t") for line in message.splitlines() if line.strip(" -*\t")]
         if len(lines) > 1 and all(re.search(_LIST_MOVE_WORDS, line.lower()) for line in lines):
@@ -848,6 +866,27 @@ class TasksApp:
             if not trashed and re.search(rf"\b{name.lower()}\b", message.lower()):
                 return name
         return None
+
+    def _changed(self, message: str) -> str:
+        """The request with the person's change applied (#77), as PCC's agent
+        reads one: a day in the change is the day; a task it names, when the
+        request was about a project, is the task ("only the paint cabinets
+        task within the Kitchen project")."""
+        request, change = split_change(message)
+        if not change:
+            return message
+        day = parse_date(change, self.world.today)
+        if day is not None:
+            when = f"to {day.isoformat()}"
+            replaced = _DAY_WORD.sub(when, request)
+            request = replaced if replaced != request else f"{request} {when}"
+        named = best_match(change, {t.id: t.title for t in self.world.live_tasks()})
+        one_task = re.search(r"\btask\b", change, re.IGNORECASE) or "project" not in change.lower()
+        if named is not None and "project" in request.lower() and one_task:
+            verb = re.match(r"\W*(\w+)", request)
+            title = self.world.tasks[named].title
+            request = f"{verb.group(1) if verb else 'delete'} the {title} task"
+        return request
 
     def _move(self, message: str) -> AppReply:
         target = best_match(message, {t.id: t.title for t in self.world.live_tasks()})
