@@ -82,6 +82,7 @@ from app.schemas.conversations import (
     TurnActivityRead,
 )
 from app.services import conversations as conversations_service
+from app.services import fact_meaning
 from app.services import facts as facts_service
 from app.services import ledger
 from app.services import memory as memory_service
@@ -709,6 +710,8 @@ def _post_message(
                     ),
                     # Incognito: no saved fact rides an app's ask (#134's attach).
                     saved_facts=None if hidden else lambda: facts_service.texts(db),
+                    # ... nor one chosen by meaning (#204).
+                    fact_meaning=None if hidden else fact_meaning.nearest,
                     # A v1.2 app's ask carries what this window touched (#202).
                     entities=lambda: (
                         threads_service.turn_entities(db, thread)

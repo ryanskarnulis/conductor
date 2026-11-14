@@ -89,10 +89,11 @@ def no_real_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Recall by meaning (#147) never dials the embeddings service in tests (a
     dev box runs one on 8600): off, as CI has none. Tests that rank by meaning
     inject a fake (``tests/fake_embedder.py``)."""
-    from app.services import turn_vectors
+    from app.services import fact_meaning, turn_vectors
 
     monkeypatch.setattr(get_settings(), "conductor_embeddings", False)
     turn_vectors._reset()
+    fact_meaning._reset()
 
 
 @pytest.fixture(autouse=True)

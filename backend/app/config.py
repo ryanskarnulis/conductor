@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     # words. Off, down or slow: word overlap alone; a turn never waits on it.
     conductor_embeddings: bool = True
     embeddings_base_url: str = "http://127.0.0.1:8600/v1"
+    # Saved facts by meaning (#204): an app ask that is no read, whose words
+    # share no two terms with any fact, may carry the one fact it clearly
+    # means (``facts.nearest``). Needs the service above; off, words alone.
+    conductor_facts_by_meaning: bool = True
 
     # --- voice (shared workspace speech service) -----------------------------
     # ../speech/: Speaches STT on 8400, Kokoro-FastAPI TTS on 8410. Env var

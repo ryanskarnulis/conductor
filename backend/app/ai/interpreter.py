@@ -201,6 +201,9 @@ class _Run:
     # The saved facts (#134), newest first: read once, when an app ask needs them.
     saved_facts: Callable[[], Sequence[str]] | None = None
     saved: list[str] | None = None
+    # The one saved fact a request means, when it shares no words with any
+    # (#204, :func:`app.services.fact_meaning.nearest`): None, words alone.
+    fact_meaning: Callable[[str, Sequence[str]], str | None] | None = None
     # What this window's steps touched, newest first (#202): a v1.2 app's ask
     # carries its own as ``context.refs``. Read once, when an ask needs them.
     entities: Callable[[], Sequence[Entity] | None] | None = None
@@ -261,6 +264,7 @@ class Interpreter:
         memory_app: MemoryApp | None = None,
         saved_facts: Callable[[], Sequence[str]] | None = None,
         entities: Callable[[], Sequence[Entity] | None] | None = None,
+        fact_meaning: Callable[[str, Sequence[str]], str | None] | None = None,
     ) -> AgentRunResult:
         """Run one turn. Always returns, except on a failure stop.
 
@@ -278,7 +282,8 @@ class Interpreter:
         control step acts on (#74), ``recall`` how a recall step reads
         memory (#80), ``memory_app`` what an ask to the built-in ``memory``
         app reaches (#81), ``saved_facts`` the person's saved facts, newest
-        first, which an app ask whose words point at one carries (#134).
+        first, which an app ask whose words point at one carries (#134), and
+        ``fact_meaning`` the one a non-read ask means when no words match (#204).
 
         A failure stop (``provider_error``, ``internal_error``) raises
         :class:`AgentRunFailed` with the partial turn and its plan.
@@ -311,6 +316,7 @@ class Interpreter:
             memory_app=memory_app,
             saved_facts=saved_facts,
             entities=entities,
+            fact_meaning=fact_meaning,
         )
         started = time.monotonic()
         with (
@@ -800,11 +806,10 @@ class Interpreter:
         when they are the request (#179: the plan may write what the fact
         says instead of the words that pointed at it)."""
         arguments: dict[str, Any] = {"message": message}
-        attached = facts.related(
-            plans.REF.sub(" ", step.request),
-            self._saved(state),
-            state.words if state.restate else "",
-        )
+        request = plans.REF.sub(" ", step.request)
+        attached = facts.related(request, self._saved(state), state.words if state.restate else "")
+        if not attached and not self._reads(step):
+            attached = self._meant(state, request)
         if attached:
             arguments[facts.ARGUMENT] = attached
             logger.info("plan_facts_attached", step=step.id, app=step.app, count=len(attached))
@@ -871,6 +876,19 @@ class Interpreter:
                         "turn_entities_failed", error=str(exc), error_type=type(exc).__name__
                     )
         return state.touched
+
+    def _meant(self, state: _Run, request: str) -> list[str]:
+        """The one saved fact a write's request means though it shares no
+        words with it (#204), or none; a failure is words alone, never the ask's."""
+        saved = self._saved(state)
+        if state.fact_meaning is None or not saved:
+            return []
+        try:
+            meant = state.fact_meaning(request, saved)
+        except Exception as exc:
+            logger.warning("fact_meaning_failed", error=str(exc), error_type=type(exc).__name__)
+            return []
+        return [] if meant is None else [meant]
 
     @staticmethod
     def _saved(state: _Run) -> list[str]:
