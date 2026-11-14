@@ -15,6 +15,7 @@ import {
   ThreadNote,
   ThreadStart,
   ThreadTabs,
+  ToggleMenu,
   Utterance,
 } from '../../design/components'
 import { earcons, setSound, soundOn } from '../../design/earcons'
@@ -651,36 +652,36 @@ export function AgentPage() {
                     disabled={sending || threads.closing}
                   />
                   <MicButton onTranscript={onTranscript} disabled={sending || threads.closing} bargeIn={bargeIn} />
-                  <button
-                    type="button"
-                    className="agent-voice-toggle tl-incognito"
-                    onClick={toggleIncognito}
-                    aria-pressed={incognito}
-                    aria-label="Incognito"
-                    title={incognito ? 'Incognito on: this turn’s words won’t be kept' : 'Incognito: don’t keep this turn’s words'}
-                  >
-                    <EyeOff size={17} aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    className="agent-voice-toggle"
-                    onClick={toggleVoiceOutput}
-                    aria-pressed={voiceOutput}
-                    aria-label={voiceOutput ? 'Mute spoken replies' : 'Unmute spoken replies'}
-                    title={voiceOutput ? 'Spoken replies on' : 'Spoken replies off'}
-                  >
-                    {voiceOutput ? <Volume2 size={17} aria-hidden="true" /> : <VolumeX size={17} aria-hidden="true" />}
-                  </button>
-                  <button
-                    type="button"
-                    className="agent-voice-toggle"
-                    onClick={toggleBargeIn}
-                    aria-pressed={bargeIn}
-                    aria-label="Talk over replies"
-                    title={bargeIn ? 'Talking over a spoken reply stops it' : 'Spoken replies play to the end'}
-                  >
-                    {bargeIn ? <Ear size={17} aria-hidden="true" /> : <EarOff size={17} aria-hidden="true" />}
-                  </button>
+                  <ToggleMenu
+                    label="Composer options"
+                    marked={incognito}
+                    items={[
+                      {
+                        id: 'incognito',
+                        label: 'Incognito',
+                        checked: incognito,
+                        onToggle: toggleIncognito,
+                        icon: <EyeOff size={16} aria-hidden="true" />,
+                        hint: incognito ? 'Incognito on: this turn’s words won’t be kept' : 'Incognito: don’t keep this turn’s words',
+                      },
+                      {
+                        id: 'voice-output',
+                        label: 'Spoken replies',
+                        checked: voiceOutput,
+                        onToggle: toggleVoiceOutput,
+                        icon: voiceOutput ? <Volume2 size={16} aria-hidden="true" /> : <VolumeX size={16} aria-hidden="true" />,
+                        hint: voiceOutput ? 'Spoken replies on' : 'Spoken replies off',
+                      },
+                      {
+                        id: 'barge-in',
+                        label: 'Talk over replies',
+                        checked: bargeIn,
+                        onToggle: toggleBargeIn,
+                        icon: bargeIn ? <Ear size={16} aria-hidden="true" /> : <EarOff size={16} aria-hidden="true" />,
+                        hint: bargeIn ? 'Talking over a spoken reply stops it' : 'Spoken replies play to the end',
+                      },
+                    ]}
+                  />
                   {sending ? (
                     <button type="button" className="agent-stop" onClick={stopTurn} aria-label="Stop">
                       <Square size={15} aria-hidden="true" />

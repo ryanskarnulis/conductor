@@ -18,6 +18,7 @@ import {
   ThreadNote,
   ThreadStart,
   ThreadTabs,
+  ToggleMenu,
   Utterance,
 } from './components'
 import { STEP_WORD, type StepState } from './status'
@@ -204,5 +205,50 @@ describe('design system components', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start' }))
       expect(onStart).toHaveBeenCalledOnce()
     })
+  })
+
+  it('keeps the composer switches in one menu: opens, toggles, closes on Escape and gives focus back', () => {
+    const onVoice = vi.fn()
+    const onEar = vi.fn()
+    render(
+      <ToggleMenu
+        label="Composer options"
+        items={[
+          { id: 'voice', label: 'Spoken replies', checked: true, onToggle: onVoice },
+          { id: 'ear', label: 'Talk over replies', checked: false, onToggle: onEar },
+        ]}
+      />,
+    )
+    const button = screen.getByRole('button', { name: 'Composer options' })
+    expect(button).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+
+    fireEvent.click(button)
+    expect(button).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('menu', { name: 'Composer options' })).toBeInTheDocument()
+    const voice = screen.getByRole('menuitemcheckbox', { name: /Spoken replies/ })
+    expect(voice).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('menuitemcheckbox', { name: /Talk over replies/ })).toHaveAttribute('aria-checked', 'false')
+    expect(voice).toHaveFocus()
+
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Talk over replies/ }))
+    expect(onEar).toHaveBeenCalledTimes(1)
+    expect(onVoice).not.toHaveBeenCalled()
+    expect(screen.getByRole('menu')).toBeInTheDocument()
+
+    fireEvent.keyDown(voice, { key: 'ArrowDown' })
+    expect(screen.getByRole('menuitemcheckbox', { name: /Talk over replies/ })).toHaveFocus()
+
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(button).toHaveAttribute('aria-expanded', 'false')
+    expect(button).toHaveFocus()
+  })
+
+  it('closes the switch menu on a click outside', () => {
+    render(<ToggleMenu label="Composer options" items={[{ id: 'a', label: 'A', checked: false, onToggle: () => {} }]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Composer options' }))
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 })
