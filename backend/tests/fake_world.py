@@ -165,8 +165,14 @@ _PLURAL_DAY = re.compile(r"\b(" + "|".join(_WEEKDAYS) + r")s\b")
 
 
 def named(message: str, context: Mapping[str, Any] | None) -> str:
-    """A pointer in the words ("that album", "those albums") as the title its
-    context ref gives, as PCC's agent reads it (#204, project-command-center#531)."""
+    """The words as PCC's agent reads a v1.2 message: its saved facts as
+    marked context, and a pointer ("that album", "those albums") as the title
+    its context ref gives (#204, project-command-center#531)."""
+    said = [str(fact) for fact in (context or {}).get("facts") or [] if fact]
+    if said:
+        # v1.2's facts, read as context the way the words' marked line is (#202).
+        quoted = "; ".join(f'"{fact}"' for fact in said)
+        message = f"{message}\n\n({_CONTEXT_MARK} {quoted})"
     for ref in (context or {}).get("refs") or []:
         kind, title = str(ref.get("kind") or ""), str(ref.get("title") or "")
         if not kind or not title:
@@ -1535,7 +1541,8 @@ class FakeGlances:
 # --- a fleet to discover ---------------------------------------------------------
 
 # The fleet the scripted run discovers: the three apps the scenarios use, in
-# the shapes the real manifests have (tasks and music delegate, chess opens).
+# the shapes the real manifests have (tasks and music delegate and take delegate
+# v1.2's context, chess opens).
 FIXTURE_MANIFESTS = {
     "project-command-center": """\
         name: tasks
@@ -1545,6 +1552,7 @@ FIXTURE_MANIFESTS = {
           description: "Manages projects and tasks."
           api: /api/agent
           confirms: true
+          context: true
           examples: ["what's due today"]
         glance:
           holds: "Today's and overdue tasks, the Focus plan, and the next due date."
@@ -1556,6 +1564,7 @@ FIXTURE_MANIFESTS = {
         agent:
           description: "Downloads songs and sorts the library."
           api: /api/agent
+          context: true
           examples: ["download this song"]
         glance:
           holds: "Running and recent download jobs with progress, and how many songs wait to be sorted."
@@ -1573,6 +1582,20 @@ FIXTURE_MANIFESTS = {
           holds: "Where the current game stands (whose move, move count) and the last finished game's result; it doesn't analyze positions."
         """,
 }
+
+
+def without_context(fleet: Any, *names: str) -> Any:
+    """``fleet`` with these apps as delegate v1.1 (no ``agent.context``), for
+    the tests that hold v1.1's path: the fixture's tasks and music take v1.2."""
+    import dataclasses
+
+    apps = tuple(
+        dataclasses.replace(app, agent=dataclasses.replace(app.agent, context=False))
+        if app.name in names and app.agent is not None
+        else app
+        for app in fleet.apps
+    )
+    return dataclasses.replace(fleet, apps=apps)
 
 
 def write_fixture_fleet(root: Path) -> Path:

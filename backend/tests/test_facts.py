@@ -573,9 +573,11 @@ def test_an_ask_carries_the_fact_its_words_point_at(
     _remember(talk)
     talk.new()  # another day
     reply = _sorting_day(talk)
-    # The app got the person's words, then the fact as quoted context.
+    # The app got the person's words as written, and the fact as v1.2 context.
     ((app, sent),) = [(app, sent) for app, sent in world.sent if app == "tasks"]
-    assert sent == facts.attach(SORTING_DAY, [SUNDAYS])
+    assert sent == SORTING_DAY
+    ((context),) = [c for a, c, _ in world.sent_v12 if a == "tasks"]
+    assert context is not None and context["facts"] == [SUNDAYS]
     # The step's record and the ledger say which facts went.
     (call,) = reply["tool_calls"]
     assert call["arguments"] == {"message": SORTING_DAY, facts.ARGUMENT: [SUNDAYS]}
@@ -600,7 +602,8 @@ def test_an_ask_the_plan_wrote_the_fact_into_still_carries_it(
     request = "add a task for Sunday to clean the record player"
     reply = _sorting_day(talk, request)
     assert reply["tool_calls"][0]["arguments"] == {"message": request, facts.ARGUMENT: [SUNDAYS]}
-    assert world.sent[-1] == ("tasks", facts.attach(request, [SUNDAYS]))
+    assert world.sent[-1] == ("tasks", request)
+    assert world.sent_v12[-1][1] == {"facts": [SUNDAYS]}
 
 
 def test_an_ask_with_no_fact_to_point_at_goes_as_the_plan_wrote_it(

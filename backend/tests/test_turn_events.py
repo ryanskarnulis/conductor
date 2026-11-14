@@ -548,7 +548,9 @@ def test_the_pick_fills_s1_as_the_entity_state_named_and_resumed_carries_it(
         },
     }
     (call,) = reply["tool_calls"]
-    assert call["arguments"] == {"message": "push “dentist appointment” to friday"}
+    assert call["arguments"]["message"] == "push “dentist appointment” to friday"
+    # tasks takes v1.2 (#202): the picked task also goes as a ref, with its id.
+    assert [ref["id"] for ref in call["arguments"]["refs"]][:1] == ["3"]
     moved = [w for w in world.writes() if w.kind == "update"]
     assert [w.ref for w in moved] == ["task:3"]
 

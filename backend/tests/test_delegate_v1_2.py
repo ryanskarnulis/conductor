@@ -172,8 +172,23 @@ def _asked(asks: dict[str, Any] | None, result: str = "ok") -> ToolCallRecord:
 
 
 def test_a_v1_2_apps_question_is_its_needs_input() -> None:
-    asked = {"question": "Which one do you want, or do you have a link?", "candidates": [HONEY]}
+    asked = {"question": "Which folder does Caribou go in?", "candidates": []}
     assert narrator.app_asks(_asked({"needs_input": asked})) == asked["question"]
+
+
+def test_a_v1_2_apps_question_names_its_candidates_first() -> None:
+    # #204: "Which one do you want?" alone gives the person nothing to pick from.
+    swim = {**HONEY, "id": "rg-swim", "title": 'Swim "deluxe"'}
+    asked = {
+        "question": "Which one do you want, or do you have a link?",
+        "candidates": [HONEY, swim],
+    }
+    assert narrator.app_asks(_asked({"needs_input": asked})) == (
+        "Options: 'Honey'; 'Swim 'deluxe''. Which one do you want, or do you have a link?"
+    )
+    many = [{**HONEY, "title": f"Album {n}"} for n in range(narrator.MAX_OPTIONS + 2)]
+    said = narrator.app_asks(_asked({"needs_input": {**asked, "candidates": many}}))
+    assert said is not None and said.startswith("Options: 'Album 0';") and " and 2 more." in said
 
 
 def test_a_v1_2_app_that_says_no_needs_input_is_not_asking_whatever_its_words() -> None:

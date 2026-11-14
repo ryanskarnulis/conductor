@@ -2340,5 +2340,22 @@ Plan evals, n=20, against the #208 run above and the same day's main
 
 Every group is above its floor. Cross's first-try rate moves 108 → 103 → 97
 across three runs with no change to the cross prompt; the S15 cases
-themselves are 20/20 and 18/20. Session evals weren't run: their fixture
-fleet flags neither music nor tasks as v1.2, so they take the old path.
+themselves are 20/20 and 18/20.
+
+## Session evals on v1.2 music and tasks (#204 follow-up, 2026-11-13)
+
+The scripted run's fixture fleet now flags tasks and music `context: true`,
+as their real manifests do (the live tier always read those manifests, so
+#209–#211 were never outside it). The fake tasks app reads v1.2's facts and
+resolves a pointer from its refs, as PCC does since
+ryanskarnulis/project-command-center#534.
+
+It turned up a gap since #202: a v1.2 app's `needs_input` reached the
+person as its question alone ("Which one do you want, or do you have a
+link?"), the candidates kept only for matching the answer. The question now
+opens with them ("Options: 'Suddenly'; 'Swim'."), quoted, at most six.
+
+Live session evals, this branch: gate tier every scenario 5/5 but T1 15/20
+(undecided, not below its floor; 4/5 in earlier runs). Frontier: S3, S10,
+S11, S12, S15, TH1, TH2, BI1 5/5; S15p and BI2 4/5; S14 3/5 and S13 0/5, as
+in earlier runs. Claims backed 160/160.

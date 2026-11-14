@@ -34,7 +34,13 @@ from app.fleet.manifests import Fleet, discover_fleet
 from app.fleet.tools import build_delegate_tools
 from app.main import app
 from app.services import ledger
-from tests.fake_world import FakeGlances, World, client_factory, write_fixture_fleet
+from tests.fake_world import (
+    FakeGlances,
+    World,
+    client_factory,
+    without_context,
+    write_fixture_fleet,
+)
 from tests.scripted_provider import ScriptedProvider, text_turn
 
 
@@ -861,9 +867,11 @@ def run_with(
 ) -> Generator[Any, None, None]:
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
 
-    def run(provider: ScriptedProvider, words: str) -> dict[str, Any]:
+    def run(
+        provider: ScriptedProvider, words: str, *, using: Fleet | None = None
+    ) -> dict[str, Any]:
         app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
-            provider, fleet, narrate=True, glance=glances
+            provider, using or fleet, narrate=True, glance=glances
         )
         response = client.post(
             f"/api/agent/conversations/{conversation}/messages", json={"content": words}
@@ -1380,7 +1388,9 @@ def test_a_cross_app_plan_passes_the_real_title_along(
     task = world.writes()[-1]
     assert "honey" in task.title.lower()
     sent = [call["arguments"] for call in reply["tool_calls"]]
-    assert sent[1] == {"message": "add a task to sort “Honey” this weekend"}
+    # tasks takes v1.2 and is in TITLES_OUT (#204): a pointer, the title as a ref.
+    assert sent[1]["message"] == "add a task to sort that album this weekend"
+    assert sent[1]["refs"][0]["title"] == "Honey"
     compiled = _plans(db_session)[-1]
     assert (compiled.status, compiled.acted) == ("ran", True)
     assert compiled.body == plan  # the plan as compiled, refs and all
@@ -1480,8 +1490,8 @@ def test_independent_reads_run_at_once_and_writes_wait_for_them(
 
     build_delegate_tools(fleet, _wrapped(world, send))
     plan = steps(
-        ask("tasks", "what's due today?"),
-        ask("music", "how are my downloads going?"),
+        {**ask("tasks", "what's due today?"), "read": True},
+        {**ask("music", "how are my downloads going?"), "read": True},
         ask("tasks", "add a task to water the plants"),
     )
     provider = ScriptedProvider([plan_turn(plan), text_turn("Nothing due; no downloads.")])
@@ -1591,7 +1601,7 @@ def test_a_lost_ref_gets_the_repair(fleet: Fleet) -> None:
     named = steps(ask("music", "grab Odessa by Caribou"), ask("tasks", "put Odessa on a playlist"))
     assert _problems(named, fleet) == []
     for unresolved in ("download their other album", "download the other album"):
-        (objection,) = _problems(steps(ask("music", unresolved)), fleet)
+        (objection,) = _problems(steps(ask("music", unresolved)), without_context(fleet, "music"))
         assert "music never sees State" in objection
         assert 'like "the other album by <the artist in State>"' in objection
     assert _problems(steps(ask("music", "download the other album by Caribou")), fleet) == []
@@ -1633,27 +1643,16 @@ def test_a_compound_ask_no_longer_hides_a_lost_ref(
 def test_a_v1_2_music_resolves_their_other_album_itself(fleet: Fleet) -> None:
     # #204: music's own entities reach it as context refs, so the planner
     # needn't spell out the artist; an app with no context still gets the repair.
-    import dataclasses
-
-    flagged = dataclasses.replace(
-        fleet,
-        apps=tuple(
-            dataclasses.replace(app, agent=dataclasses.replace(app.agent, context=True))
-            if app.name == "music" and app.agent is not None
-            else app
-            for app in fleet.apps
-        ),
-    )
     for unresolved in ("download their other album", "download the other album"):
-        assert _problems(steps(ask("music", unresolved)), flagged) == []
-        assert _problems(steps(ask("music", unresolved)), fleet) != []
+        assert _problems(steps(ask("music", unresolved)), fleet) == []
+        assert _problems(steps(ask("music", unresolved)), without_context(fleet, "music")) != []
     # A later step describing what music finds still needs {s1}: that is how
     # the album's ref reaches tasks.
     lost = steps(
         ask("music", "download their other album"),
         ask("tasks", "add a task to sort the other album this weekend"),
     )
-    assert any("which only s1 will find out" in p for p in _problems(lost, flagged))
+    assert any("which only s1 will find out" in p for p in _problems(lost, fleet))
 
 
 def test_an_ask_carrying_another_apps_work_gets_the_split_repair(fleet: Fleet) -> None:
@@ -1719,10 +1718,9 @@ def _caribou_queued(world: World) -> None:
 
 # Real music's code-built note for an agent caller (music#107), quoted as its
 # words; its own quoted titles turn single inside the quote.
+# music takes v1.2: its typed needs_input, the candidates named first (#204).
 _MUSIC_ASKS = (
-    "Music asks: “Honey (2024) by Caribou was already asked for, so nothing was queued. "
-    "MusicBrainz lists 2 other albums by Caribou. Albums listed: 'Suddenly'; 'Swim'. "
-    "Which one do you want, or do you have a link?”"
+    "Music asks: “Options: 'Suddenly'; 'Swim'. Which one do you want, or do you have a link?”"
 )
 
 
@@ -1770,7 +1768,7 @@ def test_the_answer_to_an_apps_question_goes_back_to_it_and_the_plan_goes_on(
     sent = [call["arguments"]["message"] for call in reply["tool_calls"]]
     assert sent == [
         "download the other album by Caribou (the person's answer to your question: Suddenly)",
-        "add a task to sort “Suddenly” this weekend",
+        "add a task to sort that album this weekend",
     ]
     assert [(w.kind, w.title) for w in world.writes()][1:] == [
         ("queue", "Suddenly"),
@@ -1860,6 +1858,8 @@ def test_an_apps_request_for_details_without_a_question_mark_pauses_the_plan(
     run_with: Any, fleet: Fleet, world: World, db_session: Session
 ) -> None:
     # #189: music ran nothing and asked in words, as the browser check saw it.
+    # A v1.1 music's path: a v1.2 app's question is its typed needs_input alone.
+    fleet = without_context(fleet, "music")
 
     asked = (
         "The agent's note (its reading of the results, not a record): \"Please tell me the "
@@ -1877,7 +1877,7 @@ def test_an_apps_request_for_details_without_a_question_mark_pauses_the_plan(
     plan = steps(
         ask("music", "download an album"), ask("tasks", "add a task to sort {s1} this weekend")
     )
-    reply = run_with(ScriptedProvider([plan_turn(plan)]), "download an album")
+    reply = run_with(ScriptedProvider([plan_turn(plan)]), "download an album", using=fleet)
     compiled = _plans(db_session)[-1]
     assert (compiled.status, compiled.pause, compiled.resume_at) == ("paused", "app_question", 0)
     assert reply["content"] == (
@@ -1953,6 +1953,14 @@ def test_an_amend_or_cancel_reaches_a_plan_paused_on_an_apps_question(
         ask("music", "download the other album by Caribou"),
         ask("tasks", "add a task to sort {s1} this weekend"),
     )
+    # A cancel ends it: nothing more is sent. (First: with v1.2 music sees the
+    # albums this window touched, so after Swim it would have one left to queue.)
+    run_with(ScriptedProvider([plan_turn(plan)]), "do the same for their other album")
+    cancel = steps({"do": "cancel", "target": "last"})
+    run_with(ScriptedProvider([plan_turn(cancel)]), "never mind")
+    assert _plans(db_session)[-2].status == "cancelled"  # the paused plan ends
+    assert [w.title for w in world.writes()] == ["Honey"]
+    # An amend resumes the same plan with the change.
     run_with(ScriptedProvider([plan_turn(plan)]), "do the same for their other album")
     amend = steps({"do": "amend", "target": "last", "change": "Swim"})
     provider = ScriptedProvider([plan_turn(amend), text_turn("Queued “Swim”; added “sort Swim”.")])
@@ -1960,14 +1968,8 @@ def test_an_amend_or_cancel_reaches_a_plan_paused_on_an_apps_question(
     sent = [call["arguments"]["message"] for call in reply["tool_calls"]]
     assert sent == [
         "download the other album by Caribou (change: Swim)",
-        "add a task to sort “Swim” this weekend",
+        "add a task to sort that album this weekend",
     ]
-    assert [w.title for w in world.writes()] == ["Honey", "Swim", "sort Swim"]
-    # And a cancel ends it: nothing more is sent.
-    run_with(ScriptedProvider([plan_turn(plan)]), "do the same for their other album")
-    cancel = steps({"do": "cancel", "target": "last"})
-    run_with(ScriptedProvider([plan_turn(cancel)]), "never mind")
-    assert _plans(db_session)[-2].status == "cancelled"  # the paused plan ends
     assert [w.title for w in world.writes()] == ["Honey", "Swim", "sort Swim"]
 
 
