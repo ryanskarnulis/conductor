@@ -734,8 +734,13 @@ class Interpreter:
                 index = after
                 continue
             if isinstance(step, plans.Ask):
-                filled = dataflow.fill(step.request, values)
                 app = self._fleet.get(step.app)
+                typed = app is not None and app.agent is not None and app.agent.context
+                # A v1.2 app whose evals pass on refs alone gets "that album"
+                # in the words and the title as a context ref (#204).
+                filled = dataflow.fill(
+                    step.request, values, pointers=typed and step.app in dataflow.TITLES_OUT
+                )
                 confirms = app is not None and app.agent is not None and app.agent.confirms
                 refusal = _refusal(step, filled, confirms=confirms)
                 if refusal is not None:

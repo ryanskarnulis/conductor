@@ -156,7 +156,9 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   block says `context: true` gets the v1.2 fields; a v1.1 app keeps every
   guess. Its ask sends the words as written, plus `context`: the `{sN}`
   refs with their ids (beside the spliced titles, which stay until that
-  app's evals pass without them), its own entities this window touched
+  app's evals pass without them; for an app in `dataflow.TITLES_OUT`, today
+  tasks, `{sN}` is a pointer, "that album", and the title rides the ref
+  alone, #204), its own entities this window touched
   (newest `STATE_REFS`), and the saved facts `facts.related` chose (they no
   longer ride the words). An ask the planner marks `read` (#204,
   `plans.marked_read`) goes `mode: "read"` and may run beside other reads,
@@ -164,8 +166,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   `plan.reads_only`'s guess. The step's `refs`/`read` arguments stay out of
   every model's view, like `facts`. Its question is `needs_input` alone
   (`ToolCallRecord.app_asks`), never its words; an answer that picks one of
-  its candidates goes back as that ref, `picked` (#196). Facts by hybrid
-  recall and titles out of the words are the rest of #204.
+  its candidates goes back as that ref, `picked` (#196). The `_NOUNS`
+  repairs (`_UNRESOLVED`, `_UNNAMED`, `_described`) are what's left of #204.
 - **The ledger** (#69, `app/services/ledger.py`) is the record of what
   happened: a turn opens with the person's words before it runs and closes
   with its plan (a control step split off first is its own plan), one step
