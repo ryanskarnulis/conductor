@@ -146,7 +146,8 @@ async function cutTheReplyAQuarterIn() {
 describe('AgentPage: barge-in (#77)', () => {
   it('is on by default: talking over a reply stops it and the next turn says how much was heard', async () => {
     await openPage()
-    expect(screen.getByRole('button', { name: 'Talk over replies' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', { name: 'Composer options' }))
+    expect(screen.getByRole('menuitemcheckbox', { name: /Talk over replies/ })).toHaveAttribute('aria-checked', 'true')
     await startTalking()
     expect(createVad.mock.calls[0][0].onSustainedSpeech).toBeTypeOf('function')
 
@@ -164,9 +165,10 @@ describe('AgentPage: barge-in (#77)', () => {
 
   it('turned off, the reply plays to the end and stays off after a reload', async () => {
     await openPage()
-    const toggle = screen.getByRole('button', { name: 'Talk over replies' })
+    fireEvent.click(screen.getByRole('button', { name: 'Composer options' }))
+    const toggle = screen.getByRole('menuitemcheckbox', { name: /Talk over replies/ })
     fireEvent.click(toggle)
-    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
     expect(localStorage.getItem('agent-barge-in')).toBe('off')
     await startTalking()
     expect(createVad.mock.calls[0][0].onSustainedSpeech).toBeUndefined()
@@ -176,7 +178,8 @@ describe('AgentPage: barge-in (#77)', () => {
     await openPage()
     await startTalking()
     await cutTheReplyAQuarterIn()
-    fireEvent.click(screen.getByRole('button', { name: 'Incognito' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Composer options' }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Incognito/ }))
     await say('no, sunday')
     await waitFor(() => expect(postMessage).toHaveBeenCalledTimes(2))
     expect(postMessage).toHaveBeenNthCalledWith(2, 1, 'no, sunday', { surface: 'voice', incognito: true })

@@ -87,9 +87,10 @@ describe('AgentPage: the timeline (#82)', () => {
   it('sends incognito while the switch is on, says apps still see it, and shows the live words', async () => {
     renderPage()
     await screen.findByText('Nothing is due.')
-    const toggle = screen.getByRole('button', { name: 'Incognito' })
+    fireEvent.click(screen.getByRole('button', { name: 'Composer options' }))
+    const toggle = screen.getByRole('menuitemcheckbox', { name: /Incognito/ })
     fireEvent.click(toggle)
-    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByText(NOTICE)).toBeInTheDocument()
 
     const exchange: MessageExchange = {

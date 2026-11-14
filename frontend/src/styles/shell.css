@@ -347,7 +347,7 @@
   color: var(--violet);
 }
 
-/* Six controls share the phone's composer: tighter, so the words keep room. */
+/* The switches live in one menu (#199): the phone's composer is one tight row. */
 .shell[data-view='phone'] .agent-composer {
   gap: var(--space-2);
   padding: var(--space-4);

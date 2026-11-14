@@ -1,5 +1,6 @@
-import { useId, type ReactNode } from 'react'
-import { AlertTriangle, MessageSquareShare } from 'lucide-react'
+import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { AlertTriangle, MessageSquareShare, SlidersHorizontal } from 'lucide-react'
 import { STEP_WORD, type PresenceState, type StepState } from './status'
 
 /* The design system's components (#86) as React. Presentational only: each
@@ -530,5 +531,115 @@ export function ThreadStart({
         </button>
       </div>
     </form>
+  )
+}
+
+export interface MenuToggle {
+  id: string
+  label: string
+  checked: boolean
+  onToggle: () => void
+  /** One line saying what the switch does now. */
+  hint?: string
+  icon?: ReactNode
+}
+
+/** One button holding the composer's on/off switches, so the row stays short.
+ *  A menu of checkable items: Escape closes it and returns focus to the
+ *  button, arrows move between items, and a click outside closes it. Choosing
+ *  an item flips it and leaves the menu open. `marked` tints the button when a
+ *  switch the person should notice (incognito) is on. */
+export function ToggleMenu({ label, items, marked = false }: { label: string; items: MenuToggle[]; marked?: boolean }) {
+  const [open, setOpen] = useState(false)
+  const [at, setAt] = useState<CSSProperties>({})
+  const root = useRef<HTMLDivElement>(null)
+  const list = useRef<HTMLDivElement>(null)
+  const button = useRef<HTMLButtonElement>(null)
+  const menuId = useId()
+
+  // The list is drawn on the page body, above the button: the glass panel it
+  // sits in clips its children, and on the phone the panel is shorter than the menu.
+  const show = () => {
+    const r = button.current?.getBoundingClientRect()
+    if (r) setAt({ right: window.innerWidth - r.right, bottom: window.innerHeight - r.top + 8 })
+    setOpen(true)
+  }
+
+  useEffect(() => {
+    if (!open) return
+    list.current?.querySelector<HTMLElement>('[role="menuitemcheckbox"]')?.focus()
+    const away = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (!root.current?.contains(t) && !list.current?.contains(t)) setOpen(false)
+    }
+    const shut = () => setOpen(false)
+    document.addEventListener('mousedown', away)
+    window.addEventListener('resize', shut)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      window.removeEventListener('resize', shut)
+    }
+  }, [open])
+
+  const close = () => {
+    setOpen(false)
+    button.current?.focus()
+  }
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation()
+      close()
+      return
+    }
+    if (e.key === 'Tab') {
+      setOpen(false)
+      return
+    }
+    const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0
+    if (step === 0 && e.key !== 'Home' && e.key !== 'End') return
+    e.preventDefault()
+    const els = Array.from(list.current?.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]') ?? [])
+    const at = els.indexOf(document.activeElement as HTMLElement)
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? els.length - 1 : (at + step + els.length) % els.length
+    els[next]?.focus()
+  }
+
+  return (
+    <div className="cd-togglemenu" ref={root}>
+      <button
+        type="button"
+        ref={button}
+        className="agent-voice-toggle cd-togglemenu-btn"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-label={label}
+        data-marked={marked || undefined}
+        onClick={() => (open ? setOpen(false) : show())}
+      >
+        <SlidersHorizontal size={17} aria-hidden="true" />
+      </button>
+      {open &&
+        createPortal(
+          <div className="cd-togglemenu-list" role="menu" id={menuId} aria-label={label} ref={list} style={at} onKeyDown={onKeyDown}>
+            {items.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={item.checked}
+                className="cd-togglemenu-item"
+                title={item.hint}
+                onClick={item.onToggle}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+                <span className="cd-togglemenu-state">{item.checked ? 'On' : 'Off'}</span>
+              </button>
+            ))}
+          </div>,
+        document.body,
+      )}
+    </div>
   )
 }

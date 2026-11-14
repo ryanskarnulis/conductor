@@ -170,7 +170,8 @@ describe('AgentPage: side threads (#139)', () => {
   it('starts incognito without a name', async () => {
     renderPage()
     await screen.findByText('Added “measure the garage wall”.')
-    fireEvent.click(screen.getByRole('button', { name: 'Incognito' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Composer options' }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Incognito/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Side thread' }))
     expect(screen.queryByLabelText('Name (optional)')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
