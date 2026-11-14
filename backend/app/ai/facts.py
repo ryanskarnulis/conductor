@@ -433,6 +433,62 @@ def related(request: str, saved: Sequence[str], words: str = "") -> list[str]:
     return [fact for _, _, fact in sorted(scored)[:MAX_ATTACHED]]
 
 
+# --- by meaning, when no fact shares the words (#204, #145's decision 4) ------------------
+
+# Cosines from the embeddings service are compressed and topical: a read about
+# chess sits as close to "I only play chess with black" as a paraphrase of it
+# does. So meaning adds at most one fact, only to an ask that isn't a read, and
+# only when the request stands this far above :data:`BACKGROUND`'s median
+# cosine (its lift) and this far above the next fact. Set from
+# ``tests/fact_cases.py`` against the real service (its docstring has the numbers).
+MEANING_LIFT = 0.11
+MEANING_GAP = 0.05
+# The newest saved facts meaning compares a request with: bounded like every read.
+MEANING_SCANNED = 50
+# A fixed household baseline the lift is measured over: the median of a few
+# saved facts says nothing when there are three of them. Plain lines, about
+# nothing a fact is likely to say; changing them moves the bar (re-measure).
+BACKGROUND: tuple[str, ...] = (
+    "the weather was nice this afternoon",
+    "we watched a movie last night",
+    "the kitchen light flickers sometimes",
+    "there is a package at the front door",
+    "the printer is out of paper",
+    "we had pasta for lunch",
+    "the neighbors got a new car",
+    "the hallway needs to be vacuumed",
+    "my phone needs charging",
+    "the train was late this morning",
+    "there are leaves in the gutter",
+    "the coffee machine needs descaling",
+    "a friend sent a postcard from Spain",
+    "the bookshelf in the living room is full",
+    "the window in the office sticks",
+    "we're out of dish soap",
+    "the wifi was slow yesterday",
+    "the plants on the balcony need water",
+    "the mail came early today",
+    "the couch cushions need cleaning",
+)
+
+
+def nearest(cosines: Sequence[float], baseline: float) -> int | None:
+    """The one fact a request clearly means, by index into ``cosines`` (each
+    saved fact's cosine with the request), or ``None``. Its lift over
+    ``baseline`` (the median cosine with :data:`BACKGROUND`) must reach
+    :data:`MEANING_LIFT`, and it must beat the next fact by :data:`MEANING_GAP`:
+    two facts about as close name neither."""
+    if not cosines:
+        return None
+    best = max(range(len(cosines)), key=cosines.__getitem__)
+    if cosines[best] - baseline < MEANING_LIFT:
+        return None
+    others = [cosine for index, cosine in enumerate(cosines) if index != best]
+    if others and cosines[best] - max(others) < MEANING_GAP:
+        return None
+    return best
+
+
 def _fact_words(text: str) -> set[str]:
     """What a text says of a fact, weekdays included ("Sunday" names one):
     the evidence that a plan wrote a fact into its request."""

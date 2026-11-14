@@ -232,8 +232,9 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   closes by the CPU embeddings service (`CONDUCTOR_EMBEDDINGS`,
   `EMBEDDINGS_BASE_URL`), both searches are fused, and a hit by meaning alone
   must lift `memory.LIFT_ALONE` over the median cosine (set from
-  `tests/recall_cases.py`'s paraphrases and controls). Meaning only ranks:
-  `{sN}` and `facts.related` stay on words. Incognito and forgotten turns are
+  `tests/recall_cases.py`'s paraphrases and controls). Meaning only ranks;
+  `{sN}` stays on words, and so does `facts.related` (meaning only adds a
+  fact when it finds none, below). Incognito and forgotten turns are
   never sent (forgetting deletes the vector); a service down or slow means
   words alone, never a failed or waiting turn; `scripts/embed_turns.py`
   backfills. `recall` cites turns from every live conversation by
@@ -263,7 +264,12 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   whose request shares two terms with a saved fact carries it (#134,
   `facts.related`, at most two), and so does one whose request writes
   something of the fact the person didn't say ("Sunday") when their own
-  words share two terms with it (#179): code sends it after the request, quoted and
+  words share two terms with it (#179). When words find none, an ask that
+  isn't a read may carry the one fact it means (#204,
+  `app/services/fact_meaning.py`, `CONDUCTOR_FACTS_BY_MEANING`): its lift over
+  `facts.BACKGROUND` and its gap over the next fact must clear the bar set
+  from `tests/fact_cases.py`; reads never do (topic isn't relevance). Code
+  sends it after the request, quoted and
   marked as context, never rewriting the words; the step's `facts` argument
   records it, and the record lines models read leave it out. Four
   validator nudges (one repair, then the plan runs as compiled) keep plans
