@@ -213,3 +213,36 @@ def test_a_step_that_reads_is_the_one_sent_read() -> None:
     reads = plan.Ask(id="s1", do="ask", app="music", request="what's queued?", destructive=False)
     writes = plan.Ask(id="s1", do="ask", app="music", request="download Honey", destructive=False)
     assert plan.reads_only(reads) and not plan.reads_only(writes)
+
+
+# --- the planner's read mark (#204) -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("request_text", "read", "destructive", "typed", "expected"),
+    [
+        # A v1.2 app: the planner's mark decides, words or not.
+        ("how is {s1} going?", True, False, True, True),
+        ("download Honey", True, False, True, True),  # a wrong mark: refused, not run
+        ("what's queued?", False, False, True, False),
+        ("trash it", True, True, True, False),  # never a read when destructive
+        # A v1.1 app: the words' reading, the mark ignored.
+        ("what's queued?", False, False, False, True),
+        ("download Honey", True, False, False, False),
+    ],
+)
+def test_the_read_mark_decides_for_a_v1_2_app_only(
+    request_text: str, read: bool, destructive: bool, typed: bool, expected: bool
+) -> None:
+    step = plan.Ask(
+        id="s1", do="ask", app="music", request=request_text, read=read, destructive=destructive
+    )
+    assert plan.marked_read(step, typed=typed) is expected
+
+
+def test_a_plan_stored_before_the_mark_still_loads_unmarked() -> None:
+    loaded = plan.load(
+        {"steps": [{"id": "s1", "do": "ask", "app": "music", "request": "x", "destructive": False}]}
+    )
+    [step] = loaded.steps  # type: ignore[union-attr]
+    assert isinstance(step, plan.Ask) and step.read is False

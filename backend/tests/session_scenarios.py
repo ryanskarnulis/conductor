@@ -125,8 +125,9 @@ def answer(kind: str) -> Any:
     return text_turn(json.dumps({"answer": kind}))
 
 
-def ask(app: str, request: str, *, destructive: bool = False) -> dict[str, Any]:
-    return {"do": "ask", "app": app, "request": request, "destructive": destructive}
+def ask(app: str, request: str, *, destructive: bool = False, read: bool = False) -> dict[str, Any]:
+    """An ask step as the planner writes it, ``read`` mark (#204) included."""
+    return {"do": "ask", "app": app, "request": request, "read": read, "destructive": destructive}
 
 
 def look(app: str) -> dict[str, Any]:

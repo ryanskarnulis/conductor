@@ -43,6 +43,7 @@ _PLAN = {
             "do": "ask",
             "app": "tasks",
             "request": "add a task to pay rent",
+            "read": False,
             "destructive": False,
         }
     ]
