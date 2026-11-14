@@ -690,7 +690,7 @@ class Interpreter:
                 if turn.body is not None:
                     turn.body = options.annotate(turn.body, step.options, state.context or "")
                 return self._ask_user(state, step)
-            group = _read_group(steps, index)
+            group = _read_group(steps, index, self._reads)
             if len(group) > 1:
                 results = self._dispatch_all(
                     state,
@@ -816,9 +816,16 @@ class Interpreter:
             refs = self._context_refs(state, step, values or {})
             if refs:
                 arguments[run_record.CONTEXT_REFS] = refs
-            if plans.reads_only(step):
+            if self._reads(step):
                 arguments[run_record.READ_MODE] = True
         return arguments
+
+    def _reads(self, step: plans.Ask) -> bool:
+        """Whether an ask runs as a read: the planner's mark for a v1.2 app,
+        the words' reading for a v1.1 one (``plans.marked_read``, #204)."""
+        app = self._fleet.get(step.app)
+        typed = app is not None and app.agent is not None and app.agent.context
+        return plans.marked_read(step, typed=typed)
 
     def _context_refs(
         self, state: _Run, step: plans.Ask, values: Mapping[str, dataflow.Value]
@@ -1369,14 +1376,18 @@ def _call_for(step: plans.Step) -> tuple[str, dict[str, Any]]:
     return f"plan:{step.do}", {}
 
 
-def _read_group(steps: Sequence[plans.Step], start: int) -> list[plans.Ask | plans.Look]:
+def _read_group(
+    steps: Sequence[plans.Step],
+    start: int,
+    reads: Callable[[plans.Ask], bool] = plans.reads_only,
+) -> list[plans.Ask | plans.Look]:
     """The reads from ``start`` that can run at once: next to each other, each
     to a different app (one call per app thread at a time). A look is always a
-    read (#73)."""
+    read (#73); an ask is one when ``reads`` says so (#204)."""
     group: list[plans.Ask | plans.Look] = []
     for step in steps[start:]:
         if not isinstance(step, plans.Look) and not (
-            isinstance(step, plans.Ask) and plans.reads_only(step) and step.app != facts.APP
+            isinstance(step, plans.Ask) and reads(step) and step.app != facts.APP
         ):
             break
         if any(read.app == step.app for read in group):

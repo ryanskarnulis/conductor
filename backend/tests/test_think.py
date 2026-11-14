@@ -56,7 +56,13 @@ def steps(*items: dict[str, Any]) -> dict[str, Any]:
 
 
 def ask(app_name: str, request: str, destructive: bool = False) -> dict[str, Any]:
-    return {"do": "ask", "app": app_name, "request": request, "destructive": destructive}
+    return {
+        "do": "ask",
+        "app": app_name,
+        "request": request,
+        "read": False,
+        "destructive": destructive,
+    }
 
 
 def think_step(problem: str = WEEK, inputs: list[str] | None = None) -> dict[str, Any]:

@@ -68,6 +68,10 @@ class Ask(BaseModel):
     do: Literal["ask"]
     app: str
     request: str
+    # The planner's mark that the request only reads (#204): a v1.2 app's ask
+    # goes ``mode: "read"`` on it, and it may run beside other reads. False
+    # on a plan stored before it.
+    read: bool = False
     destructive: bool
 
 
@@ -262,6 +266,7 @@ def schema(
                 "ask",
                 app={"type": "string", "enum": ask_apps},
                 request=text,
+                read={"type": "boolean"},
                 destructive={"type": "boolean"},
             )
         )
@@ -1157,6 +1162,16 @@ _WRITE_WORDS = re.compile(
     r"archive|assign|schedule|remind|import|sync|retry|reset|resign)\b",
     re.IGNORECASE,
 )
+
+
+def marked_read(step: BaseModel, *, typed: bool) -> bool:
+    """Whether a step runs as a read (#204). For a v1.2 app (``typed``) the
+    planner's ``read`` mark decides: the app refuses any write on a step sent
+    ``mode: "read"``, so a wrong mark costs a refused write, never a write out
+    of order. For a v1.1 app, :func:`reads_only`'s reading of the words."""
+    if not isinstance(step, Ask) or step.destructive:
+        return False
+    return step.read if typed else reads_only(step)
 
 
 def reads_only(step: BaseModel) -> bool:

@@ -2277,3 +2277,36 @@ took 787 to 865 ms here against about 133 ms when music measured it alone
 the compiler's own call was 1.0 to 1.8 s with a colder cache. Not
 comparable with #155's 2.4 s, which was a different day and load. Open:
 why the first content delta is late inside the fleet (#200).
+
+The peek's lateness was the fleet smoke's meter: it read each answer whole
+before passing it on (#200, fixed in #207). Streamed, PCC's peek is 324 ms
+in the fleet against ~620 ms in full, 130–256 ms direct to llama-swap.
+
+## The planner's read mark (#204, 2026-11-13)
+
+Ask steps gain a required `read` boolean, one prompt line beside
+`destructive`, and `"read": false` in the worked example. For a v1.2 app it
+decides read mode and parallel reads; v1.1 apps keep `plan.reads_only`.
+
+Plan evals, n=20, against the same day's #205 run (passed, first-try):
+
+| group | #205 | read mark |
+|---|---|---|
+| golden | 400, 400 /420 | 400, 400 |
+| cross | 160, 95 /160 | 158, 108 |
+| ref | 75, 75 /80 | 79, 79 |
+| control | 279, 213 /280 | 279, 220 |
+| memory | 318, 317 /320 | 311, 304 |
+| knowledge | 60, 60 /60 | 60, 60 |
+| hard | 20, 20 /20 | 20, 20 |
+| self | 100, 95 /100 | 96, 92 |
+| mixed | 199, 179 /200 | 199, 179 |
+| long | 160, 150 /160 | 160, 152 |
+| stale | 100, 100 /100 | 100, 100 |
+
+Every group is above its floor. Memory's first-try drop looked significant
+on its own, so memory and self were sampled again: memory 317/320, first-try
+309; self 100/100, first-try 96. No single case moved significantly in
+either sample (`memory-paraphrase-tune` 15 then 18 of 20,
+`self-said-just-now` 16 then 20). Read as noise, with perhaps a small
+first-try cost on memory that the repair recovers.

@@ -106,7 +106,8 @@ person's words. The app's agent knows its own domain (dates, matching names, \
 its own confirmations), so pass the request through in their words; don't do \
 its job. Never turn it into a search ("find the task related to...") or add \
 dates: the app matches names and works out dates itself. Several things for \
-one app go in one request. Set "destructive" to true when the \
+one app go in one request. Set "read" to true when the request only \
+asks for information and changes nothing. Set "destructive" to true when the \
 request deletes, wipes or trashes something the app keeps. Only apps marked \
 (ask) take an ask.
 - look: read an app's glance, a fixed summary listed below, instead of asking \
@@ -143,9 +144,9 @@ will find out. If State already names the thing, write its name; use recall \
 only for things State doesn't name.
 Example: "download the new Bonobo album and remind me Sunday to listen to it" \
 -> {"about": "an app", "steps": [{"id": "s1", "do": "ask", "app": "music", \
-"request": "download the new Bonobo album", "destructive": false}, {"id": "s2", \
-"do": "ask", "app": "tasks", "request": "add a task for Sunday to listen to \
-{s1}", "destructive": false}]}. Never write "the new album" where {s1} belongs: only the earlier step \
+"request": "download the new Bonobo album", "read": false, "destructive": false}, \
+{"id": "s2", "do": "ask", "app": "tasks", "request": "add a task for Sunday to \
+listen to {s1}", "read": false, "destructive": false}]}. Never write "the new album" where {s1} belongs: only the earlier step \
 will know its real title.
 
 When State shows something "Waiting on the person" and their message says yes \
