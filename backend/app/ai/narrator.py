@@ -269,7 +269,10 @@ def app_asks(record: ToolCallRecord) -> str | None:
         # never its wording. ``None`` there means it asked nothing.
         typed = record.app_asks.get("needs_input")
         question = typed.get("question") if isinstance(typed, dict) else None
-        return question.strip() or None if isinstance(question, str) else None
+        if not isinstance(question, str) or not question.strip():
+            return None
+        options = _options(typed.get("candidates") if isinstance(typed, dict) else None)
+        return f"{options} {question.strip()}" if options else question.strip()
     if not _did_nothing(record):
         return None
     # An app that ran nothing at all may ask without a question mark (#189:
@@ -331,6 +334,30 @@ def app_declined(record: ToolCallRecord) -> bool:
     return _did_nothing(record) and any(
         e.get("outcome") == "refused" for e in record.app_record or []
     )
+
+
+# The candidates a v1.2 app's question names at most; past it, a count.
+MAX_OPTIONS = 6
+
+
+def _options(candidates: Any) -> str:
+    """A v1.2 app's candidates as a sentence before its question (#204): the
+    question alone ("Which one do you want?") gives the person nothing to
+    pick from. Titles are outside text, quoted; the answer is matched to a
+    candidate in code (``interpreter.APP_CANDIDATES``)."""
+    titles = [
+        " ".join(
+            str(c.get("title") or "").replace('"', "'").replace("“", "'").replace("”", "'").split()
+        )[:MAX_TITLE_CHARS]
+        for c in candidates or []
+        if isinstance(c, dict)
+    ]
+    titles = [title for title in titles if title]
+    if not titles:
+        return ""
+    shown = "; ".join(f"'{title}'" for title in titles[:MAX_OPTIONS])
+    more = len(titles) - MAX_OPTIONS
+    return f"Options: {shown}{f' and {more} more' if more > 0 else ''}."
 
 
 def _app_question(

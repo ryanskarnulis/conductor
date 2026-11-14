@@ -18,7 +18,7 @@ from app.ai.interpreter import Interpreter
 from app.fleet.context import DelegationContext, InMemoryThreadStore, use_delegation_context
 from app.fleet.manifests import Fleet
 from app.fleet.tools import build_delegate_tools
-from tests.fake_world import FakeGlances, World, client_factory
+from tests.fake_world import FakeGlances, World, client_factory, without_context
 from tests.scripted_provider import ScriptedProvider, text_turn
 from tests.test_memory import ask, fleet, plan_turn, steps  # noqa: F401  (fixtures)
 
@@ -121,6 +121,6 @@ def test_a_v1_2_task_ask_says_that_album_and_sends_the_ref(fleet: Fleet) -> None
 
 
 def test_a_v1_1_task_ask_still_carries_the_quoted_title(fleet: Fleet) -> None:  # noqa: F811
-    world = _s3(fleet)  # the fixture's tasks takes no context
+    world = _s3(without_context(fleet, "tasks"))
     (sent,) = [message for app, message in world.sent if app == "tasks"]
     assert sent == "add a task to sort “Honey” this weekend"

@@ -128,7 +128,9 @@ def test_a_write_carries_the_fact_it_means(
 ) -> None:
     result = _run(fleet, ask("tasks", ALBUMS))
     assert result.tool_calls[0].arguments == {"message": ALBUMS, facts.ARGUMENT: [SUNDAYS]}
-    assert world.sent[-1] == ("tasks", facts.attach(ALBUMS, [SUNDAYS]))
+    # tasks takes v1.2: the words go as written, the fact as context.
+    assert world.sent[-1] == ("tasks", ALBUMS)
+    assert world.sent_v12[-1][1] == {"facts": [SUNDAYS]}
 
 
 def test_a_read_never_takes_a_fact_by_meaning(
@@ -137,7 +139,7 @@ def test_a_read_never_takes_a_fact_by_meaning(
     world: World,  # noqa: F811
 ) -> None:
     read = "which albums still need organizing?"
-    result = _run(fleet, ask("tasks", read))
+    result = _run(fleet, {**ask("tasks", read), "read": True})
     assert facts.ARGUMENT not in result.tool_calls[0].arguments
     assert not fake.sent
 
