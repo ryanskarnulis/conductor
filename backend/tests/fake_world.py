@@ -39,7 +39,7 @@ import re
 import textwrap
 import threading
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -162,6 +162,20 @@ _DATE_PHRASE = re.compile(
 
 _CONTEXT_MARK = f"\n\n({CONTEXT_LEAD} "
 _PLURAL_DAY = re.compile(r"\b(" + "|".join(_WEEKDAYS) + r")s\b")
+
+
+def named(message: str, context: Mapping[str, Any] | None) -> str:
+    """A pointer in the words ("that album", "those albums") as the title its
+    context ref gives, as PCC's agent reads it (#204, project-command-center#531)."""
+    for ref in (context or {}).get("refs") or []:
+        kind, title = str(ref.get("kind") or ""), str(ref.get("title") or "")
+        if not kind or not title:
+            continue
+        pointed = re.compile(rf"\b(?:that|this|those)\s+{re.escape(kind)}s?\b", re.IGNORECASE)
+        message, count = pointed.subn(f"“{title}”", message, count=1)
+        if count:
+            break
+    return message
 
 
 def split_context(message: str) -> tuple[str, str]:
@@ -1415,7 +1429,7 @@ class FakeDelegateClient:
         if self._app is None:
             reply = AppReply("Done — nothing else to report.")
         elif isinstance(self._app, TasksApp):
-            reply = self._app.handle(conversation_id, message, confirm_token)
+            reply = self._app.handle(conversation_id, named(message, context), confirm_token)
         else:
             reply = self._app.handle(conversation_id, message, context)
         if saved is not None and len(self._world.receipts) > before:

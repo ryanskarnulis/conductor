@@ -150,23 +150,54 @@ def answer(words: str) -> Value:
     return Value(words.strip().replace("{", "(").replace("}", ")"))
 
 
-def fill(text: str, values: Mapping[str, Value]) -> Filled:
+# Apps whose asks name ``{sN}`` by a pointer ("that album"), its title going
+# as a ``context.refs`` ref alone (#204, #145's decision 2): each is here only
+# once its own evals passed without the title. tasks: PCC's
+# ``conductor_s3_ref_only``, 20/20 (project-command-center#531).
+TITLES_OUT: frozenset[str] = frozenset({"tasks"})
+
+# ``{sN}`` with the words before it that already say its kind: "the album {s1}".
+_LED_REF = re.compile(r"(?:\b(?i:the|that|this)\s+(?P<noun>[A-Za-z]+)\s+)?" + REF.pattern)
+
+
+def pointer(value: Value) -> str | None:
+    """What ``{sN}`` says in the words of an app in :data:`TITLES_OUT`: "that
+    album", "those albums", "those"; ``None`` when the value has no refs of a
+    named kind (an answer, a recall's title), which keeps its title."""
+    kinds = [str(ref.get("kind") or "").replace("_", " ").strip() for ref in value.refs]
+    if not kinds or not all(kinds):
+        return None
+    if len(kinds) == 1:
+        return f"that {kinds[0]}"
+    return f"those {kinds[0]}s" if len(set(kinds)) == 1 else "those"
+
+
+def fill(text: str, values: Mapping[str, Value], *, pointers: bool = False) -> Filled:
     """``text`` with every ``{sN}`` filled from ``values``, in one pass (a
-    filled-in value is never read for refs)."""
+    filled-in value is never read for refs). With ``pointers`` (an app in
+    :data:`TITLES_OUT`), a value with refs is named by :func:`pointer`, taking
+    the kind words before it along ("the album {s1}" → "that album")."""
     missing: list[str] = []
     untrusted: list[str] = []
 
     def one(match: re.Match[str]) -> str:
-        ref = match.group(1)
+        ref = match.group(2)
+        lead = match.group(0)[: match.start(2) - 1 - match.start(0)]
         value = values.get(ref)
         if value is None:
             missing.append(ref)
             return match.group(0)
         if value.untrusted:
             untrusted.append(ref)
-        return value.text
+        said = pointer(value) if pointers else None
+        if said is None:
+            return lead + value.text
+        noun = (match.group("noun") or "").lower()
+        if noun and noun.rstrip("s") == said.split()[-1].rstrip("s"):
+            return said
+        return lead + said
 
-    filled = REF.sub(one, text)
+    filled = _LED_REF.sub(one, text)
     return Filled(filled, tuple(dict.fromkeys(missing)), tuple(dict.fromkeys(untrusted)))
 
 
