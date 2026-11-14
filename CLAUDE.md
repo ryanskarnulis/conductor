@@ -158,11 +158,14 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   refs with their ids (beside the spliced titles, which stay until that
   app's evals pass without them), its own entities this window touched
   (newest `STATE_REFS`), and the saved facts `facts.related` chose (they no
-  longer ride the words). A step `plan.reads_only` calls a read goes
-  `mode: "read"`, so a wrong guess costs a refused write. The step's
-  `refs`/`read` arguments stay out of every model's view, like `facts`. Its
-  question is `needs_input` alone (`ToolCallRecord.app_asks`), never its
-  words. The planner's own read mark and facts by hybrid recall are #204.
+  longer ride the words). An ask the planner marks `read` (#204,
+  `plans.marked_read`) goes `mode: "read"` and may run beside other reads,
+  so a wrong mark costs a refused write; a v1.1 app's reads stay
+  `plan.reads_only`'s guess. The step's `refs`/`read` arguments stay out of
+  every model's view, like `facts`. Its question is `needs_input` alone
+  (`ToolCallRecord.app_asks`), never its words; an answer that picks one of
+  its candidates goes back as that ref, `picked` (#196). Facts by hybrid
+  recall and titles out of the words are the rest of #204.
 - **The ledger** (#69, `app/services/ledger.py`) is the record of what
   happened: a turn opens with the person's words before it runs and closes
   with its plan (a control step split off first is its own plan), one step
