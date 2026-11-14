@@ -2310,3 +2310,35 @@ on its own, so memory and self were sampled again: memory 317/320, first-try
 either sample (`memory-paraphrase-tune` 15 then 18 of 20,
 `self-said-just-now` 16 then 20). Read as noise, with perhaps a small
 first-try cost on memory that the repair recovers.
+
+## Their other album, left to a v1.2 music (#204, 2026-11-13)
+
+`_UNRESOLVED`'s repair, which made the planner spell out "the other album by
+<artist>" because music never saw State, no longer applies to a music that
+takes v1.2's context. Its own entities reach it as `context.refs` with ids,
+and it acts on one target or asks (music's `v12-other-album` evals). The
+lost-ref check (`_UNNAMED`, `_described`) stays: a later step's `{s1}` is how
+the album's ref reaches tasks. The two S15 plan cases accept a music ask
+without the artist.
+
+Plan evals, n=20, against the #208 run above and the same day's main
+(cross and ref only), as passed, first-try:
+
+| group | #208 | main | this change |
+|---|---|---|---|
+| golden | 400, 400 /420 | | 400, 400 |
+| cross | 158, 108 /160 | 158, 103 | 158, 97 |
+| ref | 79, 79 /80 | 77, 77 | 79, 79 |
+| control | 279, 220 /280 | | 280, 213 |
+| memory | 311, 304 /320 | | 312, 305 |
+| knowledge | 60, 60 /60 | | 60, 60 |
+| hard | 20, 20 /20 | | 20, 20 |
+| self | 96, 92 /100 | | 97, 95 |
+| mixed | 199, 179 /200 | | 200, 180 |
+| long | 160, 152 /160 | | 160, 157 |
+| stale | 100, 100 /100 | | 100, 100 |
+
+Every group is above its floor. Cross's first-try rate moves 108 → 103 → 97
+across three runs with no change to the cross prompt; the S15 cases
+themselves are 20/20 and 18/20. Session evals weren't run: their fixture
+fleet flags neither music nor tasks as v1.2, so they take the old path.
