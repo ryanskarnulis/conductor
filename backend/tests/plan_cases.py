@@ -456,8 +456,10 @@ CASES: tuple[Case, ...] = (
         "s15-same-again",
         "do the same for their other album",
         (
-            one(M("ask", "music", ("caribou",)), M("ask", "tasks", ref=True)),
-            one(M("ask", "music", ("caribou",)), M("ask", "tasks", ref_or_words=("sort",))),
+            # #204: a v1.2 music resolves "their other album" from its own refs,
+            # so the artist needn't be spelled out.
+            one(M("ask", "music"), M("ask", "tasks", ref=True)),
+            one(M("ask", "music"), M("ask", "tasks", ref_or_words=("sort",))),
             one(M("ask_user")),
             one(M("ask_user"), M("ask", "music"), M("ask", "tasks", ref=True)),
         ),
@@ -472,7 +474,7 @@ CASES: tuple[Case, ...] = (
         "s15-turn2-as-run",
         "do the same for their other album",
         (
-            one(M("ask", "music", ("caribou",)), M("ask", "tasks", ref=True)),
+            one(M("ask", "music"), M("ask", "tasks", ref=True)),
             one(M("ask_user")),
             one(M("ask_user"), M("ask", "music"), M("ask", "tasks", ref=True)),
         ),

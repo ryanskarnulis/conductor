@@ -1630,6 +1630,32 @@ def test_a_compound_ask_no_longer_hides_a_lost_ref(
     assert bool(lost_refs) is lost, found
 
 
+def test_a_v1_2_music_resolves_their_other_album_itself(fleet: Fleet) -> None:
+    # #204: music's own entities reach it as context refs, so the planner
+    # needn't spell out the artist; an app with no context still gets the repair.
+    import dataclasses
+
+    flagged = dataclasses.replace(
+        fleet,
+        apps=tuple(
+            dataclasses.replace(app, agent=dataclasses.replace(app.agent, context=True))
+            if app.name == "music" and app.agent is not None
+            else app
+            for app in fleet.apps
+        ),
+    )
+    for unresolved in ("download their other album", "download the other album"):
+        assert _problems(steps(ask("music", unresolved)), flagged) == []
+        assert _problems(steps(ask("music", unresolved)), fleet) != []
+    # A later step describing what music finds still needs {s1}: that is how
+    # the album's ref reaches tasks.
+    lost = steps(
+        ask("music", "download their other album"),
+        ask("tasks", "add a task to sort the other album this weekend"),
+    )
+    assert any("which only s1 will find out" in p for p in _problems(lost, flagged))
+
+
 def test_an_ask_carrying_another_apps_work_gets_the_split_repair(fleet: Fleet) -> None:
     # S15's miss (#127): one ask to music with the task in it.
     for mixed in (

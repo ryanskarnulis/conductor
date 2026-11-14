@@ -363,7 +363,7 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
         found.append(f"{len(steps)} steps is over the ceiling of {MAX_STEPS}")
     seen: set[str] = set()
     asks: dict[str, int] = {}
-    found += _lost_refs(steps)
+    found += _lost_refs(steps, checks.fleet)
     found += _mixed_asks(steps, checks.fleet)
     misrouted = _misrouted(steps, checks.fleet)
     found += misrouted.values()
@@ -455,7 +455,14 @@ _UNNAMED = re.compile(
 )
 
 
+# The app the nouns above are things of.
+_NOUNS_APP = "music"
+
 # An ask that leaves the person's pointer unresolved: the app can't see State.
+# A v1.2 music (#204) does: its own entities this window touched go with the
+# ask as ``context.refs`` with their ids, and it acts only when the words and
+# refs pick one target, else asks (music's v12-other-album evals). So the
+# repair stands only for an app that takes no context.
 _UNRESOLVED = re.compile(
     r"\b(?:(?:their|his|her|the\s+person['’]s)\s+(?:[\w'’]+\s+){0,2}?|(?:the|my)\s+(?:other|next)\s+)"
     + _NOUNS
@@ -472,7 +479,7 @@ def _described(noun: str) -> re.Pattern[str]:
     )
 
 
-def _lost_refs(steps: list[Step]) -> list[str]:
+def _lost_refs(steps: list[Step], fleet: Fleet) -> list[str]:
     """Data flow the planner meant but didn't write as ``{sN}`` (#72): a bare
     ``s1``, or a later step describing what an earlier ask will find ("the
     album I just downloaded"). Either way the real title would be lost; the
@@ -482,7 +489,7 @@ def _lost_refs(steps: list[Step]) -> list[str]:
     for step in steps:
         text = step_text(step)
         bare = False
-        if isinstance(step, Ask):
+        if isinstance(step, Ask) and not _sees_its_own(step.app, fleet):
             unresolved = _UNRESOLVED.search(step.request)
             if unresolved is not None:
                 phrase = unresolved.group(0)
@@ -518,6 +525,16 @@ def _lost_refs(steps: list[Step]) -> list[str]:
                     break
         earlier.append(step)
     return found
+
+
+def _sees_its_own(app_name: str, fleet: Fleet) -> bool:
+    """Whether ``app_name`` owns the nouns and takes v1.2's context: State's
+    entities of its own reach it as refs, so "their other album" needs no
+    artist spelled out (#204)."""
+    app = fleet.get(app_name)
+    return (
+        app_name == _NOUNS_APP and app is not None and app.agent is not None and app.agent.context
+    )
 
 
 def _asks_for_several(request: str) -> bool:
