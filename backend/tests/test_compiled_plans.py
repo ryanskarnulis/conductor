@@ -628,7 +628,8 @@ _PUSHING = 'your last reply asked "Which one: “Dentist appointment” or “Ca
         # Already an amend or an ask, a plain no, or nothing to correct: no objection.
         ("no, Saturday", {"waiting": _PUSHING}, steps({"do": "amend", "target": "pending", "change": "Saturday"}), None),
         ("no, leave it", {"waiting": _PUSHING}, steps({"do": "confirm", "answer": "no"}), None),
-        # A write just done: amend can't change it, so no amend is asked for.
+        # Something State lists, but no write the ledger says an amend can change
+        # (``changeable``, below): no amend is asked for.
         ("no, Saturday", {"recent": 'pcc:task:88 "Call mom" (due Fri)'}, {"answer": "chat"}, None),
         ("no, Saturday", {}, {"answer": "chat"}, None),
         ("no, just stop", {"jobs": "music:job:17 downloading (running)"}, steps({"do": "cancel", "target": "music:job:17"}), None),
@@ -646,6 +647,33 @@ def test_a_spoken_correction_filed_as_something_else_gets_an_amend_repair(
         return
     (objection,) = found
     assert sent_back in objection
+
+
+@pytest.mark.parametrize(
+    ("words", "parts", "body", "repaired"),
+    [
+        # #198: nothing waits or runs, and the last plan finished a write.
+        ("no, Saturday", {}, {"answer": "chat"}, True),
+        ("actually make it Sunday", {}, {"answer": "self"}, True),
+        ("no, Saturday", {}, steps({"do": "confirm", "answer": "no"}), True),
+        # Already an amend, or a new ask that names the thing: it runs.
+        ("no, Saturday", {}, steps({"do": "amend", "target": "last", "change": "Saturday"}), False),
+        ("no, Saturday", {}, steps(ask("tasks", "move call mom to saturday")), False),
+        # Not a correction, or a job runs (the amend would be the job's).
+        ("thanks", {}, {"answer": "chat"}, False),
+        ("no, Saturday", {"jobs": "music:job:17 downloading (running)"}, {"answer": "chat"}, False),
+    ],
+)  # fmt: skip
+def test_a_correction_of_a_finished_write_gets_an_amend_repair(
+    fleet: Fleet, words: str, parts: dict[str, str], body: dict[str, Any], repaired: bool
+) -> None:
+    from tests.plan_cases import state
+
+    checks = plans.Checks(fleet=fleet, context=state(**parts), changeable=True)
+    found = plans.corrects(plans.load(body), words, checks)
+    assert bool(found) is repaired
+    if repaired:
+        assert 'target: "last"' in found[0] and "what you just did" in found[0]
 
 
 _KEY = "the spare key is under the blue pot"

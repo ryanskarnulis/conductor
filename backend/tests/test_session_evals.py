@@ -76,6 +76,7 @@ from tests.session_harness import (
 )
 from tests.session_scenarios import (
     CORRECTED,
+    FINISHED_CORRECTED,
     FORGET_GONE,
     INCOGNITO,
     INTERRUPTED,
@@ -411,6 +412,20 @@ def test_a_bi2_correction_read_as_a_no_fails(scripted: _ScriptedRun) -> None:
     script = CORRECTED.script(World())
     script[1:] = [plan({"do": "confirm", "answer": "no"})] * 2
     _fails(scripted.run(CORRECTED, script), "the correction was dropped")
+
+
+def test_a_bi3_correction_dropped_or_remade_fails(scripted: _ScriptedRun) -> None:
+    # #198: "no, Saturday" once the task is made moves that task (the golden
+    # script passes above). Read as chat, kept through the repair, nothing
+    # changes ...
+    assert FINISHED_CORRECTED.script is not None
+    script = FINISHED_CORRECTED.script(World())
+    script[2:] = [answer("chat")] * 2 + [text_turn('{"about_you": false, "reply": "Ok."}')]
+    _fails(scripted.run(FINISHED_CORRECTED, script), "the correction was dropped")
+    # ... and as a second add, there are two.
+    script = FINISHED_CORRECTED.script(World())
+    script[2] = plan(ask("tasks", "add a task to water the ferns on saturday"))
+    _fails(scripted.run(FINISHED_CORRECTED, script), "made 2 ferns tasks")
 
 
 def test_a_missing_capability_fails_unsupported(scripted: _ScriptedRun) -> None:

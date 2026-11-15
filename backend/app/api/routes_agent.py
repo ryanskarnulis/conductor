@@ -712,6 +712,10 @@ def _post_message(
                     saved_facts=None if hidden else lambda: facts_service.texts(db),
                     # ... nor one chosen by meaning (#204).
                     fact_meaning=None if hidden else fact_meaning.nearest,
+                    # A yes to a question they spoke over asks it again (#198).
+                    heard=None
+                    if hidden
+                    else lambda: ledger.last_heard(db, conversation.id, since=since),
                     # A v1.2 app's ask carries what this window touched (#202).
                     entities=lambda: (
                         threads_service.turn_entities(db, thread)

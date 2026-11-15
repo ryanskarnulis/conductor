@@ -143,7 +143,11 @@ def _compile(case: Case, fleet: Fleet, prompt: str) -> tuple[compiler.Compiled, 
 
     state = case.state or empty_state()
     checks = plans.Checks(
-        fleet=fleet, confirmable=case.confirmable, resumable=case.resumable, context=state
+        fleet=fleet,
+        confirmable=case.confirmable,
+        resumable=case.resumable,
+        context=state,
+        changeable=case.changeable,
     )
     try:
         compiled = compiler.compile_turn(

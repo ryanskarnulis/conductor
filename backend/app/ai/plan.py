@@ -337,6 +337,9 @@ class Checks:
     # What the planner was shown about now (the state block and recall): an
     # ask_user may only offer options it names, never invented ones.
     context: str = ""
+    # Nothing waits, and the last plan finished a write an amend can ask its
+    # app to change (#198): a correction of it is an amend, not chat.
+    changeable: bool = False
 
 
 # A confirm's repair when nothing waits at all (#176): since #151's `about` the
@@ -960,8 +963,9 @@ def corrects(plan: Plan, words: str, checks: Checks) -> list[str]:
     cancel, chat or self while a plan waits on the person (the 12B reads
     "no, Saturday" as a no and drops the plan), or a cancel or confirm for a
     running job the words only narrow. The repair asks for one amend of what waits or runs,
-    which resumes the same plan with the change. A write already done is
-    not here: amend can't change it."""
+    which resumes the same plan with the change. With nothing waiting or
+    running, a write the last plan finished takes the amend too (#198,
+    ``checks.changeable``): code asks the app that made it to change it."""
     if not is_correction(words):
         return []
     if isinstance(plan, StepPlan) and any(step.do in ("amend", "ask") for step in plan.steps):
@@ -978,13 +982,37 @@ def corrects(plan: Plan, words: str, checks: Checks) -> list[str]:
             "with the change and it asks again"
         ]
     jobs = running_in(checks.context)
-    if not jobs or lone not in ("cancel", "confirm"):
+    if not jobs:
+        if not checks.changeable or (lone not in ("confirm", "cancel") and not chat):
+            return []
+        return [
+            "their words change what you just did, and nothing is waiting or running: plan "
+            'exactly one step, an amend (target: "last", change: what they want instead, '
+            "written out, no {sN}); code asks the app that did it to change it"
+        ]
+    if lone not in ("cancel", "confirm"):
         return []
     ref = f"{jobs[0][0]}:job:{jobs[0][1]}"
     return [
         f"{ref} is still running and their words narrow it rather than stop it or answer a "
         f'question: amend it (target: "{ref}", change: their words), never a cancel or confirm'
     ]
+
+
+def changes_too(words: str, picked: str) -> bool:
+    """Whether a correction that picks an option also says what to change
+    (#198): "no, the bill one on Saturday" picks the bill and moves the day.
+    A day or a change the picked option's own words don't hold; a plain pick
+    ("no, the first one", "no, the Saturday one") says nothing more."""
+    lead = _CORRECTION_LEAD.match(words)
+    if lead is None or _NOT_A_CHANGE.search(words):
+        return False
+    rest, own = words[lead.end() :], picked.lower()
+    return any(
+        found.group(0).lower() not in own
+        for pattern in (_INSTEAD_DAY, _CHANGES)
+        for found in pattern.finditer(rest)
+    )
 
 
 def answers_twice(plan: Plan) -> list[str]:

@@ -330,8 +330,15 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   runs: a confirm, cancel, chat or self for one gets one repair to an amend
   (`plan.corrects`), a confirm beside an amend is refused
   (`plan.answers_twice`), and a resume that picks none of an `ask_user`'s
-  options is run as the amend. A finished write isn't amended (amend has no
-  path for it).
+  options is run as the amend; one that picks an option and says more
+  ("no, the bill one on Saturday", `plan.changes_too`) fills `{s1}` and
+  puts their words after the resumed step (#198). With nothing waiting or
+  running, an amend goes to the app that made the last plan's finished
+  write, named from its receipt by kind and id (one app, at most three
+  things, else nothing changes and code says so); the validator asks for
+  that amend only when the ledger has such a write (`Checks.changeable`).
+  A yes to a question in the part of a reply the person spoke over
+  (`control.heard_question`) confirms nothing: code asks it again.
 - **Jobs** (#76): a step whose receipt carries a `job` detaches: the reply
   says it's queued, and the ledger's `ledger_jobs` row tracks it. The watcher
   (`app/services/job_watcher.py`, one thread, started with the app, resumes

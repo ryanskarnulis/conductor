@@ -1,6 +1,6 @@
 """Session scenarios: S1–S16 (#56, ``docs/revamp-research-2026-11.md`` §1.1), M1–M3 (#81, #134),
 T1–T2 and S1v (#82: one timeline, incognito, a voice-tagged S1), TH1–TH2 (#139: side threads),
-BI1–BI2 (#77: a reply spoken over, a spoken correction).
+BI1–BI3 (#77, #198: a reply spoken over, a spoken correction, one of a finished write).
 
 Each is the person's side of a conversation plus checks on what came of it.
 Checks read the end state and the replies, never the path: which tools ran in
@@ -1100,6 +1100,41 @@ CORRECTED = Scenario(
 )
 
 
+_FERNS = "add a task to water the ferns on friday"
+
+
+def _moved_not_remade(session: Session) -> None:
+    ferns = [t for t in session.world.tasks.values() if "ferns" in t.title.lower()]
+    assert len(ferns) == 1, f"made {len(ferns)} ferns tasks instead of changing the one"
+    due = ferns[0].due
+    assert due is not None and due.strftime("%A") == "Saturday", (
+        f"the correction was dropped: water the ferns is due {due}"
+    )
+    assert not ferns[0].trashed, "the task went to the trash"
+    only_writes(session, {("create", "ferns"), ("update", "ferns")})
+
+
+FINISHED_CORRECTED = Scenario(
+    "BI3",
+    "voice: 'add a task to water the ferns on friday', then 'no, Saturday' once it is made: "
+    "that task moves, and no second one is made",
+    (
+        Say(_FERNS, surface="voice", label="add"),
+        Say("no, Saturday", surface="voice", label="fix"),
+    ),
+    (_moved_not_remade,),
+    # Unmeasured: added with #198, not yet run live (the PR's eval gate runs it).
+    tier="frontier",
+    # Nothing waits, so the amend goes to tasks, naming the task from its receipt.
+    script=lambda w: [
+        _ask("tasks", _FERNS),
+        _say("Added “water the ferns” for Friday."),
+        plan({"do": "amend", "target": "last", "change": "Saturday"}),
+        _say("Moved “water the ferns” to Saturday."),
+    ],
+)
+
+
 SCENARIOS: tuple[Scenario, ...] = (
     S1,
     S1V,
@@ -1129,4 +1164,5 @@ SCENARIOS: tuple[Scenario, ...] = (
     THREAD_KEEPS_INCOGNITO,
     INTERRUPTED,
     CORRECTED,
+    FINISHED_CORRECTED,
 )
