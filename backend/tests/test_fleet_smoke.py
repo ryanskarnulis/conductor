@@ -1,4 +1,4 @@
-"""Fleet smoke (#143): S2, S3, S9, S15 and S15p through conductor against real PCC and music.
+"""Fleet smoke (#143): S2, S3, S9, S15, S15p and BI3 through conductor against real PCC and music.
 
 Session evals hold conductor's choices to account over a fake world. This is
 the other half: the same person's side of four scenarios, through the same
@@ -80,7 +80,7 @@ from tests.session_harness import (
     WorldHolder,
     run_sample,
 )
-from tests.session_scenarios import S2, S3, S9, S15, S15_PICKED
+from tests.session_scenarios import FINISHED_CORRECTED, S2, S3, S9, S15, S15_PICKED
 
 _RUNS = int(os.environ.get("CONDUCTOR_FLEET_RUNS", "3"))
 _COST = os.environ.get("CONDUCTOR_FLEET_COST") == "1"
@@ -504,12 +504,30 @@ def s15p_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
     return (end_state,)
 
 
+def bi3_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
+    # "No, Saturday" once the task is made (#198): conductor's amend names the
+    # task from its receipt and PCC moves that task; no second one is made.
+    def end_state(session: Session) -> None:
+        made = fleet.new_tasks()
+        assert len(made) == 1, f"{len(made)} tasks created: {[t['title'] for t in made]}"
+        task = made[0]
+        assert "fern" in task["title"].lower(), f"title {task['title']!r}"
+        due = date.fromisoformat(task["due_date"]) if task.get("due_date") else None
+        assert due is not None and due.strftime("%A") == "Saturday", (
+            f"the correction didn't land: due {due} ({due.strftime('%A') if due else 'never'})"
+        )
+        _nothing_trashed(fleet)
+
+    return (end_state,)
+
+
 _SMOKE: dict[str, tuple[Scenario, Callable[[ScratchFleet], tuple[Any, ...]]]] = {
     "S2": (S2, s2_checks),
     "S3": (S3, s3_checks),
     "S9": (S9, s9_checks),
     "S15": (S15, s15_checks),
     "S15p": (S15_PICKED, s15p_checks),
+    "BI3": (FINISHED_CORRECTED, bi3_checks),
 }
 
 

@@ -2411,6 +2411,11 @@ code, n=20: BI1 20/20, BI2 20/20 (run before the own-words change, which
 only touches a finished write), BI3 20/20.
 
 Not measured: the unheard-question re-ask and the pick-plus-change have
-unit tests only, no live case; and PCC's real agent has not been sent the
-amend's request ("Change what you did earlier — task 13 “…” (change: no,
-Saturday)"), only the fake tasks app has.
+unit tests only, no live case.
+
+Fleet smoke, BI3 against the real PCC agent (same day, n=5): 5/5. PCC heard
+"Change what you did earlier — task 11 “water the ferns” (change: no,
+Saturday)", called `update_task` once and moved that task from 2026-11-20
+to 2026-11-21; no second task was made. In 2 of the 5 the narrator's reply
+added "I have no record of a Saturday date": the receipt carries the ISO
+date and no weekday (#215).
