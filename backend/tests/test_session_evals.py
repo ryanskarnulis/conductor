@@ -424,7 +424,8 @@ def test_a_bi3_correction_dropped_or_remade_fails(scripted: _ScriptedRun) -> Non
     _fails(scripted.run(FINISHED_CORRECTED, script), "the correction was dropped")
     # ... and as a second add, there are two.
     script = FINISHED_CORRECTED.script(World())
-    script[2] = plan(ask("tasks", "add a task to water the ferns on saturday"))
+    again = plan(ask("tasks", "add a task to water the ferns on saturday"))
+    script[2:] = [again, again, text_turn("Added it for Saturday.")]
     _fails(scripted.run(FINISHED_CORRECTED, script), "made 2 ferns tasks")
 
 

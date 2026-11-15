@@ -958,6 +958,24 @@ def is_correction(words: str) -> bool:
     return bool(_INSTEAD_DAY.search(rest) or _NARROWS.search(rest) or _CHANGES.search(rest))
 
 
+# A lead that takes back what was just done ("no, Saturday"), unlike a yes or
+# an okay that goes on to something new ("ok, and one for tomorrow").
+_TAKES_BACK = re.compile(r"^\W*(?:no|nope|nah|actually|wait)\b", re.IGNORECASE)
+
+
+def _redoes(lone: str | None, chat: bool, words: str, checks: Checks) -> bool:
+    """A correction of a write the last plan finished (#198), planned as
+    anything but its amend: a no, a cancel, chat, or one new ask (the 12B's
+    usual plan, which names the thing again and lost it in 3 of 5 sessions).
+    Only with nothing waiting or running, a write the ledger can point at
+    (``checks.changeable``), and words that take it back."""
+    if not checks.changeable or _waits(checks) or running_in(checks.context):
+        return False
+    if not _TAKES_BACK.match(words):
+        return False
+    return chat or lone in ("confirm", "cancel", "ask")
+
+
 def corrects(plan: Plan, words: str, checks: Checks) -> list[str]:
     """A spoken correction (#77) filed as something else: a confirm, a
     cancel, chat or self while a plan waits on the person (the 12B reads
@@ -968,10 +986,17 @@ def corrects(plan: Plan, words: str, checks: Checks) -> list[str]:
     ``checks.changeable``): code asks the app that made it to change it."""
     if not is_correction(words):
         return []
-    if isinstance(plan, StepPlan) and any(step.do in ("amend", "ask") for step in plan.steps):
-        return []
     lone = plan.steps[0].do if isinstance(plan, StepPlan) and len(plan.steps) == 1 else None
     chat = isinstance(plan, Direct) and plan.answer in ("chat", "self")
+    if _redoes(lone, chat, words, checks):
+        return [
+            "their words change what you just did, and nothing is waiting or running: plan "
+            'exactly one step, an amend (target: "last", change: what they want instead, '
+            "written out, no {sN}), never a new ask, which would have to name the thing "
+            "again; code asks the app that did it to change that very thing"
+        ]
+    if isinstance(plan, StepPlan) and any(step.do in ("amend", "ask") for step in plan.steps):
+        return []
     if _waits(checks):
         if lone not in ("confirm", "cancel") and not chat:
             return []
@@ -982,15 +1007,7 @@ def corrects(plan: Plan, words: str, checks: Checks) -> list[str]:
             "with the change and it asks again"
         ]
     jobs = running_in(checks.context)
-    if not jobs:
-        if not checks.changeable or (lone not in ("confirm", "cancel") and not chat):
-            return []
-        return [
-            "their words change what you just did, and nothing is waiting or running: plan "
-            'exactly one step, an amend (target: "last", change: what they want instead, '
-            "written out, no {sN}); code asks the app that did it to change it"
-        ]
-    if lone not in ("cancel", "confirm"):
+    if not jobs or lone not in ("cancel", "confirm"):
         return []
     ref = f"{jobs[0][0]}:job:{jobs[0][1]}"
     return [

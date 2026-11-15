@@ -568,14 +568,17 @@ def test_a_correction_of_a_finished_write_asks_its_app_to_change_that_thing(
     # amend goes to the app that made it, naming the task from its receipt.
     _water_ferns(run_with)
     (made,) = [task for task in world.live_tasks() if "ferns" in task.title.lower()]
+    # The change goes as the person said it, not as the planner reworded it.
     reply = run_with(
-        ScriptedProvider([plan_turn(amend("Saturday")), text_turn("Moved it to Saturday.")]),
+        ScriptedProvider(
+            [plan_turn(amend("Friday to Saturday")), text_turn("Moved it to Saturday.")]
+        ),
         "no, Saturday",
     )
     (sent,) = reply["tool_calls"]
     assert sent["tool"] == "ask_tasks"
     assert sent["arguments"]["message"] == (
-        f"Change what you did earlier — task {made.id} “{made.title}” (change: Saturday)"
+        f"Change what you did earlier — task {made.id} “{made.title}” (change: no, Saturday)"
     )
     assert made.due is not None and made.due.strftime("%A") == "Saturday"
     changed = _plans(db_session)[-1]
@@ -676,7 +679,7 @@ def test_an_untrusted_things_change_goes_by_kind_and_id(run_with: Any, db_sessio
     _journal_by_hand(db_session, run_with.conversation, record)
     reply = run_with(ScriptedProvider([plan_turn(amend("Saturday"))]), "no, Saturday")
     sent = reply["tool_calls"][0]["arguments"]["message"]
-    assert sent == "Change what you did earlier — task 301 (change: Saturday)"
+    assert sent == "Change what you did earlier — task 301 (change: no, Saturday)"
 
 
 # --- a yes to a question the person didn't hear (#198) ----------------------------------

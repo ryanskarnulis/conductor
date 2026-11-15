@@ -656,9 +656,14 @@ def test_a_spoken_correction_filed_as_something_else_gets_an_amend_repair(
         ("no, Saturday", {}, {"answer": "chat"}, True),
         ("actually make it Sunday", {}, {"answer": "self"}, True),
         ("no, Saturday", {}, steps({"do": "confirm", "answer": "no"}), True),
-        # Already an amend, or a new ask that names the thing: it runs.
+        # One new ask would have to name the thing again: the amend names it from the receipt.
+        ("no, Saturday", {}, steps(ask("tasks", "move call mom to saturday")), True),
+        # Already an amend, or a longer plan: it runs.
         ("no, Saturday", {}, steps({"do": "amend", "target": "last", "change": "Saturday"}), False),
-        ("no, Saturday", {}, steps(ask("tasks", "move call mom to saturday")), False),
+        ("no, Saturday", {}, steps(ask("tasks", "move it to saturday"), ask("music", "x")), False),
+        # A yes or an okay that goes on to something new takes nothing back.
+        ("ok, and one for the dentist tomorrow", {}, steps(ask("tasks", "add dentist")), False),
+        ("no, Saturday", {"waiting": _PUSHING}, steps(ask("tasks", "move it")), False),
         # Not a correction, or a job runs (the amend would be the job's).
         ("thanks", {}, {"answer": "chat"}, False),
         ("no, Saturday", {"jobs": "music:job:17 downloading (running)"}, {"answer": "chat"}, False),

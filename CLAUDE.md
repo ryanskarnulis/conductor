@@ -335,8 +335,11 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   puts their words after the resumed step (#198). With nothing waiting or
   running, an amend goes to the app that made the last plan's finished
   write, named from its receipt by kind and id (one app, at most three
-  things, else nothing changes and code says so); the validator asks for
-  that amend only when the ledger has such a write (`Checks.changeable`).
+  things, else nothing changes and code says so), the change in the
+  person's own words; the validator asks for that amend, also in place of
+  one new ask (which names the thing again and loses it), only when the
+  ledger has such a write (`Checks.changeable`) and the words take it back
+  (a no, "actually" or "wait", never a yes or an okay).
   A yes to a question in the part of a reply the person spoke over
   (`control.heard_question`) confirms nothing: code asks it again.
 - **Jobs** (#76): a step whose receipt carries a `job` detaches: the reply

@@ -659,7 +659,8 @@ CASES: tuple[Case, ...] = (
     Case(
         "correct-finished-write",
         "no, Saturday",
-        (one(M("amend", words=("saturday",))), one(M("ask", app="tasks", words=("saturday",)))),
+        # Never a new ask: it names the task again, and lost it in 3 of 5 sessions.
+        (one(M("amend", words=("saturday",))),),
         "control",
         state(now=_VOICE, recent='pcc:task:88 "Call mom" (due Fri)')
         + f"\n\n{_JUST_ADDED_CALL_MOM}",

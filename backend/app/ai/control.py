@@ -408,6 +408,11 @@ def _amend_done(
         else f"{item.kind} {item.ref} “{dataflow.clean(item.title)}”"
         for item in things
     )
+    # A spoken correction goes as the person said it ("no, Saturday"), as
+    # the resume path sends it: the planner's rewording ("Friday to
+    # Saturday") names the old day too.
+    said = " ".join(state.words.split())
+    change = said if plans.is_correction(said) else change
     request = _with_change(f"Change what you did earlier — {named}", change)
     ask = plans.Ask(id="s1", do="ask", app=apps[0], request=request, destructive=False)
     turn.body = {"steps": [ask.model_dump()]}
