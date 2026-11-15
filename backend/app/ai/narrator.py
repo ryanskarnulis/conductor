@@ -57,6 +57,7 @@ import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from typing import TYPE_CHECKING, Any, Literal
 
 from app.ai import confirmation, memory, run_record
@@ -682,7 +683,12 @@ def receipt_steps(records: Sequence[ToolCallRecord]) -> list[dict[str, Any]]:
         else:
             step["did"] = "unknown: the app sent no record of what it did"
         if record.result:
-            step["app_note"] = _note(record.result)
+            note = _note(record.result)
+            # A write's dates name their weekday (#215); a read's stay as the
+            # app wrote them (labelled, "what's due today?" drew "scheduled
+            # for Sunday, November 15", which reads as a new write).
+            wrote = any(entry.get("outcome") == "done" for entry in record.app_record or [])
+            step["app_note"] = with_weekdays(note) if wrote else note
         steps.append(step)
     return steps
 
@@ -1485,6 +1491,48 @@ def _note(result: str | None) -> str:
     if len(text) > MAX_NOTE_CHARS:
         text = text[: MAX_NOTE_CHARS - 1].rstrip() + "…"
     return text
+
+
+_WEEKDAY = r"(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?"
+_MONTHS = (
+    "january february march april may june july august september october november december"
+).split()
+# A full date in an app's words, with no weekday beside it: "2026-11-21",
+# "November 21, 2026", "Nov 21st 2026".
+_DATED = re.compile(
+    rf"(?<![\w-])(?:(?P<named>{_WEEKDAY}),?\s+)?(?:"
+    r"(?P<iso>(?P<y>\d{4})-(?P<m>\d{2})-(?P<d>\d{2}))(?![\w-])"
+    rf"|(?P<long>(?P<month>{'|'.join(f'{name[:3]}(?:{name[3:]})?' for name in _MONTHS)})\.?\s+"
+    r"(?P<day>\d{1,2})(?:st|nd|rd|th)?,?\s+(?P<year>\d{4}))(?!\w)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def with_weekdays(text: str) -> str:
+    """An app's words with each full date's weekday put before it (#215):
+    "due 2026-11-21" reads "due Saturday 2026-11-21". The person says
+    "Saturday" and the app answers with a date; the narrator can't tell they
+    are the same day, and said it had "no record of a Saturday date". Code
+    does the date math, as the state block does. A date that already names
+    its day, or isn't a real one, is left as written. Only a write's note
+    is labelled (:func:`receipt_steps`)."""
+
+    def label(found: re.Match[str]) -> str:
+        if found.group("named"):
+            return found.group(0)
+        try:
+            if found.group("iso"):
+                day = date(int(found.group("y")), int(found.group("m")), int(found.group("d")))
+            else:
+                month = [name[:3] for name in _MONTHS].index(found.group("month")[:3].lower())
+                day = date(int(found.group("year")), month + 1, int(found.group("day")))
+        except ValueError:
+            return found.group(0)
+        sep = " " if found.group("iso") else ", "
+        return f"{day.strftime('%A')}{sep}{found.group(0)}"
+
+    return _DATED.sub(label, text)
 
 
 def _first_sentence(text: str) -> str:
