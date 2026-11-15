@@ -147,7 +147,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   the persona lives only there. Code guarantees the facts (titles, counts,
   undo, a plan's unrun steps and why, quoted outside text, two sentences on
   voice, and a job's state: queued or started, never done, its query no
-  second thing, #188); handoffs and an app's confirm question pass through
+  second thing, #188; and a write's dates named with their weekday in the
+  app's note, `narrator.with_weekdays`, #215); handoffs and an app's confirm question pass through
   verbatim, and so does an app's own question when it did nothing (quoted as
   its words, #168). A v1.2 app's question is its typed `needs_input` alone
   (#202); for a v1.1 app, one that ran nothing may ask without a "?" ("Please

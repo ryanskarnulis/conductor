@@ -2419,3 +2419,26 @@ Saturday)", called `update_task` once and moved that task from 2026-11-20
 to 2026-11-21; no second task was made. In 2 of the 5 the narrator's reply
 added "I have no record of a Saturday date": the receipt carries the ISO
 date and no weekday (#215).
+
+## A write's dates name their weekday (#215, 2026-11-15)
+
+After "no, Saturday" the real PCC agent moved the task and answered with a
+bare date; the narrator, with no calendar, added "I have no record of a
+Saturday date" in 2 of 5 fleet-smoke samples. Code now puts the weekday
+before each full date in a write's `app_note` ("Saturday 2026-11-21",
+"Saturday, November 21, 2026"), as the state block does for the planner.
+
+Fleet smoke, BI3 against real PCC: 10/10, then 5/5 on the final code; every
+reply names Saturday and none doubts it.
+
+The first version labelled reads too. Session evals on it (full run, 1023 s,
+infra 0, claims backed 173/174): every gate scenario 5/5 but T1 8/10;
+frontier S13 0/5 and S14 4/5 as before, S15 4/5, S15p 3/5, BI1 and BI2 4/5.
+At n=20 on that version: S15 18/20 and S15p 17/20 (the album question, no
+date in it; 3/5 and 4/5 in earlier runs), BI1 18/20. BI1's two misses were
+the label's doing: "what's due today?" drew "Both are scheduled for Sunday,
+November 15, 2026", which reads as a new write. So only a write's note is
+labelled. On the final code, n=20: BI1 20/20, BI3 20/20. The full session
+run was not repeated on the final code; it changes strictly less than the
+version that was run.
+

@@ -889,3 +889,52 @@ def test_a_finished_job_and_a_job_named_only_by_its_query_are_as_before() -> Non
     chat, seen = _scripted("Queued “Late Night Drive”.")
     narrator.narrate("x", None, [playlist], surface=None, chat=chat)
     assert _receipt(seen[0])[0]["did"][0]["items"][0]["title"] == "Late Night Drive"
+
+
+# --- an app's dates name their weekday (#215) ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("said", "read"),
+    [
+        ('Moved "water the ferns" to 2026-11-21.', 'Moved "water the ferns" to Saturday 2026-11-21.'),
+        ("due November 21, 2026 (was Nov 20th 2026)", "due Saturday, November 21, 2026 (was Friday, Nov 20th 2026)"),
+        # Already named, or not a date: as written.
+        ("due Saturday 2026-11-21", "due Saturday 2026-11-21"),
+        ("due Sat, November 21, 2026", "due Sat, November 21, 2026"),
+        ("order 2026-13-45, ref 12026-11-21, build 2026-11-21-rc1", "order 2026-13-45, ref 12026-11-21, build 2026-11-21-rc1"),
+        ("May 2026 is busy; 3 tasks", "May 2026 is busy; 3 tasks"),
+    ],
+)  # fmt: skip
+def test_a_full_date_in_an_apps_words_gets_its_weekday(said: str, read: str) -> None:
+    assert narrator.with_weekdays(said) == read
+
+
+def test_the_narrator_reads_the_apps_date_with_its_weekday() -> None:
+    # "No, Saturday", then tasks answers with a bare date: the receipt says
+    # which day that is, so the reply never doubts it was a Saturday.
+    record = ToolCallRecord(
+        tool="ask_tasks",
+        arguments={"message": "move it"},
+        result='Moved "water the ferns" (#13) to 2026-11-21 (was 2026-11-20).\n\n[tasks did: update_task]',
+        app_record=[
+            {
+                "tool": "update_task",
+                "outcome": "done",
+                "touched": [{"app": "tasks", "kind": "task", "id": "13", "title": "water the ferns"}],
+            }
+        ],
+    )  # fmt: skip
+    (step,) = narrator.receipt_steps([record])
+    assert step["app_note"] == (
+        'Moved "water the ferns" (#13) to Saturday 2026-11-21 (was Friday 2026-11-20).'
+    )
+    # A read's dates stay as the app wrote them.
+    listed = ToolCallRecord(
+        tool="ask_tasks",
+        arguments={"message": "what's due today?"},
+        result="1 task due today:\n- groceries (#3, Household, due 2026-11-15)",
+        app_record=[],
+    )
+    (read,) = narrator.receipt_steps([listed])
+    assert read["app_note"] == "1 task due today: - groceries (#3, Household, due 2026-11-15)"
