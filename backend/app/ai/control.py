@@ -14,7 +14,9 @@ hands it here.
   same plan from it. A gated step is asked about again in its new words; an
   app's question lapses and the app gets the changed request (it may ask
   again); a plan waiting on ``ask_user`` asks its question again. Nothing
-  waiting: it says there's nothing to change.
+  waiting: the change goes to the app that made the last plan's write, which
+  code names from its receipt by kind and id (#198); with no such write, or
+  one code can't pin down, it says so and changes nothing.
 - **undo** reads the last plan's write receipts from the ledger (or older
   ones only when the target names them) and, per app, asks the owning app to
   redeem its undo handles: through the app's own confirmation when it has
@@ -44,7 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from app.ai import dataflow, job_control, narrator, run_record, turn_events
+from app.ai import dataflow, job_control, narrator, run_record, state_block, turn_events
 from app.ai import plan as plans
 from app.ai.confirmation import PendingConfirm
 from app.ai.plan import Ledgered, PausedPlan, TurnPlan, UndoReceipt
@@ -67,6 +69,12 @@ CANT_UNDO = "None of that can be undone."
 CANT_AMEND_PROPOSAL = (
     "I can't edit a plan I proposed, so I've set it aside and nothing changed. "
     "Ask again with the change and I'll think it over."
+)
+CANT_CHANGE_DONE = "I can't tell which thing I just did you mean, so I haven't changed anything."
+ASKING_AGAIN = "You spoke over my question, so here it is again."
+UNHEARD_LEFT = (
+    "You spoke over my question before you could hear it, so I haven't taken that as a yes "
+    "and nothing changed. Ask again and I'll check with you."
 )
 _UNDO_STOPPED = f"{run_record.NOT_RUN_PREFIX}an earlier part of the undo didn't finish"
 
@@ -135,7 +143,7 @@ def run(
     if isinstance(step, plans.Cancel):
         return cancel(interp, state, turn, paused=paused, pending=pending)
     if isinstance(step, plans.Amend):
-        return amend(interp, state, turn, step, paused=paused, pending=pending)
+        return amend(interp, state, turn, step, view, paused=paused, pending=pending)
     assert isinstance(step, plans.Undo)
     return undo(interp, state, turn, step, view, position=0, words=state.words)
 
@@ -247,12 +255,15 @@ def amend(
     state: _Run,
     turn: TurnPlan,
     step: plans.Amend,
+    view: View,
     *,
     paused: PausedPlan | None,
     pending: PendingConfirm | None,
 ) -> AgentRunResult:
     change = " ".join(step.change.split())
-    if (paused is None and pending is None) or not change:
+    if paused is None and pending is None and change:
+        return _amend_done(interp, state, turn, change, view)
+    if not change:
         turn.note = "amend: nothing was waiting"
         return _say(interp, state, NOTHING_TO_CHANGE)
     if paused is None:
@@ -279,7 +290,7 @@ def amend(
         turn.note = "amend: an undo can't be changed; dropped it"
         return _say(interp, state, CANT_AMEND_UNDO)
     assert isinstance(target, plans.Ask | plans.Open)
-    steps[at] = _changed(target, change)
+    steps[at] = changed(target, change)
     _lapse()
     turn.body = {"steps": [s.model_dump() for s in steps]}
     turn.ends, turn.ends_as = paused.plan_id, "amended"
@@ -328,7 +339,7 @@ def _amend_question(
     return interp._execute(state, turn, [ask], 0, {})
 
 
-def _changed(step: plans.Ask | plans.Open, change: str) -> plans.Ask | plans.Open:
+def changed(step: plans.Ask | plans.Open, change: str) -> plans.Ask | plans.Open:
     """The step with the person's change after its words."""
     if isinstance(step, plans.Ask):
         return step.model_copy(update={"request": _with_change(step.request, change)})
@@ -337,6 +348,149 @@ def _changed(step: plans.Ask | plans.Open, change: str) -> plans.Ask | plans.Ope
 
 def _with_change(words: str, change: str) -> str:
     return f"{words} (change: {change})"
+
+
+# --- amend of a finished write (#198) --------------------------------------------------------
+#
+# "No, Saturday" right after the task was made: nothing waits, so the change
+# is to what the last plan wrote. Code names it from the receipt, as an undo
+# does, and the owning app makes the change (and asks first when it would).
+
+
+def _done(ledgered: Ledgered | None, words: str = "") -> list[UndoReceipt]:
+    """The last plan's finished writes an amend can point an app at: done,
+    not undone since, not a job, and naming at least one thing. Only the ones
+    the person's words name, when they name any."""
+    if ledgered is None or ledgered.last_plan is None:
+        return []
+    last = [
+        receipt
+        for receipt in ledgered.receipts
+        if receipt.plan_id == ledgered.last_plan
+        and receipt.outcome == "done"
+        and not receipt.undone
+        and receipt.job is None
+        and _things(receipt)
+    ]
+    return [receipt for receipt in last if words and names(words, receipt)] or last
+
+
+def _things(receipt: UndoReceipt) -> list[plans.Touched]:
+    return [item for item in receipt.touched if not item.kind.endswith("job")]
+
+
+def changeable(view: View) -> bool:
+    """Whether the last plan finished a write an amend can change: what
+    makes a correction with nothing waiting an amend (``Checks.changeable``)."""
+    return bool(_done(view()))
+
+
+def _amend_done(
+    interp: Interpreter, state: _Run, turn: TurnPlan, change: str, view: View
+) -> AgentRunResult:
+    """Nothing waits: ask the app that made the last plan's write to change
+    it. One app and at most ``MAX_NAMED`` things, or nothing is changed."""
+    ledgered = view()
+    receipts = _done(ledgered, state.words)
+    if not receipts:
+        turn.note = "amend: nothing was waiting"
+        return _say(interp, state, NOTHING_TO_CHANGE)
+    things = list(dict.fromkeys(item for receipt in receipts for item in _things(receipt)))
+    apps = list(dict.fromkeys(receipt.app for receipt in receipts))
+    app = interp._fleet.get(apps[0])
+    if len(apps) > 1 or len(things) > MAX_NAMED or app is None or app.agent is None:
+        turn.note = "amend: the last plan's writes aren't one thing to change"
+        return _say(interp, state, CANT_CHANGE_DONE)
+    # Outside titles stay out of the request (it is a write): kind and id.
+    named = ", ".join(
+        f"{item.kind} {item.ref}"
+        if item.untrusted or not item.title
+        else f"{item.kind} {item.ref} “{dataflow.clean(item.title)}”"
+        for item in things
+    )
+    # A spoken correction goes as the person said it ("no, Saturday"), as
+    # the resume path sends it: the planner's rewording ("Friday to
+    # Saturday") names the old day too.
+    said = " ".join(state.words.split())
+    change = said if plans.is_correction(said) else change
+    request = _with_change(f"Change what you did earlier — {named}", change)
+    ask = plans.Ask(id="s1", do="ask", app=apps[0], request=request, destructive=False)
+    turn.body = {"steps": [ask.model_dump()]}
+    turn.note = f"amended a finished write of plan {receipts[0].plan_id}"
+    logger.info("write_amended", plan=receipts[0].plan_id, app=apps[0], things=len(things))
+    return interp._execute(state, turn, [ask], 0, {})
+
+
+# --- a yes to a question the person didn't hear (#198) ---------------------------------------
+
+
+def heard_question(heard: state_block.Heard | None, question: str | None = None) -> bool:
+    """Whether the person heard the question their yes answers. They spoke
+    over the reply (#77), so only when what played reaches the question's
+    end: the app's own words when the reply has them, else the reply's last
+    question mark. The cut is an estimate from playback time, so the last
+    word may be missing. No report, or one that can't say how much played,
+    is as before: heard."""
+    if heard is None or heard.heard_chars is None:
+        return True
+    reply = heard.reply
+    end = 0
+    if question and question.strip():
+        at = reply.rfind(question.strip())
+        end = at + len(question.strip()) if at >= 0 else 0
+    if end <= 0:
+        end = reply.rfind("?") + 1 or len(reply.rstrip())
+    cut = state_block.utf16_index(reply, heard.heard_chars)
+    return len(reply[cut:end].split()) <= 1
+
+
+def reask(
+    interp: Interpreter,
+    state: _Run,
+    turn: TurnPlan,
+    *,
+    paused: PausedPlan | None,
+    pending: PendingConfirm | None,
+) -> AgentRunResult:
+    """A yes to a question that sat in the part of the reply the person
+    spoke over: nothing is confirmed. The same question is asked again:
+    code's gate from the paused plan, an app's by sending it the same request
+    (its old token lapses unsent). When that can't be done, it says so."""
+    turn.note = "a yes to a question they didn't hear: asked again"
+    logger.info("unheard_question_reasked", plan=paused.plan_id if paused else None)
+    steps: list[plans.Step] = []
+    if paused is not None:
+        body = plans.load(paused.body)
+        steps = list(body.steps) if isinstance(body, plans.StepPlan) else []
+    at: int | None = None
+    if paused is not None and paused.reason == "gate" and paused.resume_at < len(steps):
+        at = paused.resume_at
+    elif paused is not None and paused.reason == "app_confirm":
+        at = _amended_at(paused, steps)
+    if paused is not None and at is not None:
+        _lapse()
+        turn.body = paused.body
+        target = steps[at]
+        if isinstance(target, plans.Undo):
+            return _again(undo(interp, state, turn, target, state.view, position=at))
+        return _again(interp._execute(state, turn, steps[at:], at, {}))
+    if paused is None and pending is not None and pending.request and not pending.undoes:
+        _lapse()
+        ask = plans.Ask(
+            id="s1", do="ask", app=pending.app, request=pending.request, destructive=False
+        )
+        turn.body = {"steps": [ask.model_dump()]}
+        return _again(interp._execute(state, turn, [ask], 0, {}))
+    _lapse()
+    turn.note = "a yes to a question they didn't hear: left"
+    return _say(interp, state, UNHEARD_LEFT)
+
+
+def _again(result: AgentRunResult) -> AgentRunResult:
+    """The re-asked question, saying first why it is asked twice."""
+    if result.reply:
+        result.reply = f"{ASKING_AGAIN} {result.reply}"
+    return result
 
 
 # --- undo ------------------------------------------------------------------------------------

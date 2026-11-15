@@ -181,6 +181,9 @@ class Case:
     refs: frozenset[str] = field(default_factory=frozenset)
     # A plan paused on ask_user, which a resume answers (the schema offers it).
     resumable: bool = False
+    # Nothing waits and the ledger has a write the last plan finished, which
+    # an amend can ask its app to change (#198, ``Checks.changeable``).
+    changeable: bool = False
 
     @property
     def confirmable(self) -> bool:
@@ -302,6 +305,27 @@ def _which_dentist(**parts: str) -> str:
     )
     return state(waiting=waiting, recent=_TWO_DENTISTS, **parts) + f"\n\n{last}"
 
+
+# A write that just finished (#198): the task is made, nothing waits.
+_ADD_CALL_MOM = "add a task to call mom on friday"
+_JUST_ADDED_CALL_MOM = recall.section(
+    recall.Recall.of(
+        [
+            {"role": "user", "content": _ADD_CALL_MOM, "tool_calls": None},
+            {
+                "role": "assistant",
+                "content": "Added “Call mom” for Friday.",
+                "tool_calls": [
+                    {
+                        "tool": "ask_tasks",
+                        "arguments": {"message": _ADD_CALL_MOM},
+                        "result": 'Created task "Call mom" (#88) in Inbox, due 2026-11-06.',
+                    }
+                ],
+            },
+        ]
+    )
+)
 
 _KITCHEN_CONFIRM = (
     'tasks asked "Trash Kitchen and its 3 tasks?" If their message says yes to it, call '
@@ -630,6 +654,17 @@ CASES: tuple[Case, ...] = (
         "control",
         state(waiting=_KITCHEN_CONFIRM),
         frozenset({"pending"}),
+    ),
+    # ... or what was just done (#198): the task is made and nothing waits.
+    Case(
+        "correct-finished-write",
+        "no, Saturday",
+        # Never a new ask: it names the task again, and lost it in 3 of 5 sessions.
+        (one(M("amend", words=("saturday",))),),
+        "control",
+        state(now=_VOICE, recent='pcc:task:88 "Call mom" (due Fri)')
+        + f"\n\n{_JUST_ADDED_CALL_MOM}",
+        changeable=True,
     ),
     Case(
         "correct-running-job",

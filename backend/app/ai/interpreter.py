@@ -105,6 +105,7 @@ from app.ai import (
     turn_events,
 )
 from app.ai import glance as glances
+from app.ai import state_block
 from app.ai.state_block import Entity
 from app.ai import plan as plans
 from app.ai import trace as run_trace
@@ -211,6 +212,9 @@ class _Run:
     # The candidate the person's answer picked from a v1.2 app's question
     # (#196): the resumed ask carries it, marked ``picked``, as its only ref.
     picked: dict[str, Any] | None = None
+    # The last reply, when the person spoke over it (#77): a yes to a
+    # question in the part they didn't hear confirms nothing (#198).
+    heard: Callable[[], state_block.Heard | None] | None = None
     # The turn's plan, once compiled: what the ledger journals.
     plan: TurnPlan | None = None
     # Where this plan's records start: a control step split off and run first
@@ -265,6 +269,7 @@ class Interpreter:
         saved_facts: Callable[[], Sequence[str]] | None = None,
         entities: Callable[[], Sequence[Entity] | None] | None = None,
         fact_meaning: Callable[[str, Sequence[str]], str | None] | None = None,
+        heard: Callable[[], state_block.Heard | None] | None = None,
     ) -> AgentRunResult:
         """Run one turn. Always returns, except on a failure stop.
 
@@ -284,6 +289,8 @@ class Interpreter:
         app reaches (#81), ``saved_facts`` the person's saved facts, newest
         first, which an app ask whose words point at one carries (#134), and
         ``fact_meaning`` the one a non-read ask means when no words match (#204).
+        ``heard`` is the last reply when the person spoke over it (#77): a yes
+        to a question in the part they didn't hear asks it again (#198).
 
         A failure stop (``provider_error``, ``internal_error``) raises
         :class:`AgentRunFailed` with the partial turn and its plan.
@@ -317,6 +324,7 @@ class Interpreter:
             saved_facts=saved_facts,
             entities=entities,
             fact_meaning=fact_meaning,
+            heard=heard,
         )
         started = time.monotonic()
         with (
@@ -354,6 +362,12 @@ class Interpreter:
             confirmable=pending is not None or gate is not None,
             resumable=paused is not None and paused.reason in ("ask_user", "app_question"),
             context=state.context or "",
+            # A correction with nothing waiting (#198): an amend, when the
+            # ledger has a write the last plan finished.
+            changeable=paused is None
+            and pending is None
+            and plans.is_correction(state.words)
+            and control.changeable(state.view),
         )
         rt.emit(state.on_activity, Activity(kind="model"))
         started = time.monotonic()
@@ -410,6 +424,14 @@ class Interpreter:
                 return control.run(
                     self, state, turn, amend, state.view, paused=paused, pending=pending
                 )
+            if picked is not None and steps and plans.changes_too(state.words, value.text):
+                # "No, the bill one on Saturday" (#198): the pick fills {s1}
+                # and the rest of their words change the step it resumes.
+                target = steps[0]
+                if isinstance(target, plans.Ask | plans.Open):
+                    steps = [control.changed(target, state.words), *steps[1:]]
+                    kept = [*resumed.steps[: paused.resume_at], *steps]
+                    turn.body = {**paused.body, "steps": [s.model_dump() for s in kept]}
             values = {"s1": value}
             turn_events.resumed(
                 "ask_user",
@@ -425,6 +447,16 @@ class Interpreter:
             return self._split(state, turn, plan, controls, paused=paused, pending=pending)
         first = plan.steps[0]
         if isinstance(first, plans.Confirm):
+            if (
+                first.answer == "yes"
+                and (gate is None or gate.reason == "gate")
+                and not control.heard_question(
+                    _heard(state),
+                    pending.question if pending is not None and gate is None else None,
+                )
+            ):
+                # The yes answers a question they spoke over (#198).
+                return control.reask(self, state, turn, paused=paused, pending=pending)
             return self._confirm(
                 state,
                 turn,
@@ -1500,6 +1532,17 @@ def _joined(first: str | None, second: str | None, surface: str | None) -> str |
         first = sentences[0] if len(sentences) == 1 else sentences[0] + "."
     parts = [part.strip() for part in (first, second) if part and part.strip()]
     return " ".join(parts) or None
+
+
+def _heard(state: _Run) -> state_block.Heard | None:
+    """The reply the person spoke over, if they did; a failed read is none."""
+    if state.heard is None:
+        return None
+    try:
+        return state.heard()
+    except Exception as exc:  # the report is a refinement, never the turn
+        logger.warning("heard_read_failed", error=str(exc), error_type=type(exc).__name__)
+        return None
 
 
 def _stopped(stop: Stop | None) -> bool:

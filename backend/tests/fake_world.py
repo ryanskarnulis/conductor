@@ -764,6 +764,8 @@ def _record(reply: AppReply, written: list[Receipt]) -> list[RecordEntry]:
     return [*reply.found, *(_write_entry(receipt) for receipt in written)]
 
 
+# How conductor's amend of a finished write opens its request (#198).
+_AMENDS_DONE = "change what you did earlier"
 _MOVE_WORDS = r"\b(push|move|reschedule|postpone|bump|shift|change the due)\b"
 # A line of a list that puts an existing task on a day (a think's proposal, #78).
 _LIST_MOVE_WORDS = (
@@ -808,7 +810,9 @@ class TasksApp:
             return self._undo(thread)
         if re.search(r"\b(delete|trash|remove|wipe|bin|get rid of)\b", text):
             return self._trash(thread, message)
-        if re.search(_MOVE_WORDS, text):
+        if re.search(_MOVE_WORDS, text) or text.startswith(_AMENDS_DONE):
+            # "Change what you did earlier — task 301 … to <day>" (#198):
+            # conductor's amend of a finished write, read as PCC's agent would.
             return self._move(message)
         if re.search(r"\b(mark|complete|finish|tick off|check off)\b", text) and "done" in text:
             return self._complete(message)

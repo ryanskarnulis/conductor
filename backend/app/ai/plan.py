@@ -337,6 +337,9 @@ class Checks:
     # What the planner was shown about now (the state block and recall): an
     # ask_user may only offer options it names, never invented ones.
     context: str = ""
+    # Nothing waits, and the last plan finished a write an amend can ask its
+    # app to change (#198): a correction of it is an amend, not chat.
+    changeable: bool = False
 
 
 # A confirm's repair when nothing waits at all (#176): since #151's `about` the
@@ -955,19 +958,45 @@ def is_correction(words: str) -> bool:
     return bool(_INSTEAD_DAY.search(rest) or _NARROWS.search(rest) or _CHANGES.search(rest))
 
 
+# A lead that takes back what was just done ("no, Saturday"), unlike a yes or
+# an okay that goes on to something new ("ok, and one for tomorrow").
+_TAKES_BACK = re.compile(r"^\W*(?:no|nope|nah|actually|wait)\b", re.IGNORECASE)
+
+
+def _redoes(lone: str | None, chat: bool, words: str, checks: Checks) -> bool:
+    """A correction of a write the last plan finished (#198), planned as
+    anything but its amend: a no, a cancel, chat, or one new ask (the 12B's
+    usual plan, which names the thing again and lost it in 3 of 5 sessions).
+    Only with nothing waiting or running, a write the ledger can point at
+    (``checks.changeable``), and words that take it back."""
+    if not checks.changeable or _waits(checks) or running_in(checks.context):
+        return False
+    if not _TAKES_BACK.match(words):
+        return False
+    return chat or lone in ("confirm", "cancel", "ask")
+
+
 def corrects(plan: Plan, words: str, checks: Checks) -> list[str]:
     """A spoken correction (#77) filed as something else: a confirm, a
     cancel, chat or self while a plan waits on the person (the 12B reads
     "no, Saturday" as a no and drops the plan), or a cancel or confirm for a
     running job the words only narrow. The repair asks for one amend of what waits or runs,
-    which resumes the same plan with the change. A write already done is
-    not here: amend can't change it."""
+    which resumes the same plan with the change. With nothing waiting or
+    running, a write the last plan finished takes the amend too (#198,
+    ``checks.changeable``): code asks the app that made it to change it."""
     if not is_correction(words):
-        return []
-    if isinstance(plan, StepPlan) and any(step.do in ("amend", "ask") for step in plan.steps):
         return []
     lone = plan.steps[0].do if isinstance(plan, StepPlan) and len(plan.steps) == 1 else None
     chat = isinstance(plan, Direct) and plan.answer in ("chat", "self")
+    if _redoes(lone, chat, words, checks):
+        return [
+            "their words change what you just did, and nothing is waiting or running: plan "
+            'exactly one step, an amend (target: "last", change: what they want instead, '
+            "written out, no {sN}), never a new ask, which would have to name the thing "
+            "again; code asks the app that did it to change that very thing"
+        ]
+    if isinstance(plan, StepPlan) and any(step.do in ("amend", "ask") for step in plan.steps):
+        return []
     if _waits(checks):
         if lone not in ("confirm", "cancel") and not chat:
             return []
@@ -985,6 +1014,22 @@ def corrects(plan: Plan, words: str, checks: Checks) -> list[str]:
         f"{ref} is still running and their words narrow it rather than stop it or answer a "
         f'question: amend it (target: "{ref}", change: their words), never a cancel or confirm'
     ]
+
+
+def changes_too(words: str, picked: str) -> bool:
+    """Whether a correction that picks an option also says what to change
+    (#198): "no, the bill one on Saturday" picks the bill and moves the day.
+    A day or a change the picked option's own words don't hold; a plain pick
+    ("no, the first one", "no, the Saturday one") says nothing more."""
+    lead = _CORRECTION_LEAD.match(words)
+    if lead is None or _NOT_A_CHANGE.search(words):
+        return False
+    rest, own = words[lead.end() :], picked.lower()
+    return any(
+        found.group(0).lower() not in own
+        for pattern in (_INSTEAD_DAY, _CHANGES)
+        for found in pattern.finditer(rest)
+    )
 
 
 def answers_twice(plan: Plan) -> list[str]:

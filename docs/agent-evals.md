@@ -2359,3 +2359,58 @@ Live session evals, this branch: gate tier every scenario 5/5 but T1 15/20
 (undecided, not below its floor; 4/5 in earlier runs). Frontier: S3, S10,
 S11, S12, S15, TH1, TH2, BI1 5/5; S15p and BI2 4/5; S14 3/5 and S13 0/5, as
 in earlier runs. Claims backed 160/160.
+
+## Spoken corrections, the rest (#198, 2026-11-15)
+
+Three leftovers from #77. A correction of a write that already finished
+("no, Saturday" once the task is made) is an amend over the last plan's
+receipt: code names the thing by kind and id and asks the owning app to
+change it, in the person's own words. A yes to a question in the part of a
+reply the person spoke over asks it again. "No, the bill one on Saturday"
+over an `ask_user` picks the option and keeps the day.
+
+New cases: `correct-finished-write` (plan, `control`) and BI3 (session,
+frontier). gemma-4-12b, a quiet GPU, held-out set not run.
+
+What the 12B does with "no, Saturday" after a finished write: one new ask to
+tasks, 20/20, never chat (the issue's 0/5 predates the last exchange in
+recall). The ask names the task again from memory, and BI3 passed 2/5 that
+way. So the validator sends one new ask back for the amend
+(`plan.corrects`, only with `Checks.changeable` and words that take it
+back): 20/20 end as the amend, all by repair, and BI3 is 18/20. The two
+misses were the planner's rewording of the change ("Friday to Saturday",
+read by the fake tasks app as Friday); with the person's own words as the
+change, BI3 is 20/20.
+
+Plan evals, n=20, full run (96 cases, 1897 s), as passed, first-try. The
+run was on the commit before the new-ask repair; `control` was run again on
+the final code.
+
+| group | floor | #204 | this change |
+|---|---|---|---|
+| golden | 0.8 | 400, 400 /420 | 400, 400 |
+| cross | 0.8 | 158, 97 /160 | 157, 109 |
+| ref | 0.85 | 79, 79 /80 | 77, 76 |
+| control | 0.8 | 280, 213 /280 | 300, 215 /300 (final code) |
+| memory | 0.8 | 312, 305 /320 | 315, 310 |
+| knowledge | 0.65 | 60, 60 /60 | 60, 60 |
+| hard | 0.5 | 20, 20 /20 | 19, 19 |
+| self | 0.55 | 97, 95 /100 | 99, 95 |
+| mixed | 0.85 | 200, 180 /200 | 200, 180 |
+| long | 0.7 | 160, 157 /160 | 160, 157 |
+| stale | 0.8 | 100, 100 /100 | 100, 100 |
+
+Every group is above its floor. `control`'s first-try rate carries the new
+case at 0/20 (always reached by repair); before the new-ask repair the group
+was 300, 243.
+
+Session evals, full run on the same earlier commit (1023 s, infra 0): every
+gate scenario 5/5 but T1 4/5, as before. Frontier: S3, S10, S11, S12, S15,
+S15p, TH1, TH2, BI1, BI2 5/5; S14 4/5; S13 0/5, as before. On the final
+code, n=20: BI1 20/20, BI2 20/20 (run before the own-words change, which
+only touches a finished write), BI3 20/20.
+
+Not measured: the unheard-question re-ask and the pick-plus-change have
+unit tests only, no live case; and PCC's real agent has not been sent the
+amend's request ("Change what you did earlier — task 13 “…” (change: no,
+Saturday)"), only the fake tasks app has.
