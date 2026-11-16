@@ -24,6 +24,9 @@ from pydantic import BaseModel, ValidationError
 # Speaches serves faster-whisper models by HF repo id; `small` is a good
 # home-box default (CPU-friendly, solid English accuracy for short commands).
 DEFAULT_STT_MODEL = "Systran/faster-whisper-small"
+# The fleet speaks English. Naming the language skips whisper's detection
+# pass, about a third of the transcription time on CPU (speech#4).
+DEFAULT_STT_LANGUAGE = "en"
 # Kokoro is Speaches' recommended TTS: ~82M params, natural voices, CPU-fine.
 DEFAULT_TTS_MODEL = "speaches-ai/Kokoro-82M-v1.0-ONNX"
 DEFAULT_TTS_VOICE = "af_heart"
@@ -85,17 +88,22 @@ class SpeechClient:
     tts_model: str = DEFAULT_TTS_MODEL
     tts_voice: str = DEFAULT_TTS_VOICE
     tts_client: httpx.Client | None = None
+    stt_language: str | None = DEFAULT_STT_LANGUAGE
 
     def transcribe(self, audio: bytes, filename: str = "audio.webm") -> str:
         """Audio bytes (any container whisper accepts; the browser sends
         webm/opus or wav) → plain text for the app's pipeline, biased by the
         vocabulary prompt and repaired by its normalizer. The filename's
-        extension is how the backend sniffs the container format."""
+        extension is how the backend sniffs the container format.
+        `stt_language=None` leaves the language to whisper's detection."""
+        data = {"model": self.stt_model, "prompt": self.vocabulary.stt_prompt}
+        if self.stt_language:
+            data["language"] = self.stt_language
         try:
             response = self.client.post(
                 "audio/transcriptions",
                 files={"file": (filename, audio)},
-                data={"model": self.stt_model, "prompt": self.vocabulary.stt_prompt},
+                data=data,
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -142,6 +150,7 @@ def create_speech_client(
     stt_model: str = DEFAULT_STT_MODEL,
     tts_model: str = DEFAULT_TTS_MODEL,
     tts_voice: str = DEFAULT_TTS_VOICE,
+    stt_language: str | None = DEFAULT_STT_LANGUAGE,
     client: httpx.Client | None = None,
     tts_client: httpx.Client | None = None,
 ) -> SpeechClient:
@@ -162,4 +171,5 @@ def create_speech_client(
         tts_model=tts_model,
         tts_voice=tts_voice,
         tts_client=tts_client,
+        stt_language=stt_language,
     )
