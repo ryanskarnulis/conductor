@@ -7,7 +7,8 @@ it in the turn. It files the step as a job that conductor itself owns
 words (:data:`THINKING`); the conversation never waits on it. The thinker
 (:mod:`app.services.thinker`) runs it on gemma-4-26b-a4b with thinking on and
 ``json_schema`` constraining the answer (spike D1: 32/32 valid), with its
-own prompt (:func:`system_prompt`) and sampling (:data:`PROFILE`).
+own prompt (:func:`system_prompt`); its sampling and cap are that model's
+profile (``app/ai/profiles/``, the ``think`` phase).
 
 What comes back is a **proposal**: a summary line and the ``ask`` steps that
 would carry it out. Code validates it like any plan (:func:`app.ai.plan.problems`,
@@ -40,7 +41,6 @@ from pydantic import BaseModel, ValidationError
 
 from app.ai import dataflow, narrator, state_block
 from app.ai import plan as plans
-from app.ai.provider import Sampling
 from app.fleet.manifests import Fleet
 
 if TYPE_CHECKING:
@@ -58,8 +58,6 @@ KIND = "think"
 MAX_TRIES = 3
 QUIET = timedelta(seconds=60)
 
-# Room for the thought and a dozen steps (spike D1 ran thinking at 6000).
-MAX_TOKENS = 6000
 # The proposal's summary line, as posted.
 MAX_SUMMARY_CHARS = 600
 # How much of one earlier step's answer the 26B reads.
@@ -70,12 +68,6 @@ MAX_INPUT_CHARS = 2000
 PROPOSAL = "think_proposal"
 
 THINKING = "Thinking it over; I'll post when it's ready."
-
-
-# gemma-4-26b-a4b's published set (../llama-swap/config.yaml, the GGUF's own),
-# as spike D1 ran it with thinking and json_schema. Its own profile, so a
-# change to the 12B's never moves it.
-PROFILE = Sampling(temperature=1.0, top_p=0.95, top_k=64)
 
 
 def new_ref() -> str:

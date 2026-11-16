@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
@@ -44,18 +43,9 @@ class ToolCallArgumentsError(ProviderResponseError):
         self.tool_name = tool_name
 
 
-@dataclass(frozen=True)
-class Sampling:
-    """A model's sampling profile, sent with every request (each model has its
-    own: ``../agent-standard/model-profile.md``; the ``think`` lane's 26B, #78)."""
-
-    temperature: float
-    top_p: float
-    top_k: int
-
-
-# The roles a call can sample as (#150). ``think`` has its own profile
-# (``app/ai/think.py``) on its own provider.
+# The roles a call can sample as (#150): each is a phase of the model's
+# profile (``app/ai/model_profile.py``). The ``think`` lane's call takes no
+# role: it runs on its own provider, at its own model's sampling.
 SamplingRole = Literal["planner", "narrator", "speaker"]
 
 
@@ -152,7 +142,6 @@ __all__ = [
     "ProviderError",
     "ProviderRequestError",
     "ProviderResponseError",
-    "Sampling",
     "SamplingRole",
     "ToolCall",
     "ToolCallArgumentsError",

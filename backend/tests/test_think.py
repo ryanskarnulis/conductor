@@ -26,6 +26,7 @@ from app import clock as household
 from app.ai import foreground, interpreter, narrator, think, turn_events
 from app.ai import plan as plans
 from app.ai.interpreter import Interpreter
+from app.ai.model_profile import load_profile
 from app.ai.provider import ChatProvider, ChatResult, ProviderRequestError
 from app.api import routes_agent, turn_activity
 from app.config import get_settings
@@ -429,7 +430,7 @@ def test_the_26b_thinks_under_json_schema_and_its_proposal_posts_untried(
     assert watcher.sweep(force=True) == 1
     request = provider.requests[0]
     assert request["enable_thinking"] is True
-    assert request["max_tokens"] == think.MAX_TOKENS
+    assert request["max_tokens"] == load_profile("gemma-4-26b-a4b").phase("think").max_tokens
     assert request["response_format"]["json_schema"]["name"] == "proposal"
     assert request["messages"][0]["content"] == think.system_prompt(fleet)
     assert f"The problem: {WEEK}" in request["messages"][1]["content"]

@@ -1,0 +1,23 @@
+# gemma-4-26b-a4b: the escalation lane's model (#78, app/ai/think.py). The
+# 26B-A4B MoE sibling of gemma-4-12b (same family, chat template and thinking
+# toggle), served by ../llama-swap/config.yaml's entry of the same name.
+# CONDUCTOR_THINK_MODEL picks the file.
+thinking_kwarg = "enable_thinking"
+
+# Gemma 4's published sampling, as the GGUF carries it and spike D1 ran it
+# with thinking and json_schema. Its own file, so a change to the 12B's never
+# moves it.
+[sampling]
+temperature = 1.0
+top_p = 0.95
+top_k = 64
+
+# A think is one call with thinking on, under json_schema. The cap is room
+# for the thought and a dozen steps: its thinking tokens count against it
+# (spike D1 ran thinking at 6000).
+[phases.think]
+max_tokens = 6000
+thinking = true
+
+# A turn's roles are not measured on this model (the 12B plans and speaks);
+# they run at the default cap if LLAMACPP_MODEL ever names it.

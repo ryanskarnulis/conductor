@@ -14,10 +14,10 @@ from typing import Any
 import httpx
 import pytest
 
+from app.ai.model_profile import load_profile, parse_profile
 from app.ai.provider import (
     ProviderRequestError,
     ProviderResponseError,
-    Sampling,
     ToolCallArgumentsError,
     ToolSpec,
 )
@@ -192,46 +192,81 @@ def _sent(provider: LlamaCppProvider, requests: list[httpx.Request], **kw: Any) 
 
 def test_every_role_sends_the_same_bytes_as_no_role_by_default() -> None:
     provider, requests = _provider(_ok({"content": "ok"}))
-    plain = _sent(provider, requests)
+    plain = _sent(provider, requests, max_tokens=300)
     for role in ("planner", "narrator", "speaker"):
-        assert _sent(provider, requests, role=role) == plain
+        assert _sent(provider, requests, max_tokens=300, role=role) == plain
     assert (plain["temperature"], plain["top_p"], plain["top_k"]) == (1.0, 0.95, 64)
 
 
-def test_a_role_with_its_own_sampling_changes_only_that_role() -> None:
-    requests: list[httpx.Request] = []
-
+def _profiled(text: str, requests: list[httpx.Request]) -> LlamaCppProvider:
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return _response({"content": "ok"})
 
-    provider = LlamaCppProvider(
+    return LlamaCppProvider(
         "http://test/v1",
-        "gemma-4-12b",
+        "some-model",
         client=httpx.Client(transport=httpx.MockTransport(handler)),
-        role_sampling={"planner": Sampling(temperature=0.3, top_p=0.9, top_k=40)},
+        profile=parse_profile("some-model", text, "test"),
     )
+
+
+_SAMPLING = "[sampling]\ntemperature = 1.0\ntop_p = 0.95\ntop_k = 64\n"
+
+
+def test_a_role_with_its_own_temperature_changes_only_that_role() -> None:
+    requests: list[httpx.Request] = []
+    provider = _profiled(_SAMPLING + "[phases.planner]\ntemperature = 0.3\n", requests)
     planner = _sent(provider, requests, role="planner")
-    assert (planner["temperature"], planner["top_p"], planner["top_k"]) == (0.3, 0.9, 40)
+    assert (planner["temperature"], planner["top_p"], planner["top_k"]) == (0.3, 0.95, 64)
+    # Where the profile's own would be: the key order never moves.
+    assert list(planner)[:5] == ["model", "messages", "temperature", "top_p", "top_k"]
     for kw in ({"role": "narrator"}, {"role": "speaker"}, {}):
         other = _sent(provider, requests, **kw)
         assert (other["temperature"], other["top_p"], other["top_k"]) == (1.0, 0.95, 64)
 
 
-def test_a_provider_sampling_is_every_roles_unless_the_role_names_its_own() -> None:
+def test_a_profile_s_sampling_is_every_roles_unless_the_role_names_its_own() -> None:
     requests: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return _response({"content": "ok"})
-
-    provider = LlamaCppProvider(
-        "http://test/v1",
-        "gemma-4-26b-a4b",
-        client=httpx.Client(transport=httpx.MockTransport(handler)),
-        sampling=Sampling(temperature=0.5, top_p=0.9, top_k=40),
-    )
+    provider = _profiled("[sampling]\ntemperature = 0.5\ntop_p = 0.9\ntop_k = 40\n", requests)
     assert _sent(provider, requests, role="narrator")["temperature"] == 0.5
+
+
+def test_a_role_s_call_never_asks_for_more_than_its_phase_s_cap() -> None:
+    requests: list[httpx.Request] = []
+    provider = _profiled("[phases.narrator]\nmax_tokens = 200\n", requests)
+    assert _sent(provider, requests, role="narrator", max_tokens=300)["max_tokens"] == 200
+    assert _sent(provider, requests, role="narrator", max_tokens=100)["max_tokens"] == 100
+    assert _sent(provider, requests, role="narrator")["max_tokens"] == 200
+    # Another role, and a call with no role, keep what they asked for.
+    assert _sent(provider, requests, role="planner", max_tokens=1500)["max_tokens"] == 1500
+    assert _sent(provider, requests, max_tokens=300)["max_tokens"] == 300
+    assert "max_tokens" not in _sent(provider, requests)
+
+
+def test_a_profile_sends_only_the_sampling_it_sets() -> None:
+    requests: list[httpx.Request] = []
+    sent = _sent(_profiled("[sampling]\ntemperature = 0.3\n", requests), requests)
+    assert sent["temperature"] == 0.3
+    assert "top_p" not in sent and "top_k" not in sent
+
+
+def test_a_model_without_a_thinking_toggle_sends_no_template_kwargs() -> None:
+    requests: list[httpx.Request] = []
+    provider = _profiled('thinking_kwarg = ""\n', requests)
+    assert "chat_template_kwargs" not in _sent(provider, requests, enable_thinking=True)
+
+
+def test_a_profile_names_its_own_thinking_key() -> None:
+    requests: list[httpx.Request] = []
+    provider = _profiled('thinking_kwarg = "thinking"\n', requests)
+    sent = _sent(provider, requests, enable_thinking=True)
+    assert sent["chat_template_kwargs"] == {"thinking": True}
+
+
+def test_the_provider_loads_its_model_s_profile_by_name() -> None:
+    provider, _ = _provider(_ok({"content": "ok"}))
+    assert provider.profile is load_profile("gemma-4-12b")
 
 
 # --- the prompt cache (#152) -----------------------------------------------------------
@@ -327,7 +362,12 @@ def _streaming(
         "http://test/v1",
         "gemma-4-26b-a4b",
         client=client,
-        sampling=Sampling(temperature=0.5, top_p=0.9, top_k=40),
+        profile=parse_profile(
+            "gemma-4-26b-a4b",
+            'thinking_kwarg = "enable_thinking"\n'
+            "[sampling]\ntemperature = 0.5\ntop_p = 0.9\ntop_k = 40\n",
+            "test",
+        ),
         stream=True,
     )
     holder["provider"] = provider

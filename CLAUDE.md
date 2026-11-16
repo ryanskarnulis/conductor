@@ -81,6 +81,15 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   the canonical `../agent-standard/` file plus one header line — never edit in
   place; re-copy and run `check-sync.sh`. No prompt reads it since #75: the
   planner has no persona and the narrator's (`narrator.PERSONA`) is the voice.
+- **Model knowledge lives in profiles** (agent-standard#32): one TOML per
+  model in `app/ai/profiles/`, named for its llama-swap id: sampling, the
+  thinking kwarg, each role's cap and temperature (`planner`, `narrator`,
+  `speaker`), and `think`'s cap and thinking. The strict loader is vendored
+  (`app/ai/agentkit/model_profile.py`: re-copy and run `check-sync.sh`, never
+  edit); `app/ai/model_profile.py` holds conductor's phases. A model with no
+  file runs on the server's sampling, with a `model_profile_missing` warning.
+  `CONDUCTOR_PLANNER_TEMPERATURE` overrides the planner's for an A/B. A
+  profile edit moves request bytes (`tests/test_request_bytes.py`): eval gate.
 - **Routing hints live in the planner prompt** (`compiler.planner_prompt`,
   from manifest descriptions and `examples`), not tool docstrings. If plans
   degrade, tighten manifest `examples` first — a bigger model is the last
@@ -367,7 +376,7 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   (`app = "conductor"`) with what its inputs found, and code replies at once;
   the conversation never waits. The watcher hands it to the thinker:
   gemma-4-26b-a4b, thinking on, `json_schema` on the answer, its own prompt
-  and sampling. The answer is a **proposal**, validated like any plan (one
+  and profile. The answer is a **proposal**, validated like any plan (one
   repair) and tainted: it posts as the job's one note (`think_proposal`, the
   confirm card) and nothing in it runs without the person's yes. Yes runs it
   as a normal plan (gates and apps' questions still ask); no, an amend or
