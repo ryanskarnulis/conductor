@@ -357,13 +357,17 @@ class Runtime:
     ) -> None:
         """Record the finished turn; a write that fails never costs it. An
         incognito turn (#82) is never recorded: the trace holds its words."""
-        if self.tracer is None or incognito.active():
+        if incognito.active():
             return
-        try:
-            total_ms = round((time.monotonic() - started) * 1000)
-            self.tracer.write(trace.record(result, error=error, total_ms=total_ms))
-        except Exception as exc:
+
+        def failed(exc: Exception) -> None:
             logger.warning("agent_trace_failed", error=str(exc), error_type=type(exc).__name__)
+
+        def build() -> dict[str, Any]:
+            total_ms = round((time.monotonic() - started) * 1000)
+            return trace.record(result, error=error, total_ms=total_ms)
+
+        run_trace.write_record(self.tracer, build, failed=failed)
 
 
 def _answered_undo(call: ToolCall) -> list[int] | None:
