@@ -33,7 +33,6 @@ from typing import Any
 
 import pytest
 
-from app.ai import interpreter
 from app.ai.runtime import ToolCallRecord
 from tests.trajectory import (
     ANSWERS,
@@ -46,7 +45,6 @@ from tests.trajectory import (
     Observed,
     Step,
     Turn,
-    check_delegate_budget,
     check_every_app_write_has_a_receipt_row,
     check_every_app_write_is_recorded,
     check_every_record_has_one_answer,
@@ -155,14 +153,14 @@ def test_app_down_is_a_domain_error_and_the_run_completes(fleet: Path) -> None:
     assert not log[0].receipts
 
 
-def test_an_over_budget_plan_never_reaches_the_app(fleet: Path) -> None:
+def test_four_asks_to_one_app_run_to_the_end(fleet: Path) -> None:
+    # #218: no cap on asks to one app. The plan is taken first try and every
+    # step reaches the app.
     due = ask("tasks", "what's due today?")
     log = run_steps(fleet, [Step("go", plan(due, due, due, due))])
-    # The validator refuses a fourth ask to one app, every repair repeats it,
-    # and code hands it to a think (#146): nothing was asked (#75).
-    assert log[0].sends == {} and log[0].planner_calls == 3
-    assert log[0].run is not None
-    assert (log[0].run.reply or "").startswith(interpreter.UNPLANNED_THINKS)
+    assert log[0].planner_calls == 1
+    assert log[0].sends == {"tasks": 4}
+    assert log[0].run is not None and str(log[0].run.stop_reason) == "completed"
 
 
 def test_garbage_then_a_plan_is_repaired_and_runs(fleet: Path) -> None:
@@ -223,7 +221,6 @@ def test_every_invariant_can_fire(fleet: Path) -> None:
             clean,
             requests=[[{"role": "system"}, {"role": "tool", "content": "x"}, {"role": "user"}]],
         ),
-        check_delegate_budget: replace(clean, sends={"tasks": 4}),
         check_handoffs_ask_nothing: replace(clean, sends={"chess": 1}),
         check_every_app_write_is_recorded: replace(clean, saved_after=clean.saved_before),
         check_every_turn_is_on_the_ledger: replace(clean, ledger=None),

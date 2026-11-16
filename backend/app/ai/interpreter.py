@@ -56,8 +56,8 @@ it runs, across apps (#72):
 Independent reads (:func:`plans.reads_only`: asks to different apps, phrased
 as questions, no refs; and looks) that sit next to each other run at once, each in its
 own thread with the turn's context; everything else runs in order, one call
-at a time, so there is never more than one writer in flight. The per-app
-budget is charged under a lock and a Stop reaches every call in flight.
+at a time, so there is never more than one writer in flight. A Stop reaches
+every call in flight.
 
 A step that fails ends the plan: the steps after it are on the record as not
 run, and the narrator says so. In a parallel group the reads beside it have
@@ -358,7 +358,6 @@ class Interpreter:
         gate = paused if paused is not None and paused.reason in ("gate", "proposal") else None
         checks = plans.Checks(
             fleet=self._fleet,
-            calls_per_app=current_delegation_context().calls_per_turn_per_app,
             confirmable=pending is not None or gate is not None,
             resumable=paused is not None and paused.reason in ("ask_user", "app_question"),
             context=state.context or "",

@@ -236,8 +236,9 @@ Standing observations:
 - Descriptive safety rules don't bind a 12B: the confirm rule holds only in
   operational voice with a worked example (the harness caught unconfirmed
   delegation on its first run).
-- Same-app repeats within a turn are allowed by the goldens; the per-turn
-  budget (3) caps the worst case.
+- Same-app repeats within a turn are allowed by the goldens; the plan's
+  12-step ceiling caps the worst case (the per-app budget of 3 went with
+  #218).
 
 ## Session evals (#63)
 

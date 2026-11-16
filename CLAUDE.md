@@ -107,11 +107,11 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   on the asking thread); anything else lapses it. For an `ask_` app without
   the flag, code's gate asks first (a `destructive` ask pauses on it). `open_`
   apps confirm their own resets; "resign the game" is a plain handoff.
-- **Delegate calls are budgeted** (3 per app per turn: the validator sends a
-  plan over it back, counting only an app's own asks: a part that is another
-  app's manifest example, "sort my music" asked of tasks, goes back to that
-  app instead, #186; the tool refuses past it) and every one emits a
-  `delegate_call` structlog event; never raw transcripts into a model's
+- **Asks to one app have no cap of their own** (#218): the plan says what
+  will run, and its 12-step ceiling is the runaway stop. A part of an ask
+  that is another app's manifest example ("sort my music" asked of tasks)
+  goes back to that app (#186). Every delegate call emits a `delegate_call`
+  structlog event; never raw transcripts into a model's
   context.
 - **No chat turns are replayed** (#64). Each turn's one user message opens
   with the state block (`app/ai/state_block.py`: calendar, surface, panel,
@@ -395,8 +395,7 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   and retried after 60 s with no turn, 3 tries, then code's honest "couldn't
   finish". Never claim a proposal that wasn't made.
 - **STANDARD.md §3's safety nets, without the loop** (#75): `max_tokens` on
-  every model call, the plan's 12-step ceiling, the per-app delegate budget
-  and the stop vocabulary; depth stays 1 (a step is one app call). The loop's
+  every model call, the plan's 12-step ceiling and the stop vocabulary; depth stays 1 (a step is one app call). The loop's
   iteration, stall and 12-call caps went with it (#111). A stop short of
   `completed` replies from the code-kept record, and a failed turn is stored
   with its plan before the route answers 502/500, so a write never vanishes

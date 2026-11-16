@@ -220,8 +220,8 @@ the tasks already there or add new ones, each on its day. Each ask hands one \
 self-contained request to an app's agent, in plain words, the way the person \
 would say it; the app knows its own names. Put several things for one app in \
 one request, one per line, each line one whole change with its weekday and \
-date from the calendar ("- move sweep the floor to Friday 2026-11-13"). At \
-most 3 asks per app. Set "destructive" to true only when the request deletes, \
+date from the calendar ("- move sweep the floor to Friday 2026-11-13"). \
+Set "destructive" to true only when the request deletes, \
 wipes or trashes something.
 - Steps is empty only when the problem asks for advice, not a plan \
 (weighing options, a recommendation): then the summary is your answer. A \

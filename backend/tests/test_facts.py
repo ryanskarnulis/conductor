@@ -451,7 +451,7 @@ def test_memory_with_no_app_fails_the_step_honestly(fleet: Fleet, world: World) 
         [plan_turn(steps(ask("memory", "remember x"))), text_turn("I couldn't.")]
     )
     conductor = Interpreter(provider, fleet, narrate=True, glance=FakeGlances())
-    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore())):
         result = conductor.run("remember x")
     assert result.tool_calls[0].error == "couldn't reach memory: it isn't available here"
 
@@ -647,7 +647,7 @@ def test_memory_that_cant_be_read_never_costs_the_ask(fleet: Fleet, world: World
         [plan_turn(steps(ask("tasks", SORTING_DAY))), text_turn("Added it.")]
     )
     conductor = Interpreter(provider, fleet, narrate=True, glance=FakeGlances())
-    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore())):
         result = conductor.run(SORTING_DAY, saved_facts=broken)
     assert result.tool_calls[0].arguments == {"message": SORTING_DAY}
     assert result.tool_calls[0].error is None
@@ -671,7 +671,7 @@ def test_parallel_reads_carry_their_facts_too(fleet: Fleet, world: World) -> Non
         ]
     )
     conductor = Interpreter(provider, fleet, narrate=True, glance=FakeGlances())
-    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore())):
         result = conductor.run("what's due on my sorting day?", saved_facts=lambda: [SUNDAYS])
     tasks_call, music_call = result.tool_calls
     assert tasks_call.arguments[facts.ARGUMENT] == [SUNDAYS]

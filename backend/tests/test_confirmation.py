@@ -150,9 +150,7 @@ def _factory(client: FakeClient) -> Callable[[FleetApp], FakeClient]:
 
 @pytest.fixture
 def context() -> Generator[DelegationContext, None, None]:
-    bound = DelegationContext(
-        master_conversation_id="m1", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
-    )
+    bound = DelegationContext(master_conversation_id="m1", thread_store=InMemoryThreadStore())
     with use_delegation_context(bound):
         yield bound
 

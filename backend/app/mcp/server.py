@@ -65,7 +65,6 @@ def setup() -> Fleet:
         DelegationContext(
             master_conversation_id="mcp",
             thread_store=InMemoryThreadStore(),
-            calls_per_turn_per_app=0,  # disabled: the driver is the trusted MCP host
             driver=MCP_DRIVER,
         )
     )

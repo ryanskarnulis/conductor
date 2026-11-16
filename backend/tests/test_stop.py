@@ -54,9 +54,7 @@ def _tasks_fleet() -> Fleet:
 
 @pytest.fixture
 def delegation() -> Generator[DelegationContext, None, None]:
-    context = DelegationContext(
-        master_conversation_id="m1", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
-    )
+    context = DelegationContext(master_conversation_id="m1", thread_store=InMemoryThreadStore())
     with use_delegation_context(context):
         yield context
 
@@ -304,7 +302,6 @@ def test_a_stopped_run_never_starts_a_delegate_call(delegation: DelegationContex
     with use_stop(stop), pytest.raises(ToolError, match=STOPPED_ERROR):
         registry.get_tool("ask_tasks").fn(message="book the dentist")
     assert fake.sent == 0
-    assert delegation._calls_this_turn == {}  # never charged the budget
 
 
 # --- the client ---------------------------------------------------------------------------

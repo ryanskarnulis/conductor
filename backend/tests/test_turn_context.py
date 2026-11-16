@@ -270,7 +270,7 @@ def test_the_planner_reads_the_view_and_the_validator_the_whole_opening(tmp_path
     provider = ScriptedProvider(
         [text_turn(json.dumps({"answer": "knowledge"})), _plan_ask("tasks", _DUE)]
     )
-    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore())):
         Interpreter(provider, _fleet(tmp_path)).run(_DUE, context=opening)
     first = provider.requests[0]["messages"][1]["content"]
     assert first == f"{turn_context.for_planner(opening, _DUE)}\n\nThe person said: {_DUE}"
@@ -398,9 +398,9 @@ def test_a_turn_has_one_prompt_prefix_and_the_system_prompt_never_moves(
         ]
     )
     conductor = Interpreter(provider, _fleet(tmp_path))
-    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore())):
         conductor.run("note two things", context="[State]\nToday: x")
-    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore())):
         conductor.run("and again", context="[State]\nToday: y")
 
     first_turn = provider.requests[:2]

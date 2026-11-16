@@ -143,9 +143,7 @@ def delegation(monkeypatch: pytest.MonkeyPatch) -> Iterator[DelegationContext]:
     # A throwaway logger proxy, so these delegate_call audits never pin the
     # module's cached one for later capture_logs tests (see test_tracing).
     monkeypatch.setattr(fleet_context, "logger", structlog.get_logger(fleet_context.__name__))
-    context = DelegationContext(
-        master_conversation_id="7", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
-    )
+    context = DelegationContext(master_conversation_id="7", thread_store=InMemoryThreadStore())
     with use_delegation_context(context):
         yield context
 

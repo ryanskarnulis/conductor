@@ -29,8 +29,6 @@ Contract behaviors live here, not in the client:
 - **Typed delegate faults → domain errors.** Rate-limit, unavailable, outcome-unknown, protocol,
   and double-404 all become informative :class:`ToolError` s (the model reads
   them and adapts); a 429 surfaces its ``Retry-After`` and is never auto-retried.
-- **Budget.** The per-turn per-app call is charged before the request, so an
-  over-budget call never leaves conductor.
 - **Delegate v1.1 (#67).** Each ``ask`` step mints one ``Idempotency-Key``
   (on the hop; every message of the step carries it). A connection that drops
   after the message went out is retried once under that key, so the app
@@ -337,8 +335,6 @@ def _delegate(
     if stop is not None and stop.is_set():
         raise ToolError(STOPPED_ERROR)
     context = current_delegation_context()
-    # Charge the budget before any network work; over-budget never leaves here.
-    context.charge_call(app.name)
 
     # One hop per delegate call (#62): its ids ride every request to the app,
     # and what came back lands on the turn's trace.

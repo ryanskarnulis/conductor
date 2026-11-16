@@ -117,7 +117,7 @@ def test_no_meaning_is_words_alone(
 def _run(fleet: Fleet, *items: dict[str, Any], meaning: Any = fact_meaning.nearest) -> Any:  # noqa: F811
     provider = ScriptedProvider([plan_turn(steps(*items)), text_turn("Done.")])
     conductor = Interpreter(provider, fleet, narrate=True, glance=FakeGlances())
-    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore())):
         return conductor.run(ALBUMS, saved_facts=lambda: [KEY, SUNDAYS], fact_meaning=meaning)
 
 
