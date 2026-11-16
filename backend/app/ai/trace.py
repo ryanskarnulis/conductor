@@ -32,17 +32,21 @@ in ``docs/agent-tracing.md``.
 from __future__ import annotations
 
 import contextvars
-import hashlib
-import json
-import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal
 
+# Re-exported: the fleet's trace writer, vendored (agent-standard/agentkit).
+from app.ai.agentkit.trace import (
+    JsonlTracer as JsonlTracer,
+    Tracer as Tracer,
+    new_run_id as new_run_id,
+    sha256 as sha256,
+    write_record as write_record,
+)
 from app.config import get_settings
 
 if TYPE_CHECKING:
@@ -62,17 +66,8 @@ CallStatus = Literal["ok", "truncated", "bad_args", "failed"]
 CallRole = Literal["planner", "narrator", "compiler", "speaker"]
 
 
-def new_run_id() -> str:
-    """A fresh turn id: full uuid4 hex, unique across processes."""
-    return uuid.uuid4().hex
-
-
 def new_hop_id() -> str:
     return uuid.uuid4().hex[:16]
-
-
-def sha256(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -234,31 +229,6 @@ def hop(app: str) -> Iterator[Hop]:
 
 def current_hop() -> Hop | None:
     return _CURRENT_HOP.get()
-
-
-class Tracer(Protocol):
-    """Whatever records a finished turn. Free to fail: the runtime swallows it."""
-
-    def write(self, record: dict[str, Any]) -> None: ...
-
-
-# Turns on different conversations finish concurrently in worker threads; two
-# appends must never interleave inside one line.
-_WRITE_LOCK = threading.Lock()
-
-
-@dataclass(frozen=True)
-class JsonlTracer:
-    """Appends each turn to a JSONL file, newest last, one line per turn."""
-
-    path: Path
-
-    def write(self, record: dict[str, Any]) -> None:
-        line = json.dumps(record, default=str, ensure_ascii=False)
-        with _WRITE_LOCK:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
 
 
 def tracer_from_settings() -> Tracer | None:
