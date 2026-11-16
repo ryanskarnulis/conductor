@@ -51,7 +51,7 @@ from app.config import get_settings
 
 if TYPE_CHECKING:
     from app.ai.runtime import AgentRunResult
-    from app.ai.provider import Usage
+    from app.ai.provider import ServerStamp, Usage
 
 # The record layout's version; bump it on any change a reader must branch on.
 # 2 (#75): the loop's ``history``, ``iterations``, ``corrections``, ``limits``
@@ -89,12 +89,14 @@ class ModelCall:
     tool_calls: int = 0
     failure: str = ""
 
-    def meter(self, usage: Usage | None) -> None:
+    def meter(self, usage: Usage | None, server: ServerStamp | None) -> None:
+        """The call's counts, and the prefill time from the server's stamp.
+        A call the server sent no ``usage`` for records neither."""
         if usage is not None:
             self.prompt_tokens = usage.prompt_tokens
             self.completion_tokens = usage.completion_tokens
             self.cached_tokens = usage.cached_tokens
-            self.prefill_ms = usage.prefill_ms
+            self.prefill_ms = None if server is None else server.prefill_ms
 
     def as_trace(self, seq: int) -> dict[str, Any]:
         return {"seq": seq, **asdict(self)}

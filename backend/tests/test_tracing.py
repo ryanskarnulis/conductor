@@ -297,6 +297,61 @@ def test_a_trace_records_each_calls_cache_hit_and_prefill_time(
     assert record["cached_tokens"] == 800
 
 
+def test_one_server_response_makes_one_call_entry(
+    tmp_path: Path, delegation: DelegationContext
+) -> None:
+    """A fixed llama-server body through the real provider: the call's entry,
+    field for field. The cache hit is ``timings.cache_n`` (not OpenAI's
+    count beside it) and the prefill time ``timings.prompt_ms``."""
+    body = json.dumps(
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": json.dumps(_PLAN)},
+                    "finish_reason": "stop",
+                }
+            ],
+            "model": "gemma-4-12b-it-Q4_K_M.gguf",
+            "system_fingerprint": "b9935-abc",
+            "usage": {
+                "prompt_tokens": 900,
+                "completion_tokens": 20,
+                "total_tokens": 920,
+                "prompt_tokens_details": {"cached_tokens": 5},
+            },
+            "timings": {
+                "cache_n": 800,
+                "prompt_n": 100,
+                "prompt_ms": 42.5,
+                "predicted_n": 20,
+                "predicted_ms": 310.25,
+            },
+        }
+    )
+    path = tmp_path / "trace.jsonl"
+    Interpreter(
+        _provider_over([body], []), _tasks_fleet(_TasksApp()), tracer=run_trace.JsonlTracer(path)
+    ).run("add a task to pay rent", conversation_id="7")
+
+    [record] = _records(path)
+    [call] = record["calls"]
+    assert isinstance(call.pop("ms"), int)
+    assert call == {
+        "seq": 0,
+        "role": "compiler",
+        "status": "ok",
+        "prompt_tokens": 900,
+        "completion_tokens": 20,
+        "cached_tokens": 800,
+        "prefill_ms": 42.5,
+        "finish_reason": "stop",
+        "tool_calls": 0,
+        "failure": "",
+    }
+    assert record["cached_tokens"] == 800
+
+
 def test_each_role_samples_as_its_own_profile_by_default(
     tmp_path: Path, delegation: DelegationContext
 ) -> None:

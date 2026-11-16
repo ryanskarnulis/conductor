@@ -228,7 +228,7 @@ class Runtime:
             call.status = "truncated" if result.finish_reason == _FINISH_LENGTH else "ok"
             call.finish_reason = result.finish_reason
             call.tool_calls = len(result.tool_calls)
-            call.meter(result.usage)
+            call.meter(result.usage, result.server)
             return result
         finally:
             call.ms = round((time.monotonic() - started) * 1000)

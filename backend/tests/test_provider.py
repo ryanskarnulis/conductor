@@ -16,6 +16,9 @@ import pytest
 
 from app.ai.model_profile import load_profile, parse_profile
 from app.ai.provider import (
+    ChatResult,
+    ProviderError,
+    ProviderFailure,
     ProviderRequestError,
     ProviderResponseError,
     ToolCallArgumentsError,
@@ -141,6 +144,25 @@ def test_non_200_status_becomes_provider_request_error() -> None:
     provider, _ = _provider(lambda _r: httpx.Response(503, text="unavailable"))
     with pytest.raises(ProviderRequestError, match="503"):
         provider.chat([{"role": "user", "content": "hi"}])
+
+
+def test_an_error_says_whether_asking_again_could_work() -> None:
+    def failure(handler: _Handler) -> ProviderFailure:
+        provider, _ = _provider(handler)
+        with pytest.raises(ProviderError) as exc_info:
+            provider.chat([{"role": "user", "content": "hi"}])
+        return exc_info.value.failure
+
+    def refused(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    assert failure(refused) is ProviderFailure.UNREACHABLE
+    assert failure(lambda _r: httpx.Response(503, text="loading")) is ProviderFailure.SERVER_ERROR
+    assert failure(lambda _r: httpx.Response(400, text="too long")) is ProviderFailure.REJECTED
+    assert (
+        failure(lambda _r: httpx.Response(200, json={"choices": []}))
+        is ProviderFailure.MALFORMED_RESPONSE
+    )
 
 
 def test_invalid_wire_body_becomes_provider_response_error() -> None:
@@ -281,6 +303,11 @@ _USAGE = {
 _TIMINGS = {"cache_n": 7, "prompt_n": 12, "prompt_ms": 105.135, "predicted_n": 8}
 
 
+def _prefill(result: ChatResult) -> float | None:
+    """The prefill time, where it lives now: the server's stamp."""
+    return None if result.server is None else result.server.prefill_ms
+
+
 def _answering(**extra: Any) -> LlamaCppProvider:
     body = {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], **extra}
     provider, _ = _provider(lambda _request: httpx.Response(200, json=body))
@@ -292,7 +319,7 @@ def test_a_call_carries_cached_tokens_and_prefill_time() -> None:
     assert result.usage is not None
     assert (result.usage.prompt_tokens, result.usage.completion_tokens) == (19, 8)
     assert result.usage.cached_tokens == 7
-    assert result.usage.prefill_ms == 105.135
+    assert _prefill(result) == 105.135
 
 
 def test_a_total_miss_is_a_measured_zero() -> None:
@@ -315,6 +342,8 @@ def test_a_total_miss_is_a_measured_zero() -> None:
         ({"usage": {**_USAGE, "prompt_tokens_details": "x"}, "timings": "x"}, None, None),
         ({"usage": _USAGE, "timings": {"cache_n": None, "prompt_ms": "fast"}}, 7, None),
         ({"usage": _USAGE, "timings": {"cache_n": True, "prompt_ms": False}}, 7, None),
+        # A negative count or time is not a measurement (the vendored reader).
+        ({"usage": _USAGE, "timings": {"cache_n": -1, "prompt_ms": -5.0}}, 7, None),
     ],
 )
 def test_missing_or_odd_cache_fields_never_break_a_call(
@@ -326,7 +355,7 @@ def test_missing_or_odd_cache_fields_never_break_a_call(
         assert result.usage is None
     else:
         assert result.usage is not None
-        assert (result.usage.cached_tokens, result.usage.prefill_ms) == (cached, prefill)
+        assert (result.usage.cached_tokens, _prefill(result)) == (cached, prefill)
 
 
 def test_a_streamed_call_carries_the_cache_figures_from_its_last_chunk() -> None:
@@ -337,7 +366,7 @@ def test_a_streamed_call_carries_the_cache_figures_from_its_last_chunk() -> None
     provider, _ = _streaming(lambda _p: iter(chunks))
     result = provider.chat([{"role": "user", "content": "hi"}])
     assert result.usage is not None
-    assert (result.usage.cached_tokens, result.usage.prefill_ms) == (7, 105.135)
+    assert (result.usage.cached_tokens, _prefill(result)) == (7, 105.135)
 
 
 # --- the think lane's streamed calls (#78) ---------------------------------------------
