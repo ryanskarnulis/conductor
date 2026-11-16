@@ -422,16 +422,10 @@ class StreamedTurn:
             if choice.get("finish_reason"):
                 self.finish_reason = choice["finish_reason"]
             delta = choice.get("delta") or {}
+            if not isinstance(delta, dict):
+                raise ProviderResponseError("llama-server stream delta is not an object")
             for part in delta.get("tool_calls") or []:
-                self.first = self.first or "tool_calls"
-                call = self.calls.setdefault(
-                    int(part.get("index", len(self.calls))),
-                    {"id": "", "function": {"name": "", "arguments": ""}},
-                )
-                call["id"] = part.get("id") or call["id"]
-                function = part.get("function") or {}
-                call["function"]["name"] += function.get("name") or ""
-                call["function"]["arguments"] += function.get("arguments") or ""
+                self._add_call(part)
             reasoning = delta.get("reasoning_content")
             if isinstance(reasoning, str):
                 self.reasoning += reasoning
@@ -440,6 +434,27 @@ class StreamedTurn:
                 self.content += text
                 if text.strip():
                     self.first = self.first or "content"
+
+    def _add_call(self, part: Any) -> None:
+        """One piece of a tool call: its id and name once, its arguments in parts."""
+        function = part.get("function") or {} if isinstance(part, dict) else None
+        if not isinstance(function, dict):
+            raise ProviderResponseError("llama-server stream tool call is not an object")
+        index = part.get("index", len(self.calls))
+        name, arguments, call_id = function.get("name"), function.get("arguments"), part.get("id")
+        if (
+            isinstance(index, bool)
+            or not isinstance(index, int)
+            or not isinstance(name, str | None)
+            or not isinstance(arguments, str | None)
+            or not isinstance(call_id, str | None)
+        ):
+            raise ProviderResponseError("llama-server stream tool call is malformed")
+        self.first = self.first or "tool_calls"
+        call = self.calls.setdefault(index, {"id": "", "function": {"name": "", "arguments": ""}})
+        call["id"] = call_id or call["id"]
+        call["function"]["name"] += name or ""
+        call["function"]["arguments"] += arguments or ""
 
     def completion(self) -> WireCompletion:
         """The turn so far, validated as a plain call's body is."""
