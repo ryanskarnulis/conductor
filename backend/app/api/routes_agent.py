@@ -56,7 +56,6 @@ from app.ai.providers.llamacpp import provider_from_settings
 from app.ai.state_block import Now
 from app.api import turn_activity
 from app.api.rate_limit import rate_limit
-from app.config import get_settings
 from app.db.models import Conversation, ConversationMessage
 from app.db.session import SessionLocal, get_db
 from app.fleet.context import DelegationContext, ThreadStore, use_delegation_context
@@ -593,8 +592,7 @@ def post_message(
     state block and recall (:mod:`app.ai.turn_context`), built before the user
     turn is stored, so it is "before this turn". The
     delegation context is bound for exactly the run: the DB-backed thread
-    store keyed by this conversation, the per-turn per-app call budget, and
-    the ``agent:loop`` audit driver. The ledger (#69) opens the turn with the
+    store keyed by this conversation and the ``agent:loop`` audit driver. The ledger (#69) opens the turn with the
     user message and closes it with the assistant turn, in the same commits.
 
     An ``incognito`` turn (#82) runs the same, but its words and reply are
@@ -659,7 +657,6 @@ def _post_message(
         # starts a fresh one, as it did for a new conversation (#82).
         master_conversation_id=conversations_service.thread_key(db, conversation.id, since),
         thread_store=thread_store,
-        calls_per_turn_per_app=get_settings().conductor_delegate_calls_per_turn_per_app,
         # Only a question the person saw last turn can take a yes (#68).
         pending_confirm=confirmation.pending(turns),
     )

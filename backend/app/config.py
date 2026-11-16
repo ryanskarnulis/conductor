@@ -173,11 +173,6 @@ class Settings(BaseSettings):
     # bound on the host.
     fleet_upstream_host: str = ""
 
-    # Per-turn ceiling on how many times conductor may call any one app's
-    # delegate tool within a single turn. The validator sends a plan over it
-    # back for one request (#70); the tool also refuses past it.
-    conductor_delegate_calls_per_turn_per_app: int = 3
-
 
 @lru_cache
 def get_settings() -> Settings:

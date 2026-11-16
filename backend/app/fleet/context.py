@@ -1,8 +1,8 @@
-"""Per-run delegation state: the thread map, the call budget, and the audit hook.
+"""Per-run delegation state: the thread map and the audit hook.
 
 A :class:`DelegationContext` is bound (via a contextvar or, for the MCP server,
 a process-global fallback) around a conductor turn. The ``ask_<app>``
-tools read it to answer three questions:
+tools read it for two things:
 
 - **Which subagent thread should this app's call reuse?** The context holds a
   :class:`ThreadStore` keyed by ``(master_conversation_id, app_name)`` so a
@@ -11,10 +11,6 @@ tools read it to answer three questions:
   binds the DB-backed :class:`app.fleet.thread_store.DbThreadStore`, the MCP
   server a process-lifetime :class:`InMemoryThreadStore` — nothing else
   changes between them.
-- **Have we called this app too many times this turn?** A per-run, per-app
-  counter enforces ``conductor_delegate_calls_per_turn_per_app``; exceeding it
-  raises :class:`ToolError`, a domain error the model sees so it stops
-  retrying one app and moves on.
 - **Audit.** Every delegate call — success or failure — emits one structlog
   ``delegate_call`` event (app, subagent thread id, latency, and either the
   stop reason or the error class), tagged with the driver identity.
@@ -32,7 +28,6 @@ from typing import Protocol
 import structlog
 
 from app.ai.confirmation import PendingConfirm
-from app.tools.registry import ToolError
 
 logger = structlog.get_logger(__name__)
 
@@ -86,19 +81,15 @@ class DelegationContext:
 
     master_conversation_id: str
     thread_store: ThreadStore
-    # Per-turn per-app cap; <= 0 disables the budget (used by the MCP server,
-    # whose driver is itself a trusted agent, not conductor's own turns).
-    calls_per_turn_per_app: int
     # Conductor's own audit tag for this run's driver.
     driver: str = LOOP_DRIVER
     # The question the last turn left waiting (#68), read from the stored turns
     # before this one, so a yes can only answer a question the person has
     # seen. A question asked during this run is never here.
     pending_confirm: PendingConfirm | None = None
-    _calls_this_turn: dict[str, int] = field(default_factory=dict)
     # A compiled plan's parallel reads (#72) run delegate calls from several
-    # threads: the budget and the thread store are touched one at a time (the
-    # store's DB work is a few short statements; only the network runs at once).
+    # threads: the thread store is touched one at a time (its DB work is a few
+    # short statements; only the network runs at once).
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def thread_for(self, app_name: str) -> int | None:
@@ -113,25 +104,6 @@ class DelegationContext:
         with self._lock:
             self.thread_store.forget(self.master_conversation_id, app_name)
 
-    def charge_call(self, app_name: str) -> None:
-        """Count one delegate call to ``app_name`` this turn; enforce the budget.
-
-        Called before the network request. Raises :class:`ToolError` (a domain
-        error the model reads) once the per-turn cap is reached, so the failed
-        attempt never leaves conductor.
-        """
-        if self.calls_per_turn_per_app <= 0:
-            return
-        with self._lock:
-            used = self._calls_this_turn.get(app_name, 0)
-            if used >= self.calls_per_turn_per_app:
-                raise ToolError(
-                    f"You've already asked {app_name} {used} time(s) this turn — that's the "
-                    f"per-turn limit. Stop retrying {app_name}; either try a different app or "
-                    f"tell the user what you found so far."
-                )
-            self._calls_this_turn[app_name] = used + 1
-
     def take_pending_confirm(self, app_name: str) -> PendingConfirm | None:
         """The waiting question if it is ``app_name``'s; used at most once."""
         pending = self.pending_confirm
@@ -139,10 +111,6 @@ class DelegationContext:
             return None
         self.pending_confirm = None
         return pending
-
-    def reset_turn(self) -> None:
-        """Clear the per-turn call counters (a fresh turn)."""
-        self._calls_this_turn.clear()
 
     def audit_delegate_call(
         self,

@@ -174,7 +174,6 @@ def bound_context() -> Generator[DelegationContext, None, None]:
     context = DelegationContext(
         master_conversation_id="m1",
         thread_store=InMemoryThreadStore(),
-        calls_per_turn_per_app=3,
     )
     with use_delegation_context(context):
         yield context
@@ -255,14 +254,13 @@ def test_open_tool_truncates_an_overlong_intent() -> None:
     assert payload["intent"] == "x" * MAX_INTENT_LENGTH
 
 
-def test_open_tool_makes_no_delegate_call_and_charges_no_budget(
+def test_open_tool_makes_no_delegate_call(
     bound_context: DelegationContext,
 ) -> None:
     log: list[tuple[object, ...]] = []
     build_delegate_tools(_fleet(), _factory(FakeClient(log)))
 
-    # Well past the per-app budget of 3 — a handoff asks the app for nothing,
-    # so there is nothing to rate-limit and no thread to keep.
+    # A handoff asks the app for nothing, so there is no thread to keep.
     for _ in range(5):
         _open("open_arcade", intent="fire up the arcade")
 
@@ -534,35 +532,6 @@ def test_oversized_message_is_rejected_before_any_network_call(
     assert log == []
 
 
-# --- per-turn budget -----------------------------------------------------------
-
-
-def test_per_turn_budget_exhaustion_raises_tool_error(
-    bound_context: DelegationContext,
-) -> None:
-    # calls_per_turn_per_app=3 (fixture): the 4th call to one app is blocked.
-    build_delegate_tools(_fleet(), _factory(FakeClient([])))
-
-    for _ in range(3):
-        _ask("ask_chess", "again")
-    with pytest.raises(ToolError, match="per-turn limit"):
-        _ask("ask_chess", "again")
-    # A different app is unaffected by chess's budget.
-    _ask("ask_tasks", "what's due")
-
-
-def test_budget_zero_disables_the_limit() -> None:
-    context = DelegationContext(
-        master_conversation_id="mcp",
-        thread_store=InMemoryThreadStore(),
-        calls_per_turn_per_app=0,
-    )
-    build_delegate_tools(_fleet(), _factory(FakeClient([])))
-    with use_delegation_context(context):
-        for _ in range(10):
-            _ask("ask_chess", "again")  # never blocked
-
-
 # --- audit ---------------------------------------------------------------------
 
 
@@ -637,7 +606,6 @@ def test_a_plan_delegates_via_context_and_keeps_the_reply() -> None:
     context = DelegationContext(
         master_conversation_id="master-1",
         thread_store=InMemoryThreadStore(),
-        calls_per_turn_per_app=3,
     )
     with use_delegation_context(context):
         result = conductor.run("play e4 in chess")

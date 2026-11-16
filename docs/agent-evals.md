@@ -236,8 +236,9 @@ Standing observations:
 - Descriptive safety rules don't bind a 12B: the confirm rule holds only in
   operational voice with a worked example (the harness caught unconfirmed
   delegation on its first run).
-- Same-app repeats within a turn are allowed by the goldens; the per-turn
-  budget (3) caps the worst case.
+- Same-app repeats within a turn are allowed by the goldens; the plan's
+  12-step ceiling caps the worst case (the per-app budget of 3 went with
+  #218).
 
 ## Session evals (#63)
 
@@ -2448,3 +2449,36 @@ labelled. On the final code, n=20: BI1 20/20, BI3 20/20. The full session
 run was not repeated on the final code; it changes strictly less than the
 version that was run.
 
+
+## No cap on asks to one app (#218, 2026-11-16)
+
+The per-app delegate budget (3 calls per turn) is gone from the validator and
+the delegate tool; the plan's 12-step ceiling is the runaway stop. The think
+prompt lost its "at most 3 asks per app".
+
+Plan-level evals (n=20, gemma-4-12b, 1889 s), score and first try:
+
+| group | floor | this run | before (#198) |
+|---|---|---|---|
+| golden | 0.8 | 400, 400 /420 | 400, 400 |
+| cross | 0.8 | 155, 104 /160 | 157, 109 |
+| ref | 0.85 | 79, 79 /80 | 77, 76 |
+| control | 0.8 | 300, 211 /300 | 300, 215 |
+| memory | 0.8 | 310, 300 /320 | 315, 310 |
+| knowledge | 0.65 | 60, 60 /60 | 60, 60 |
+| hard | 0.5 | 20, 20 /20 | 19, 19 |
+| self | 0.55 | 99, 97 /100 | 99, 95 |
+| mixed | 0.85 | 200, 179 /200 | 200, 180 |
+| long | 0.7 | 160, 155 /160 | 160, 157 |
+| stale | 0.8 | 100, 100 /100 | 100, 100 |
+
+Every group is over its floor. `long-cleanup`, the case the budget repair was
+tuned on (#186), stays 20/20: its misroute check stands without the budget.
+
+Session evals (full run, 931 s, infra 0): every gate scenario 5/5 but S6 and
+T1 4/5; frontier S13 0/5 (the brief, as before) and S14 4/5 as before, BI1
+and BI2 4/5, the rest 5/5.
+
+No real plan has needed more than three asks to one app yet, and none has
+come near the 12-step ceiling (max 6 steps in the `long` group); that half of
+#218 waits on the deployed ledger.

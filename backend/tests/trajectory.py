@@ -1,6 +1,6 @@
 """Seeded random walks through conductor's route, interpreter and delegate tools (#53).
 
-The unit tests drive one feature each: one provider death, one over-budget
+The unit tests drive one feature each: one provider death, one long
 plan, one repair. The combinations nobody wrote a test for — an app that dies
 mid-write in the second step of a cross-app plan, a provider death on the
 narrator after a write, a Stop during an undo split off a longer plan — are
@@ -712,14 +712,6 @@ def check_history_is_text_only(observed: Observed) -> None:
                 )
 
 
-def check_delegate_budget(observed: Observed) -> None:
-    """No app is asked more than the per-turn budget."""
-    cap = get_settings().conductor_delegate_calls_per_turn_per_app
-    over = {app_name: n for app_name, n in observed.sends.items() if n > cap}
-    if over:
-        raise InvariantBreach("delegate_budget", f"sends {over} over the cap {cap}")
-
-
 def check_handoffs_ask_nothing(observed: Observed) -> None:
     """``open_`` apps are handed the person, never asked."""
     if observed.sends.get("chess"):
@@ -865,7 +857,6 @@ INVARIANTS: tuple[Callable[[Observed], None], ...] = (
     check_every_record_has_one_answer,
     check_saved_turn_is_what_ran,
     check_history_is_text_only,
-    check_delegate_budget,
     check_handoffs_ask_nothing,
     check_every_app_write_is_recorded,
     check_every_turn_is_on_the_ledger,

@@ -91,9 +91,7 @@ class _Client:
 
 @pytest.fixture
 def bound() -> Generator[None, None, None]:
-    context = DelegationContext(
-        master_conversation_id="m1", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
-    )
+    context = DelegationContext(master_conversation_id="m1", thread_store=InMemoryThreadStore())
     with use_delegation_context(context):
         yield
 

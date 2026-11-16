@@ -14,7 +14,6 @@ from app.fleet.context import (
     set_process_delegation_context,
     use_delegation_context,
 )
-from app.tools.registry import ToolError
 
 
 @pytest.fixture(autouse=True)
@@ -26,11 +25,10 @@ def _clear_process_default() -> Generator[None, None, None]:
         set_process_delegation_context(None)
 
 
-def _context(budget: int = 3) -> DelegationContext:
+def _context() -> DelegationContext:
     return DelegationContext(
         master_conversation_id="m1",
         thread_store=InMemoryThreadStore(),
-        calls_per_turn_per_app=budget,
     )
 
 
@@ -43,29 +41,6 @@ def test_thread_store_is_keyed_by_master_and_app() -> None:
     assert store.get("m1", "tasks") is None
     store.forget("m1", "chess")
     assert store.get("m1", "chess") is None
-
-
-def test_charge_call_enforces_the_per_turn_budget() -> None:
-    context = _context(budget=2)
-    context.charge_call("chess")
-    context.charge_call("chess")
-    with pytest.raises(ToolError, match="per-turn limit"):
-        context.charge_call("chess")
-    # A different app has its own budget.
-    context.charge_call("tasks")
-
-
-def test_reset_turn_clears_the_counters() -> None:
-    context = _context(budget=1)
-    context.charge_call("chess")
-    context.reset_turn()
-    context.charge_call("chess")  # allowed again after reset
-
-
-def test_zero_budget_never_charges() -> None:
-    context = _context(budget=0)
-    for _ in range(50):
-        context.charge_call("chess")
 
 
 def test_no_bound_context_raises() -> None:

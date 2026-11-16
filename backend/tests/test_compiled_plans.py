@@ -118,7 +118,8 @@ def test_the_validator_refuses_what_code_wont_run(fleet: Fleet) -> None:
         steps({"do": "confirm", "answer": "yes"}), fleet, context="Waiting on the person: x"
     ) == ["confirm with nothing waiting on the person"]
     assert _problems(steps({"do": "confirm", "answer": "yes"}), fleet, confirmable=True) == []
-    assert "at most 3 per turn" in _problems(steps(*[ask("tasks", "x")] * 4), fleet)[0]
+    # No cap on asks to one app (#218): the plan says what will run.
+    assert _problems(steps(*[ask("tasks", "x")] * 4), fleet) == []
     invented = steps({"do": "ask_user", "question": "which?", "options": ["Call Dennis"]})
     assert "which State doesn't name" in _problems(invented, fleet, context="dentist")[0]
     assert _problems(invented, fleet, context='"Call Dennis" (pcc:task:9)') == []
@@ -1233,9 +1234,7 @@ def test_the_ack_goes_out_before_any_app_is_asked(fleet: Fleet, world: World) ->
         [plan_turn(steps(ask("tasks", "add a task to water the plants"))), text_turn("Added.")]
     )
     conductor = Interpreter(provider, fleet, narrate=True)
-    context = DelegationContext(
-        master_conversation_id="1", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
-    )
+    context = DelegationContext(master_conversation_id="1", thread_store=InMemoryThreadStore())
     with use_delegation_context(context):
         result = conductor.run("add a task to water the plants", on_activity=beats.append)
     acked = [i for i, beat in enumerate(beats) if beat.ack]
@@ -1560,30 +1559,6 @@ def test_a_stop_reaches_every_call_in_flight() -> None:
     assert cancelled == ["tasks", "music", "tasks"]
     with stop.delegating(lambda: cancelled.append("late")) as live:
         assert not live
-
-
-def test_the_budget_holds_under_parallel_charges() -> None:
-    import threading
-
-    from app.tools.registry import ToolError
-
-    context = DelegationContext(
-        master_conversation_id="1", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
-    )
-    refused: list[str] = []
-
-    def charge() -> None:
-        try:
-            context.charge_call("tasks")
-        except ToolError:
-            refused.append("x")
-
-    threads = [threading.Thread(target=charge) for _ in range(20)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    assert len(refused) == 17
 
 
 def test_a_pause_carries_what_earlier_steps_found(
@@ -2068,9 +2043,7 @@ def test_an_ask_that_is_another_apps_listed_work_goes_back_to_that_app(
     (objection,) = _problems(over, examples_fleet)
     assert objection.startswith('s4 asks tasks to "sort my music", which is music\'s work')
     assert "ask music for it in its own step" in objection
-    # Not "4 asks to tasks": merging s4 in would keep the misroute.
-    assert "at most 3 per turn" not in objection
-    # The budget repair's merge, misroute kept: split back out.
+    # The same ask merged into another, misroute kept: split back out.
     merged = steps(
         ask(
             "tasks",
@@ -2086,10 +2059,13 @@ def test_an_ask_that_is_another_apps_listed_work_goes_back_to_that_app(
     assert _problems(routed, examples_fleet) == []
 
 
-def test_an_app_over_its_budget_on_its_own_work_still_merges(examples_fleet: Fleet) -> None:
-    over = steps(*_CLEANUP, ask("tasks", "add a task to call the plumber"))
-    (objection,) = _problems(over, examples_fleet)
-    assert objection.startswith("4 asks to tasks; at most 3 per turn")
+def test_any_number_of_an_apps_own_asks_is_a_plan(examples_fleet: Fleet) -> None:
+    # #218: the plan says what will run, so asks to one app have no cap of
+    # their own; MAX_STEPS is the only ceiling.
+    four = steps(*_CLEANUP, ask("tasks", "add a task to call the plumber"))
+    assert _problems(four, examples_fleet) == []
+    most = steps(*[ask("tasks", f"add a task to buy item {n}") for n in range(plans.MAX_STEPS)])
+    assert _problems(most, examples_fleet) == []
 
 
 @pytest.mark.parametrize(

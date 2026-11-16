@@ -556,7 +556,7 @@ def test_the_self_report_says_what_was_recalled(talk: Talk, db_session: Session)
 def test_recall_with_no_memory_reader_fails_the_step_honestly(fleet: Fleet, world: World) -> None:
     provider = ScriptedProvider([plan_turn(steps(recall("x"))), text_turn("I couldn't look.")])
     conductor = Interpreter(provider, fleet, narrate=True, glance=FakeGlances())
-    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore())):
         result = conductor.run("what did we say?")
     assert result.stop_reason == "completed"
     assert result.tool_calls[0].error == "couldn't look back: memory isn't available here"

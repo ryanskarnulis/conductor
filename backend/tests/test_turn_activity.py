@@ -43,9 +43,7 @@ def test_update_never_resurrects_an_ended_turn() -> None:
 
 
 def _delegation() -> DelegationContext:
-    return DelegationContext(
-        master_conversation_id="1", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
-    )
+    return DelegationContext(master_conversation_id="1", thread_store=InMemoryThreadStore())
 
 
 def test_a_turn_emits_one_beat_per_model_call_and_step(tmp_path: Path) -> None:

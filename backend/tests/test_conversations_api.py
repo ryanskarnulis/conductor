@@ -246,8 +246,6 @@ def test_run_binds_delegation_context_over_db_thread_store(
         """Scratch tool standing in for an ask_<app> body."""
         context = current_delegation_context()
         seen["master_conversation_id"] = context.master_conversation_id
-        seen["budget"] = context.calls_per_turn_per_app
-        context.charge_call("chess")
         context.remember_thread("chess", 42)
         return "delegated"
 
@@ -259,7 +257,6 @@ def test_run_binds_delegation_context_over_db_thread_store(
     assert response.status_code == 200
 
     assert seen["master_conversation_id"] == str(conversation_id)
-    assert seen["budget"] == get_settings().conductor_delegate_calls_per_turn_per_app
     # The remembered thread went through the DB-backed store, so a fresh
     # store instance (fresh session) reads it back.
     assert DbThreadStore(session_factory).get(str(conversation_id), "chess") == 42

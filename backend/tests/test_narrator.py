@@ -69,7 +69,7 @@ def apps(tmp_path: Path) -> Generator[Fleet, None, None]:
     """The fixture fleet's manifests (music, tasks that confirms, chess to
     open), for the planner's schema; the scratch tools answer for them, and
     each turn runs in its own delegation context."""
-    context = DelegationContext("m", InMemoryThreadStore(), 3)
+    context = DelegationContext("m", InMemoryThreadStore())
     with use_delegation_context(context):
         yield discover_fleet(write_fixture_fleet(tmp_path / "fleet"))
 

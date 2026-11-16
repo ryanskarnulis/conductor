@@ -100,7 +100,7 @@ def _s3(fleet: Fleet) -> World:  # noqa: F811
         ]
     )
     conductor = Interpreter(provider, fleet, narrate=True, glance=FakeGlances())
-    with use_delegation_context(DelegationContext("m", InMemoryThreadStore(), 3)):
+    with use_delegation_context(DelegationContext("m", InMemoryThreadStore())):
         result = conductor.run("download the new Caribou album and add a task to sort it")
     assert result.stop_reason == "completed", result
     return world

@@ -328,8 +328,6 @@ class Checks:
     """What the validator needs to know about now."""
 
     fleet: Fleet
-    # Asks to one app in one turn (the delegate budget).
-    calls_per_app: int = 3
     # Something a confirm step can answer: an app's question or conductor's own.
     confirmable: bool = False
     # A plan paused on ask_user, which a resume answers.
@@ -365,7 +363,6 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
     if len(steps) > MAX_STEPS:
         found.append(f"{len(steps)} steps is over the ceiling of {MAX_STEPS}")
     seen: set[str] = set()
-    asks: dict[str, int] = {}
     found += _lost_refs(steps, checks.fleet)
     found += _mixed_asks(steps, checks.fleet)
     misrouted = _misrouted(steps, checks.fleet)
@@ -385,10 +382,6 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
             app = checks.fleet.get(step.app)
             if step.app != MEMORY_APP and (app is None or not app.has_agent):
                 found.append(f"{step.id} asks {step.app}, which has no agent")
-            if step.id not in misrouted:
-                # The budget counts an app's own asks (#186): one that is
-                # another app's work goes there, never into a merge.
-                asks[step.app] = asks.get(step.app, 0) + 1
             if not step.request.strip():
                 found.append(f"{step.id} asks {step.app} nothing")
         if isinstance(step, Open):
@@ -417,12 +410,6 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
                     + ("" if _waits(checks) else _NO_QUESTION)
                 )
         seen.add(step.id)
-    for app_name, count in asks.items():
-        if count > checks.calls_per_app:
-            found.append(
-                f"{count} asks to {app_name}; at most {checks.calls_per_app} per turn — "
-                "put them in one request"
-            )
     return found
 
 
@@ -601,7 +588,7 @@ def _misrouted(steps: list[Step], fleet: Fleet) -> dict[str, str]:
     """Asks with a part that is another app's listed work (#186): a part of
     the request, word for word, is one of that app's manifest examples and
     none of this app's ("sort my music" asked of tasks, in long-cleanup's
-    four tasks asks and in the merge the budget repair made of them). The
+    four tasks asks). The
     repair sends that part to its app. A part that only names the other
     app's things ("remind me to sort my music on Sunday") is no example."""
     listed: dict[str, set[str]] = {

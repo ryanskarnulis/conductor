@@ -136,7 +136,6 @@ def test_relay_keeps_the_title(fleet_dir: None) -> None:
                 context = DelegationContext(
                     master_conversation_id=f"relay-{title}-{run}",
                     thread_store=InMemoryThreadStore(),
-                    calls_per_turn_per_app=3,
                 )
                 started = time.monotonic()
                 with use_delegation_context(context):

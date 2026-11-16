@@ -134,9 +134,7 @@ def _tasks_fleet(app: _TasksApp) -> Fleet:
 
 @pytest.fixture
 def delegation() -> Any:
-    context = DelegationContext(
-        master_conversation_id="7", thread_store=InMemoryThreadStore(), calls_per_turn_per_app=3
-    )
+    context = DelegationContext(master_conversation_id="7", thread_store=InMemoryThreadStore())
     with use_delegation_context(context):
         yield context
 
