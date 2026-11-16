@@ -12,6 +12,13 @@ treated as answer text nor echoed back into history, and thinking is toggled per
 request via ``chat_template_kwargs``. Conductor keeps thinking OFF by default —
 routing turns must be fast — and opts in per call only when a turn genuinely
 needs analysis (the model profile's guidance).
+
+What changes with the model — its sampling, the kwarg that toggles thinking,
+each role's temperature and cap — is the model's profile
+(:mod:`app.ai.model_profile`), picked by the model name. The provider sets the
+profile's sampling on every request, so a server-config drift
+(``../llama-swap/config.yaml`` carries the same values as defaults) never
+changes conductor's behavior.
 """
 
 from __future__ import annotations
@@ -20,7 +27,7 @@ import json
 import threading
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,11 +37,11 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.ai import incognito
 from app.ai.context_capture import CallStamp, ContextCapture, context_capture_from_settings
+from app.ai.model_profile import PLANNER, ModelProfile, load_profile
 from app.ai.provider import (
     ChatResult,
     ProviderRequestError,
     ProviderResponseError,
-    Sampling,
     SamplingRole,
     ToolCall,
     ToolCallArgumentsError,
@@ -44,26 +51,6 @@ from app.ai.provider import (
 from app.config import get_settings
 
 logger = structlog.get_logger(__name__)
-
-# The negotiated gemma-4 sampling set. Canonical source is
-# ../agent-standard/model-profile.md (model knowledge, not app knowledge);
-# ../llama-swap/config.yaml carries the same values as server-side defaults, but
-# the provider always sets them per request so a server-config drift never
-# changes conductor's behavior.
-_TEMPERATURE = 1.0
-_TOP_P = 0.95
-_TOP_K = 64
-
-# Per-role profiles (#150). Every role starts on the profile above, so request
-# bytes are the same as before roles existed; a role moves only on evidence
-# (``docs/agent-evals.md``). The planner's temperature is the one knob
-# (``CONDUCTOR_PLANNER_TEMPERATURE``) so its A/B can be rerun.
-DEFAULT_SAMPLING = Sampling(_TEMPERATURE, _TOP_P, _TOP_K)
-ROLE_SAMPLING: Mapping[SamplingRole, Sampling] = {
-    "planner": DEFAULT_SAMPLING,
-    "narrator": DEFAULT_SAMPLING,
-    "speaker": DEFAULT_SAMPLING,
-}
 
 # The rendered-template fetch is diagnostics beside a call that already ran:
 # short, and never retried.
@@ -125,6 +112,9 @@ class LlamaCppProvider:
     Synchronous by design, matching the sync tool registry; FastAPI runs sync
     callers in worker threads. ``client`` is injectable for tests
     (``httpx.MockTransport``); otherwise the provider owns one.
+
+    ``profile`` is the model's; ``None``, the default, loads the one named for
+    ``model``, or the default profile with a warning when none is.
     """
 
     def __init__(
@@ -135,17 +125,14 @@ class LlamaCppProvider:
         timeout_seconds: float = 300.0,
         client: httpx.Client | None = None,
         capture: ContextCapture | None = None,
-        sampling: Sampling | None = None,
-        role_sampling: Mapping[SamplingRole, Sampling] | None = None,
+        profile: ModelProfile | None = None,
         stream: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
-        # The model's sampling profile; the 12B's unless a caller brings its
-        # own (the 26B's ``think``, #78). ``role_sampling`` overrides it for
-        # the roles it names (#150); a call without a role uses the default.
-        self._sampling = sampling or DEFAULT_SAMPLING
-        self._role_sampling = dict(role_sampling or {})
+        # A role's call samples and is capped as its phase of the profile
+        # says (#150); a call without a role uses the profile's sampling.
+        self._profile = profile if profile is not None else load_profile(model)
         # Streamed calls (the ``think`` lane, #78) can be cut off between
         # chunks: closing a blocked non-streamed read from another thread
         # doesn't unblock it, and llama-swap holds the GPU for a request
@@ -166,6 +153,11 @@ class LlamaCppProvider:
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def profile(self) -> ModelProfile:
+        """The model's profile: its sampling, thinking kwarg and phases."""
+        return self._profile
 
     def close(self) -> None:
         self._client.close()
@@ -196,13 +188,21 @@ class LlamaCppProvider:
     ) -> ChatResult:
         """One completion turn, optionally offering tools, or decoding under a
         ``response_format`` (``json_schema``: llama-server's grammar, #70),
-        sampled as ``role``'s profile (#150)."""
+        sampled and capped as ``role``'s phase of the profile (#150): its own
+        temperature if it has one, and never more than its ``max_tokens``."""
+        temperature: float | int | None = None
+        if role is not None:
+            phase = self._profile.phase(role)
+            temperature = phase.temperature
+            max_tokens = (
+                phase.max_tokens if max_tokens is None else min(max_tokens, phase.max_tokens)
+            )
         payload = self._payload(
             messages,
             tools=tools,
             enable_thinking=enable_thinking,
             max_tokens=max_tokens,
-            sampling=self._role_sampling.get(role, self._sampling) if role else self._sampling,
+            temperature=temperature,
         )
         if response_format is not None:
             payload["response_format"] = response_format
@@ -231,18 +231,26 @@ class LlamaCppProvider:
         tools: Sequence[ToolSpec] | None,
         enable_thinking: bool,
         max_tokens: int | None,
-        sampling: Sampling,
+        temperature: float | int | None,
     ) -> dict[str, Any]:
+        # The profile's sampling: only the keys it sets, so an absent one is
+        # the server's default. A role's own temperature goes where the
+        # profile's would, so the key order never moves.
+        sampling = dict(self._profile.sampling)
+        if temperature is not None:
+            sampling.pop("temperature", None)
+            sampling = {"temperature": temperature, **sampling}
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": list(messages),
-            "temperature": sampling.temperature,
-            "top_p": sampling.top_p,
-            # llama-server accepts these OpenAI extensions as plain body fields
-            # (no SDK extra_body indirection needed).
-            "top_k": sampling.top_k,
-            "chat_template_kwargs": {"enable_thinking": enable_thinking},
+            # llama-server accepts ``top_k`` and ``chat_template_kwargs``, both
+            # OpenAI extensions, as plain body fields (no SDK extra_body).
+            **sampling,
         }
+        kwarg = self._profile.thinking_kwarg
+        if kwarg:
+            # A model with no thinking toggle gets no template kwargs at all.
+            payload["chat_template_kwargs"] = {kwarg: enable_thinking}
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         if tools:
@@ -457,17 +465,19 @@ def provider_from_settings() -> LlamaCppProvider:
         settings.llamacpp_model,
         timeout_seconds=settings.llamacpp_timeout_seconds,
         capture=context_capture_from_settings(),
-        role_sampling=role_sampling_from_settings(),
+        profile=profile_from_settings(),
     )
 
 
-def role_sampling_from_settings() -> Mapping[SamplingRole, Sampling]:
-    """:data:`ROLE_SAMPLING`, with the planner's temperature as configured."""
-    temperature = get_settings().conductor_planner_temperature
+def profile_from_settings() -> ModelProfile:
+    """The configured model's profile, with the planner's temperature as
+    configured (``CONDUCTOR_PLANNER_TEMPERATURE``, the A/B's knob, #150)."""
+    settings = get_settings()
+    profile = load_profile(settings.llamacpp_model)
+    temperature = settings.conductor_planner_temperature
     if temperature is None:
-        return ROLE_SAMPLING
-    planner = ROLE_SAMPLING["planner"]
-    return {**ROLE_SAMPLING, "planner": Sampling(temperature, planner.top_p, planner.top_k)}
+        return profile
+    return profile.with_phase(PLANNER, temperature=temperature)
 
 
 def _number(value: Any) -> float | None:

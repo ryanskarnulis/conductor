@@ -8,11 +8,8 @@ import pytest
 
 from app.ai import trace as run_trace
 from app.ai.interpreter import conductor_from_settings
-from app.ai.providers.llamacpp import (
-    ROLE_SAMPLING,
-    provider_from_settings,
-    role_sampling_from_settings,
-)
+from app.ai.model_profile import DEFAULT_PROFILE, load_profile
+from app.ai.providers.llamacpp import profile_from_settings, provider_from_settings
 from app.config import get_settings
 from app.fleet.manifests import Fleet
 from tests.scripted_provider import ScriptedProvider
@@ -29,6 +26,8 @@ def test_provider_from_settings_reads_configured_connection(
         with provider_from_settings() as provider:
             assert provider._base_url == "http://example:8200/v1"
             assert provider._model == "test-model"
+            # A model nobody has measured here runs on the default profile.
+            assert provider.profile is DEFAULT_PROFILE
     finally:
         get_settings.cache_clear()
 
@@ -73,16 +72,20 @@ def test_every_role_samples_the_model_profile_unless_the_planner_is_set(
     monkeypatch.delenv("CONDUCTOR_PLANNER_TEMPERATURE", raising=False)
     get_settings.cache_clear()
     try:
-        assert role_sampling_from_settings() == ROLE_SAMPLING
-        assert {(s.temperature, s.top_p, s.top_k) for s in ROLE_SAMPLING.values()} == {
-            (1.0, 0.95, 64)
+        shipped = load_profile("gemma-4-12b")
+        assert profile_from_settings() is shipped
+        assert {shipped.temperature_for(role) for role in ("planner", "narrator", "speaker")} == {
+            1.0
         }
         monkeypatch.setenv("CONDUCTOR_PLANNER_TEMPERATURE", "0")
         get_settings.cache_clear()
-        sampling = role_sampling_from_settings()
-        assert (sampling["planner"].temperature, sampling["planner"].top_p) == (0.0, 0.95)
-        assert sampling["narrator"] == ROLE_SAMPLING["narrator"]
-        assert sampling["speaker"] == ROLE_SAMPLING["speaker"]
+        profile = profile_from_settings()
+        assert profile.temperature_for("planner") == 0.0
+        assert profile.sampling == shipped.sampling
+        assert profile.phase("narrator") == shipped.phase("narrator")
+        assert profile.phase("speaker") == shipped.phase("speaker")
+        # The override is this provider's, never the cached file's.
+        assert load_profile("gemma-4-12b").phase("planner").temperature is None
     finally:
         get_settings.cache_clear()
 

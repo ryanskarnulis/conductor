@@ -79,20 +79,22 @@ class Settings(BaseSettings):
 
     # --- LLM provider (shared gemma-4-12b behind llama-swap) -----------------
     # These are the connection settings; the sampling/thinking values that are
-    # model knowledge live in the provider with a pointer to
-    # ../agent-standard/model-profile.md (the canonical source).
+    # model knowledge live in the model's profile (app/ai/profiles/, named for
+    # the model; a model with no file runs on the server's sampling).
     llamacpp_base_url: str = "http://127.0.0.1:8200/v1"
     llamacpp_model: str = "gemma-4-12b"
     # One generous read timeout: a cold model load through llama-swap is ~100s
     # before the first byte; warm calls never approach it.
     llamacpp_timeout_seconds: float = 300.0
 
-    # STANDARD.md §3's completion cap, sent on every model call
-    # (model-profile's turn cap). A plan's length has its own ceiling
-    # (app/ai/plan.py, 12 steps); turns have no iteration or call caps (#75).
+    # STANDARD.md §3's completion cap for a call that names none (each prompt
+    # names its own, under the model profile's per-role cap). A plan's length
+    # has its own ceiling (app/ai/plan.py, 12 steps); turns have no iteration
+    # or call caps (#75).
     conductor_max_tokens: int = 2048
-    # The planner's sampling temperature (#150). Unset: the model profile's 1.0,
-    # as every role has. Only the A/B (docs/agent-evals.md) sets it.
+    # The planner's sampling temperature (#150), over the model profile's.
+    # Unset: the profile's (1.0 on the 12B, as every role has). Only the A/B
+    # (docs/agent-evals.md) sets it.
     conductor_planner_temperature: float | None = None
 
     @field_validator("conductor_planner_temperature")

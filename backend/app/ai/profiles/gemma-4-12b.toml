@@ -1,0 +1,33 @@
+# gemma-4-12b: the model conductor's turns run on (app/ai/model_profile.py).
+# A new model gets its own file named for its llama-swap id, never an edit to
+# this one; LLAMACPP_MODEL picks the file.
+
+# The fleet's thinking toggle and sampling, copied from
+# ../agent-standard/model-profile.md (re-copy on drift, never edit here;
+# tests/test_model_profile.py checks it when the sibling checkout is present).
+# Sent on every request, so a server-config drift never changes a turn.
+# Thinking stays off on every call a turn makes.
+thinking_kwarg = "enable_thinking"
+
+[sampling]
+temperature = 1.0
+top_p = 0.95
+# Not an OpenAI field: llama-server reads it as a plain body field.
+top_k = 64
+
+# Every call is capped (STANDARD.md §3): llama-server's own default is
+# unbounded. A role's cap is the most one of its calls may ask for; each
+# prompt asks for less (the compiler 1500, the narrator and speaker 300).
+
+# The planner keeps [sampling]'s 1.0, so no temperature here: 0, 0.3 and 0.6
+# were A/B'd at n=20 and none beat it (conductor#150, docs/agent-evals.md).
+# CONDUCTOR_PLANNER_TEMPERATURE overrides it to rerun that A/B.
+[phases.planner]
+max_tokens = 2048
+
+# Words want the spread: the narrator and the speaker stay on [sampling]'s too.
+[phases.narrator]
+max_tokens = 2048
+
+[phases.speaker]
+max_tokens = 2048

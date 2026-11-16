@@ -51,6 +51,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import clock as household
 from app.ai import foreground, think, turn_events
+from app.ai.model_profile import THINK, load_profile
 from app.ai.provider import ChatProvider, ChatResult, ProviderError
 from app.ai.providers.llamacpp import LlamaCppProvider
 from app.ai.context_capture import context_capture_from_settings
@@ -70,14 +71,13 @@ TryEnd = Literal["posted", "interrupted", "cancelled", "skipped"]
 
 
 def think_provider_from_settings() -> LlamaCppProvider:
-    """The 26B, with its own sampling and a longer read timeout."""
+    """The 26B, on its own profile, with a longer read timeout."""
     settings = get_settings()
     return LlamaCppProvider(
         settings.llamacpp_base_url,
         settings.conductor_think_model,
         timeout_seconds=settings.conductor_think_timeout_seconds,
         capture=context_capture_from_settings(),
-        sampling=think.PROFILE,
         stream=True,
     )
 
@@ -250,7 +250,9 @@ class Thinker:
                 close()
 
     def _call(self, provider: ChatProvider, messages: list[dict[str, Any]], ref: str) -> ChatResult:
-        """One 26B call, watched: a turn starting or a cancel cuts it off."""
+        """One 26B call, watched: a turn starting or a cancel cuts it off.
+        Whether it thinks, and its cap, are its model's ``think`` phase."""
+        phase = load_profile(get_settings().conductor_think_model).phase(THINK)
         box: dict[str, Any] = {}
         done = threading.Event()
 
@@ -258,8 +260,8 @@ class Thinker:
             try:
                 box["result"] = provider.chat(
                     messages,
-                    enable_thinking=True,
-                    max_tokens=think.MAX_TOKENS,
+                    enable_thinking=phase.thinking,
+                    max_tokens=phase.max_tokens,
                     response_format=think.response_format(self._fleet),
                 )
             except BaseException as exc:

@@ -22,7 +22,8 @@ from app.ai import compiler
 from app.ai import trace as run_trace
 from app.ai.context_capture import JsonlContextCapture, read_captures
 from app.ai.interpreter import Interpreter
-from app.ai.provider import ProviderRequestError, Sampling
+from app.ai.model_profile import load_profile
+from app.ai.provider import ProviderRequestError
 from app.ai.providers.llamacpp import LlamaCppProvider
 from app.ai.replay import ReplayError, replay
 from app.ai.runtime import AgentRunFailed
@@ -317,7 +318,7 @@ def test_the_compiler_samples_as_the_planner_and_the_narrator_as_itself(
     provider = _provider_over(
         [_completion(json.dumps(_PLAN)), _completion("Pay rent is on your list.")],
         seen,
-        role_sampling={"planner": Sampling(temperature=0.0, top_p=0.95, top_k=64)},
+        profile=load_profile("gemma-4-12b").with_phase("planner", temperature=0.0),
     )
     Interpreter(provider, _tasks_fleet(_TasksApp()), narrate=True).run(
         "add a task to pay rent", conversation_id="7"

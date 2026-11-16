@@ -587,7 +587,8 @@ Gate tier, 5 samples each, compiler on, planner prompt and schema unchanged:
 ### Escalation: `think` on the local 26B (#78, 2026-11-08)
 
 A `think` step runs as a background job on gemma-4-26b-a4b (thinking on,
-`json_schema` on the answer, its own prompt and sampling). Its proposal posts
+`json_schema` on the answer, its own prompt and profile,
+`app/ai/profiles/gemma-4-26b-a4b.toml`). Its proposal posts
 as the job's note and runs only on a yes. The session harness's `Settle` step
 lets the think finish before the person says yes (in evals the watcher's
 `sweep(force=True)` runs it to its end). The 12B planner prompt and step kinds
@@ -1162,6 +1163,11 @@ top_k 64), so request bytes are unchanged. The planner's temperature is the
 one knob: `CONDUCTOR_PLANNER_TEMPERATURE` (unset = 1.0), so this A/B can be
 rerun. The plan-level harness now sends `role="planner"`; its request was
 checked per arm and carried exactly 1.0, 0, 0.3 and 0.6.
+
+Since agent-standard#32 these values live in the model's profile
+(`app/ai/profiles/gemma-4-12b.toml`; each role is a phase), and the knob
+overrides the planner phase's temperature. Request bytes are unchanged
+(`tests/test_request_bytes.py`).
 
 Plan evals, n=20 (`CONDUCTOR_PLAN_SAMPLES=20`), every group, gemma-4-12b,
 `233fc83`, four runs on one server (one arm per GPU hold, not interleaved).
