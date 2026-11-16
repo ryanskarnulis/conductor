@@ -2,9 +2,11 @@
 
 Conductor's client for the shared workspace ``../llama-swap/`` stack — the same
 gemma-4-12b every app agent uses. OpenAI wire format over plain ``httpx`` (no
-SDK), with every response validated by Pydantic wire models at the boundary:
-malformed server output or tool-call arguments that aren't a JSON object raise
-typed errors (from ``app/ai/provider.py``); nothing is best-effort parsed.
+SDK). This file is the request side: payload, HTTP flow, logging, context
+capture. Responses are read by the fleet's vendored chat wire
+(``app/ai/agentkit/chat.py``): validated at the boundary, with malformed server
+output or tool-call arguments that aren't a JSON object raising typed errors;
+nothing is best-effort parsed.
 
 Gemma quirks handled here (matching PCC and chess on the same server):
 chain-of-thought arrives in a separate ``reasoning_content`` field and is never
@@ -23,7 +25,6 @@ changes conductor's behavior.
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 import uuid
@@ -33,9 +34,17 @@ from typing import Any
 
 import httpx
 import structlog
-from pydantic import BaseModel, Field, ValidationError
 
 from app.ai import incognito
+from app.ai.agentkit.chat import (
+    StreamedTurn,
+    WireCompletion,
+    bad_status,
+    body_text,
+    chat_result,
+    parse_completion,
+    request_failed,
+)
 from app.ai.context_capture import CallStamp, ContextCapture, context_capture_from_settings
 from app.ai.model_profile import PLANNER, ModelProfile, load_profile
 from app.ai.provider import (
@@ -43,10 +52,7 @@ from app.ai.provider import (
     ProviderRequestError,
     ProviderResponseError,
     SamplingRole,
-    ToolCall,
-    ToolCallArgumentsError,
     ToolSpec,
-    Usage,
 )
 from app.config import get_settings
 
@@ -64,46 +70,6 @@ class _Wire:
 
     request: httpx.Request | None = None
     response: httpx.Response | None = None
-
-
-class _WireFunction(BaseModel):
-    name: str
-    arguments: str | None = None
-
-
-class _WireToolCall(BaseModel):
-    id: str = ""
-    function: _WireFunction
-
-
-class _WireMessage(BaseModel):
-    content: str | None = None
-    # Gemma's chain-of-thought channel: validated so unexpected shapes fail
-    # loudly, but never surfaced as answer text and never sent back in history.
-    reasoning_content: str | None = None
-    tool_calls: list[_WireToolCall] = []
-
-
-class _WireChoice(BaseModel):
-    message: _WireMessage
-    finish_reason: str | None = None
-
-
-class _WireUsage(BaseModel):
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
-    # OpenAI's spelling of the cache hit, ``{"cached_tokens": n}``. Untyped:
-    # a server that shapes it differently must not fail the call (#152).
-    prompt_tokens_details: Any = None
-
-
-class _WireCompletion(BaseModel):
-    choices: list[_WireChoice] = Field(min_length=1)
-    usage: _WireUsage | None = None
-    # llama-server's own per-call timings (``cache_n``, ``prompt_n``,
-    # ``prompt_ms``…); untyped for the same reason.
-    timings: Any = None
 
 
 class LlamaCppProvider:
@@ -207,17 +173,17 @@ class LlamaCppProvider:
         if response_format is not None:
             payload["response_format"] = response_format
         if self._stream:
-            return self._result(self._post_stream(payload))
+            return chat_result(self._post_stream(payload))
         stamp = self._begin_capture()
         if stamp is None:
-            return self._result(self._post(payload, None))
+            return chat_result(self._post(payload, None))
         started = time.monotonic()
         wire = _Wire()
         error: Exception | None = None
         try:
             # Parsed inside the capture so a bad tool-call argument is recorded
             # beside the bytes behind it.
-            return self._result(self._post(payload, wire))
+            return chat_result(self._post(payload, wire))
         except Exception as exc:
             error = exc
             raise
@@ -258,7 +224,7 @@ class LlamaCppProvider:
             payload["tool_choice"] = "auto"
         return payload
 
-    def _post(self, payload: dict[str, Any], wire: _Wire | None) -> _WireCompletion:
+    def _post(self, payload: dict[str, Any], wire: _Wire | None) -> WireCompletion:
         log = logger.bind(llm_call_id=uuid.uuid4().hex[:8], model=self._model)
         log.info(
             "llm_request",
@@ -278,22 +244,19 @@ class LlamaCppProvider:
         except (httpx.HTTPError, RuntimeError) as exc:
             # A RuntimeError is a client closed under the call (``abort``).
             log.error("llm_request_failed", error=str(exc))
-            raise ProviderRequestError(f"llama-server request failed: {exc}") from exc
+            raise request_failed(exc) from exc
         duration_ms = round((time.monotonic() - started) * 1000)
         if response.status_code != 200:
             log.error("llm_request_failed", status=response.status_code, duration_ms=duration_ms)
-            raise ProviderRequestError(
-                f"llama-server returned {response.status_code}: {response.text[:500]}"
-            )
+            raise bad_status(response.status_code, response.text)
         try:
-            completion = _WireCompletion.model_validate_json(response.text)
-        except ValidationError as exc:
-            log.error("llm_response_invalid", duration_ms=duration_ms, error=str(exc))
-            raise ProviderResponseError(
-                f"llama-server response failed wire validation: {exc}"
-            ) from exc
+            completion = parse_completion(response.text)
+        except ProviderResponseError as exc:
+            log.error("llm_response_invalid", duration_ms=duration_ms, error=_cause(exc))
+            raise
         choice = completion.choices[0]
-        usage = _usage(completion)
+        usage = completion.read_usage()
+        server = completion.stamp()
         log.info(
             "llm_response",
             duration_ms=duration_ms,
@@ -302,11 +265,12 @@ class LlamaCppProvider:
             prompt_tokens=usage.prompt_tokens if usage else None,
             completion_tokens=usage.completion_tokens if usage else None,
             cached_tokens=usage.cached_tokens if usage else None,
-            prefill_ms=usage.prefill_ms if usage else None,
+            # Beside the counts it explains: none without them, as before.
+            prefill_ms=server.prefill_ms if usage and server else None,
         )
         return completion
 
-    def _post_stream(self, payload: dict[str, Any]) -> _WireCompletion:
+    def _post_stream(self, payload: dict[str, Any]) -> WireCompletion:
         """One streamed call, read chunk by chunk until done or aborted; the
         answer text and the finish reason assembled into one completion.
         Reasoning deltas are read (they keep the stream moving while the
@@ -314,10 +278,7 @@ class LlamaCppProvider:
         log = logger.bind(llm_call_id=uuid.uuid4().hex[:8], model=self._model)
         log.info("llm_request", messages=len(payload["messages"]), tools=0, stream=True)
         started = time.monotonic()
-        content: list[str] = []
-        finish: str | None = None
-        usage: _WireUsage | None = None
-        timings: Any = None
+        turn = StreamedTurn()
         try:
             with self._client.stream(
                 "POST", f"{self._base_url}/chat/completions", json={**payload, "stream": True}
@@ -325,47 +286,30 @@ class LlamaCppProvider:
                 if response.status_code != 200:
                     response.read()
                     log.error("llm_request_failed", status=response.status_code)
-                    raise ProviderRequestError(
-                        f"llama-server returned {response.status_code}: {response.text[:500]}"
-                    )
+                    raise bad_status(response.status_code, response.text)
                 for line in response.iter_lines():
                     if self._abort.is_set():
                         raise ProviderRequestError("llama-server request cut off: aborted")
-                    if not line.startswith("data:"):
-                        continue
-                    data = line.removeprefix("data:").strip()
-                    if data == "[DONE]":
+                    turn.feed(line)
+                    if turn.done:
                         break
-                    chunk = json.loads(data)
-                    if isinstance(chunk.get("usage"), dict):
-                        usage = _WireUsage.model_validate(chunk["usage"])
-                    if chunk.get("timings") is not None:
-                        timings = chunk["timings"]
-                    for choice in chunk.get("choices") or []:
-                        delta = choice.get("delta") or {}
-                        if isinstance(delta.get("content"), str):
-                            content.append(delta["content"])
-                        if choice.get("finish_reason"):
-                            finish = choice["finish_reason"]
+            completion = turn.completion()
         except (httpx.HTTPError, RuntimeError) as exc:
             log.error("llm_request_failed", error=str(exc))
-            raise ProviderRequestError(f"llama-server request failed: {exc}") from exc
-        except (json.JSONDecodeError, ValidationError) as exc:
-            log.error("llm_response_invalid", error=str(exc))
-            raise ProviderResponseError(f"llama-server stream failed validation: {exc}") from exc
+            raise request_failed(exc) from exc
+        except ProviderResponseError as exc:
+            log.error("llm_response_invalid", error=_cause(exc))
+            raise
+        choice = completion.choices[0]
+        usage = completion.read_usage()
         log.info(
             "llm_response",
             duration_ms=round((time.monotonic() - started) * 1000),
-            finish_reason=finish,
-            tool_calls=0,
+            finish_reason=choice.finish_reason,
+            tool_calls=len(choice.message.tool_calls),
             completion_tokens=usage.completion_tokens if usage else None,
         )
-        message = _WireMessage(content="".join(content) or None)
-        return _WireCompletion(
-            choices=[_WireChoice(message=message, finish_reason=finish)],
-            usage=usage,
-            timings=timings,
-        )
+        return completion
 
     def _begin_capture(self) -> CallStamp | None:
         # An incognito turn's calls (#82) are never captured: they hold its words.
@@ -389,9 +333,9 @@ class LlamaCppProvider:
                 {
                     "url": None if request is None else str(request.url),
                     "ms": round((time.monotonic() - started) * 1000),
-                    "request": None if request is None else _body_text(request.content),
+                    "request": None if request is None else body_text(request.content),
                     "status_code": None if response is None else response.status_code,
-                    "response": None if response is None else _body_text(response.content),
+                    "response": None if response is None else body_text(response.content),
                     "error": "" if error is None else f"{type(error).__name__}: {error}",
                     # A server that never answered cannot render either.
                     "template": None
@@ -425,37 +369,6 @@ class LlamaCppProvider:
         except Exception as exc:
             return {"error": f"{type(exc).__name__}: {exc}"}
 
-    @staticmethod
-    def _result(completion: _WireCompletion) -> ChatResult:
-        choice = completion.choices[0]
-        calls: list[ToolCall] = []
-        for wire_call in choice.message.tool_calls:
-            raw = wire_call.function.arguments
-            if raw is None or not raw.strip():
-                arguments: Any = {}
-            else:
-                try:
-                    arguments = json.loads(raw)
-                except json.JSONDecodeError as exc:
-                    raise ToolCallArgumentsError(
-                        wire_call.function.name, f"arguments are not valid JSON ({exc.msg})"
-                    ) from exc
-            if not isinstance(arguments, dict):
-                raise ToolCallArgumentsError(
-                    wire_call.function.name, "arguments are not a JSON object"
-                )
-            calls.append(
-                ToolCall(id=wire_call.id, name=wire_call.function.name, arguments=arguments)
-            )
-        # reasoning_content is deliberately dropped here: it never becomes
-        # answer text and never re-enters history.
-        return ChatResult(
-            content=choice.message.content,
-            tool_calls=calls,
-            finish_reason=choice.finish_reason,
-            usage=_usage(completion),
-        )
-
 
 def provider_from_settings() -> LlamaCppProvider:
     """The provider as configured (``LLAMACPP_*`` env / ``.env``)."""
@@ -480,34 +393,7 @@ def profile_from_settings() -> ModelProfile:
     return profile.with_phase(PLANNER, temperature=temperature)
 
 
-def _number(value: Any) -> float | None:
-    """A JSON number, or ``None`` for anything else (a bool is not one)."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value)
-
-
-def _usage(completion: _WireCompletion) -> Usage | None:
-    """The server's counts for one call (#152): OpenAI's ``usage`` plus the
-    prompt-cache hit and prefill time from llama-server's ``timings``. Any
-    field the server leaves out stays ``None``; none can fail a call."""
-    wire = completion.usage
-    if wire is None:
-        return None
-    timings = completion.timings if isinstance(completion.timings, dict) else {}
-    details = wire.prompt_tokens_details if isinstance(wire.prompt_tokens_details, dict) else {}
-    cached = _number(timings.get("cache_n"))
-    if cached is None:
-        cached = _number(details.get("cached_tokens"))
-    return Usage(
-        prompt_tokens=wire.prompt_tokens,
-        completion_tokens=wire.completion_tokens,
-        total_tokens=wire.total_tokens,
-        cached_tokens=None if cached is None else int(cached),
-        prefill_ms=_number(timings.get("prompt_ms")),
-    )
-
-
-def _body_text(body: bytes) -> str:
-    """A body as text, byte for byte when it is UTF-8 (JSON always is)."""
-    return body.decode("utf-8", errors="replace")
+def _cause(exc: ProviderResponseError) -> str:
+    """What failed validation, as the log has always carried it: the
+    underlying error's text when there is one."""
+    return str(exc.__cause__ or exc)

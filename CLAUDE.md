@@ -90,6 +90,11 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   file runs on the server's sampling, with a `model_profile_missing` warning.
   `CONDUCTOR_PLANNER_TEMPERATURE` overrides the planner's for an A/B. A
   profile edit moves request bytes (`tests/test_request_bytes.py`): eval gate.
+- **The provider's response half is vendored** (agent-standard#32,
+  `app/ai/agentkit/chat.py`: re-copy and run `check-sync.sh`, never edit):
+  the typed errors, `ChatResult`/`Usage`/`ServerStamp` and the body and
+  stream readers, re-exported by `app/ai/provider.py`. The request side
+  (payload, roles, capture, logging) is conductor's, in `providers/llamacpp.py`.
 - **Routing hints live in the planner prompt** (`compiler.planner_prompt`,
   from manifest descriptions and `examples`), not tool docstrings. If plans
   degrade, tighten manifest `examples` first — a bigger model is the last
