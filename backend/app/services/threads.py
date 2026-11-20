@@ -20,9 +20,12 @@ anywhere else (:func:`turn_entities`, :func:`turn_facts`).
 
 **Closing** (:func:`close`) posts the thread's one result note into the
 timeline (:func:`app.services.ledger.note_thread`), narrated from the
-thread's receipts (:func:`ending`, :mod:`app.ai.thread_note`). The close is
-claimed once (``closed_at``), so a double tap never posts twice. A closed
-thread takes no more turns; a job it left running notes into the timeline.
+thread's receipts (:func:`ending`, :mod:`app.ai.thread_note`). A thread with
+nothing to report (:func:`leaves_note`, #226) posts none: it keeps its result
+line and is found among the closed threads (:func:`closed_threads`). The
+close is claimed once (``closed_at``), so a double tap never posts twice. A
+closed thread takes no more turns; a job it left running notes into the
+timeline.
 """
 
 from __future__ import annotations
@@ -66,6 +69,8 @@ logger = structlog.get_logger(__name__)
 MAX_TITLE_CHARS = 60
 # How many open threads the page lists, at most.
 MAX_OPEN = 20
+# How many closed threads the page offers to open again, newest first.
+MAX_CLOSED = 5
 # How far back a thread looks for what it carries, in touches (bounded, like
 # the state block's own recent entities).
 TOUCHES_SCANNED = 200
@@ -96,6 +101,24 @@ def open_threads(db: Session) -> Sequence[Conversation]:
             )
             .order_by(Conversation.id)
             .limit(MAX_OPEN)
+        )
+        .scalars()
+        .all()
+    )
+
+
+def closed_threads(db: Session) -> Sequence[Conversation]:
+    """The side threads closed most recently, newest first: how one that left
+    no note in the timeline (#226) is still found and read."""
+    return (
+        db.execute(
+            active(Conversation)
+            .where(
+                Conversation.kind == ConversationKind.thread.value,
+                Conversation.closed_at.is_not(None),
+            )
+            .order_by(Conversation.closed_at.desc(), Conversation.id.desc())
+            .limit(MAX_CLOSED)
         )
         .scalars()
         .all()
@@ -392,6 +415,20 @@ def ending(db: Session, thread: Conversation) -> Ending:
     return Ending(end, receipts)
 
 
+def leaves_note(end: ThreadEnd) -> bool:
+    """Whether a closing thread has anything to tell the timeline (#226): an
+    app's work, a job still running, or an app that didn't answer. One where
+    nothing was changed or found closes without a note."""
+    return end.did_anything or bool(end.failed)
+
+
+@dataclass(frozen=True)
+class Closed:
+    """A close that was claimed, and the note it posted (none: nothing to say)."""
+
+    message: ConversationMessage | None
+
+
 def close(
     db: Session,
     thread: Conversation,
@@ -399,10 +436,12 @@ def close(
     receipts: Sequence[LedgerReceipt],
     *,
     now: datetime,
-) -> ConversationMessage | None:
-    """Claim the close (only if still open), record the result and post it
-    into the timeline, in the caller's commit. ``None``, with nothing
-    written, when the thread had already closed."""
+    note: bool = True,
+) -> Closed | None:
+    """Claim the close (only if still open), record the result and, unless
+    there is nothing to say (``note`` false), post it into the timeline, in
+    the caller's commit. ``None``, with nothing written, when the thread had
+    already closed."""
     claimed = db.execute(
         update(Conversation)
         .where(Conversation.id == thread.id, Conversation.closed_at.is_(None))
@@ -411,12 +450,15 @@ def close(
     if not cast("CursorResult[Any]", claimed).rowcount:
         return None
     db.refresh(thread)
+    if not note:
+        logger.info("thread_closed", thread_id=thread.id, message_id=None)
+        return Closed(None)
     timeline = conversations_service.timeline(db)
     message = ledger.note_thread(
         db, timeline, thread, text, receipts, stop_reason=thread_note.THREAD_NOTE, now=now
     )
     logger.info("thread_closed", thread_id=thread.id, message_id=message.id)
-    return message
+    return Closed(message)
 
 
 @dataclass(frozen=True)

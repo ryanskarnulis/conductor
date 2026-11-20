@@ -131,6 +131,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   apps' subagent threads (`thread_key`) all follow that window. Older turns
   arrive only as cross-day hits labelled with their day. Session evals'
   "new conversation" is the record moved back a day (`tests/eval_db.age`).
+  The page opens on that same window (#226, `timeline.windowStart`, from
+  `quiet_gap_seconds`): older turns and notes sit behind "Show earlier".
 - **Incognito** (#82, `app/ai/incognito.py`): a per-request switch. The
   person's words and the reply are stored as "(incognito)", and calls,
   steps and finished plans keep no words; receipts and entities stay. Memory
@@ -147,7 +149,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   State lists its own entities, then what it carries. Closing posts one
   `thread_note` to the timeline, narrated from its receipts with code checks
   (titles, counts), never from an incognito or forgotten turn, an undone
-  write or the memory app; like a job's note it lapses no question. Its
+  write or the memory app; like a job's note it lapses no question. A
+  thread where nothing was changed or found posts no note (#226,
+  `threads.leaves_note`); the page's Side thread panel lists the few closed
+  most recently (`GET /agent/threads?closed=true`) to read again. Its
   `thread` ledger turn copies the receipts without undo handles, so the
   timeline's State sees what it touched. A closed thread takes no turns; its
   jobs note into the timeline.

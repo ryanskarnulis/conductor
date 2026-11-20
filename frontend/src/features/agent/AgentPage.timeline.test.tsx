@@ -6,7 +6,8 @@ import type { AgentMessage, ConversationDetail, MessageExchange } from '../../ty
 import { searchTimeline } from '../timeline/timelineApi'
 import { AgentPage } from './AgentPage'
 
-// The one timeline (#82): day separators, surface tags, incognito, search.
+// The one timeline (#82): day separators, surface tags, incognito, search;
+// and the fold (#226): the page opens on the current window.
 
 vi.mock('../../api/sort', () => ({ getWorklist: vi.fn(), openGroup: vi.fn(), fileSongs: vi.fn() }))
 vi.mock('../timeline/timelineApi', () => ({ searchTimeline: vi.fn() }))
@@ -73,9 +74,50 @@ beforeEach(() => {
 })
 
 describe('AgentPage: the timeline (#82)', () => {
+  it('opens on the current window, with what came before the quiet gap behind "Show earlier"', async () => {
+    renderPage()
+    await screen.findByText('Nothing is due.')
+    expect(screen.queryByText('Saved “Odessa”.')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('separator').map((el) => el.textContent)).toEqual(['Today'])
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }))
+    expect(screen.getByText('Saved “Odessa”.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Show earlier' })).not.toBeInTheDocument()
+  })
+
+  it('folds an old side thread’s note away with its day, and it still opens from there (#226)', async () => {
+    const old = message({
+      id: 20,
+      role: 'assistant',
+      content: 'Side thread “browser check”: added “Order the shelf brackets”.',
+      stop_reason: 'thread_note',
+      created_at: yesterday,
+      thread: { id: 62, title: 'browser check' },
+    })
+    mockGet.mockResolvedValue(detail(old, ...history.messages))
+    renderPage()
+    await screen.findByText('Nothing is due.')
+    // The note from before the gap doesn't head the page...
+    expect(screen.queryByRole('group', { name: 'Side thread result: browser check' })).not.toBeInTheDocument()
+    expect(screen.getByRole('article', { name: 'Latest turn' })).toHaveTextContent('Nothing is due.')
+    // ...and is one tap away, with its Open.
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }))
+    const note = screen.getByRole('group', { name: 'Side thread result: browser check' })
+    expect(within(note).getByRole('button', { name: 'Open' })).toBeInTheDocument()
+  })
+
+  it('opens empty a quiet gap after the last turn, and keeps a note that landed since', async () => {
+    const landed = message({ id: 21, role: 'assistant', content: 'Side thread “Garage”: added “Order the shelf brackets”.', stop_reason: 'thread_note', created_at: today, thread: { id: 7, title: 'Garage' } })
+    mockGet.mockResolvedValue(detail(...history.messages.slice(0, 2), landed))
+    renderPage()
+    expect(await screen.findByRole('group', { name: 'Side thread result: Garage' })).toBeInTheDocument()
+    expect(screen.queryByText('Saved “Odessa”.')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show earlier' })).toBeInTheDocument()
+  })
+
   it('is one list with a separator for each day, each entry tagged with its surface', async () => {
     renderPage()
     await screen.findByText('Nothing is due.')
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier' }))
     expect(screen.getAllByRole('separator').map((el) => el.textContent)).toEqual(['Yesterday', 'Today'])
     const turns = screen.getAllByRole('article')
     expect(within(turns[0]).getByText('web')).toBeInTheDocument()

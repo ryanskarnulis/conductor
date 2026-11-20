@@ -13,6 +13,7 @@ import {
   ResumedNote,
   ThreadHead,
   ThreadNote,
+  ThreadsClosed,
   ThreadStart,
   ThreadTabs,
   ToggleMenu,
@@ -26,13 +27,13 @@ import type { AgentStopReason, Surface, Timeline } from '../../types/agent'
 import { ConductorMark } from './ConductorMark'
 import { activityLabel, elapsedSuffix } from './delegateCalls'
 import { JobCards, JobNotes } from './JobCards'
-import { groupJobNotes, jobCards } from './jobStream'
+import { groupJobNotes, jobCards, type TurnItem } from './jobStream'
 import { useJobs } from './useJobs'
 import { nextSceneState, type SceneState } from './sceneState'
 import { ShellScene } from './ShellScene'
 import { SortPanel } from '../sort/SortPanel'
 import { latestSortTurnId } from '../sort/sortTurn'
-import { dayLabel, daySeparators, incognitoLapsed, surfaceLabel, withLiveWords } from './timeline'
+import { dayLabel, daySeparators, incognitoLapsed, surfaceLabel, windowStart, withLiveWords } from './timeline'
 import type { TurnStream } from './turnStream'
 import { buildTurns, pendingConfirm, presenceFor, type ShellTurn } from './turnView'
 import { useConversation } from './useConversation'
@@ -176,6 +177,14 @@ function TurnView({
   )
 }
 
+function withEnds(items: TurnItem[]): { item: TurnItem; end: number }[] {
+  let end = -1
+  return items.map((item) => {
+    end += item.kind === 'notes' ? item.turns.length : 1
+    return { item, end }
+  })
+}
+
 /** The one timeline (#82), created on first use; a failed read says so. */
 function useTimeline(): { timeline: Timeline | null; error: string | null } {
   const [timeline, setTimeline] = useState<Timeline | null>(null)
@@ -251,8 +260,36 @@ export function AgentPage() {
   }, [])
 
   const turns = useMemo(() => buildTurns(messages, pendingText, activity, stream, held), [messages, pendingText, activity, stream, held])
-  const items = useMemo(() => groupJobNotes(turns), [turns])
-  const separators = useMemo(() => daySeparators(items.map((item) => (item.kind === 'notes' ? item.turns[0]?.at : item.turn.when))), [items])
+  // The page opens on the current window (#226): turns and notes from before
+  // the timeline's last quiet gap fold away behind "Show earlier". A side
+  // thread is read whole. The clock is read when the page opens and again
+  // when it comes back into view, so a phone resumed a day later folds too.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const on = () => {
+      if (document.visibilityState === 'visible') setNow(Date.now())
+    }
+    document.addEventListener('visibilitychange', on)
+    return () => document.removeEventListener('visibilitychange', on)
+  }, [])
+  const [earlier, setEarlier] = useState(false)
+  const foldRef = useRef<HTMLDivElement>(null)
+  const windowAt = useMemo(
+    () => (thread === null ? windowStart(turns, now, (timeline?.quiet_gap_seconds ?? 0) * 1000) : 0),
+    [thread, turns, now, timeline],
+  )
+  // Each item with the index of its last turn: a group of job notes shows
+  // whole when any of it is in the window.
+  const items = useMemo(() => withEnds(groupJobNotes(turns)), [turns])
+  const folded = items.findIndex(({ end }) => end >= windowAt)
+  const foldAt = windowAt === 0 ? 0 : folded < 0 ? items.length : folded
+  const shown = useMemo(() => (earlier ? items : items.slice(foldAt)).map(({ item }) => item), [items, earlier, foldAt])
+  const separators = useMemo(() => daySeparators(shown.map((item) => (item.kind === 'notes' ? item.turns[0]?.at : item.turn.when))), [shown])
+  const showEarlier = () => setEarlier(true)
+  // The earlier turns arrive above: keep the place, with the newest of them in view.
+  useEffect(() => {
+    if (earlier) foldRef.current?.scrollIntoView?.({ block: 'center' })
+  }, [earlier])
   const confirm = sending ? null : pendingConfirm(messages)
   // A job's note or a side thread's result lands in the conversation but is
   // never the turn the page is about.
@@ -404,6 +441,7 @@ export function AgentPage() {
   }, [openTo, searchOpen])
   const openHit = (messageId: number | null) => {
     setSearchOpen(false)
+    setEarlier(true)
     setOpenTo(messageId)
   }
 
@@ -452,6 +490,7 @@ export function AgentPage() {
           onClick={() => {
             setSearchOpen(false)
             setMemoryOpen(false)
+            if (!startOpen) threads.loadRecent()
             setStartOpen((open) => !open)
           }}
         >
@@ -520,7 +559,11 @@ export function AgentPage() {
                   disabled={sending || threads.closing}
                 />
               )}
-              <div className="shell-convo" aria-label={thread ? `Side thread: ${thread.title ?? 'Side thread'}` : 'Timeline'}>
+              <div
+                className="shell-convo"
+                aria-label={thread ? `Side thread: ${thread.title ?? 'Side thread'}` : 'Timeline'}
+                data-earlier={earlier ? '' : undefined}
+              >
                 {startOpen && (
                   <div id="shell-thread-start">
                     <ThreadStart
@@ -531,6 +574,17 @@ export function AgentPage() {
                       onName={setThreadName}
                       onStart={() => void beginThread()}
                       onCancel={() => setStartOpen(false)}
+                    />
+                    <ThreadsClosed
+                      threads={threads.recent.map((t) => ({
+                        id: t.id,
+                        title: t.title ?? 'Side thread',
+                        closed: t.closed_at ? dayLabel(t.closed_at).replace(/^(Today|Yesterday)$/, (day) => day.toLowerCase()) : '',
+                      }))}
+                      onOpen={(id) => {
+                        setStartOpen(false)
+                        void threads.view(id)
+                      }}
                     />
                   </div>
                 )}
@@ -555,10 +609,16 @@ export function AgentPage() {
                   </p>
                 )}
                 {loading && <div className="page-loading">{thread ? 'Loading the side thread…' : 'Loading the timeline…'}</div>}
-                {items.map((item, index) => {
+                {!thread && !earlier && foldAt > 0 && (
+                  <button type="button" className="cd-btn cd-btn--small tl-earlier" onClick={showEarlier}>
+                    Show earlier
+                  </button>
+                )}
+                {shown.map((item, index) => {
                   const day = separators.get(index)
                   return (
                     <Fragment key={item.kind === 'notes' ? item.key : item.turn.key}>
+                      {earlier && foldAt > 0 && index === foldAt && <div ref={foldRef} className="agent-thread-sentinel" aria-hidden="true" />}
                       {day && (
                         <p className="tl-day" role="separator">
                           {dayLabel(day)}
@@ -602,7 +662,7 @@ export function AgentPage() {
                     {elapsedSuffix(activity)}
                   </p>
                 )}
-                {!loading && messages.length === 0 && !sending && (
+                {!loading && shown.length === 0 && !sending && (
                   <p className="agent-thread-hint">
                     {thread
                       ? 'A side thread starts with only what it carries. Ask something below; it stays in here until you close it.'

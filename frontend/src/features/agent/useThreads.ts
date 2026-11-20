@@ -8,10 +8,15 @@ import { sendErrorMessage } from './useConversation'
  * page's controls. A thread is a conversation of its own, so the page swaps
  * which conversation it shows; the timeline is `current === null`. Several
  * may be open; one is on the page. A closed thread can be opened again from
- * its result note to read, never to write. Nothing here says a thread is
- * closed before the server's answer does. */
+ * its result note, or from the recently closed ones (#226: one where nothing
+ * happened leaves no note), to read, never to write. Nothing here says a
+ * thread is closed before the server's answer does. */
 export interface UseThreads {
   open: ThreadInfo[]
+  /** The threads closed most recently, newest first, once asked for. */
+  recent: ThreadInfo[]
+  /** Read the recently closed threads (when the side-thread panel opens). */
+  loadRecent: () => void
   /** The thread on the page: an open one, or a closed one being read. */
   current: ThreadInfo | null
   starting: boolean
@@ -30,6 +35,7 @@ export function useThreads(ready: boolean): UseThreads {
   const [open, setOpen] = useState<ThreadInfo[]>([])
   const [activeId, setActiveId] = useState<number | null>(null)
   const [viewing, setViewing] = useState<ThreadInfo | null>(null)
+  const [recent, setRecent] = useState<ThreadInfo[]>([])
   const [starting, setStarting] = useState(false)
   const [closing, setClosing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -49,6 +55,12 @@ export function useThreads(ready: boolean): UseThreads {
       active = false
     }
   }, [ready])
+
+  const loadRecent = useCallback(() => {
+    listThreads(true).then(setRecent, () => {
+      // No list: a thread with a note still opens from it.
+    })
+  }, [])
 
   const start = useCallback(async (title: string | null, incognito: boolean): Promise<boolean> => {
     setStarting(true)
@@ -83,14 +95,14 @@ export function useThreads(ready: boolean): UseThreads {
         return
       }
       try {
-        const thread = await getThread(id)
+        const thread = recent.find((closed) => closed.id === id) ?? (await getThread(id))
         setActiveId(null)
         setViewing(thread)
       } catch (e: unknown) {
         setError(`That side thread can’t be opened: ${sendErrorMessage(e)}`)
       }
     },
-    [open],
+    [open, recent],
   )
 
   const close = useCallback(
@@ -114,7 +126,7 @@ export function useThreads(ready: boolean): UseThreads {
   )
 
   const current = viewing ?? open.find((thread) => thread.id === activeId) ?? null
-  return { open, current, starting, closing, error, start, select, view, close }
+  return { open, recent, loadRecent, current, starting, closing, error, start, select, view, close }
 }
 
 /** What a thread carries, as the header shows it: titles and saved facts. */

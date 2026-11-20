@@ -105,9 +105,10 @@ export async function cancelJob(conversationId: number, app: string, ref: string
   return (await res.json()) as JobCancelResult
 }
 
-/** The side threads still open (#139), oldest first. */
-export async function listThreads(): Promise<ThreadInfo[]> {
-  const res = await apiClient('/api/agent/threads')
+/** The side threads still open (#139), oldest first; with `closed`, the few
+ * closed most recently instead, newest first (#226). */
+export async function listThreads(closed = false): Promise<ThreadInfo[]> {
+  const res = await apiClient(closed ? '/api/agent/threads?closed=true' : '/api/agent/threads')
   return (await res.json()) as ThreadInfo[]
 }
 

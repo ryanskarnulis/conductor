@@ -31,15 +31,15 @@ const message = (over: Partial<AgentMessage>): AgentMessage => ({
   content: 'grab this whole playlist',
   tool_calls: null,
   stop_reason: null,
-  created_at: '2026-11-06T18:00:00Z',
+  created_at: new Date().toISOString(),
   ...over,
 })
 const queued = message({ id: 2, role: 'assistant', content: 'Queued your playlist: 40 tracks.', stop_reason: 'completed' })
 const detail = (...more: AgentMessage[]): ConversationDetail => ({
   id: 1,
   title: 'playlist',
-  created_at: '2026-11-06T18:00:00Z',
-  updated_at: '2026-11-06T18:00:00Z',
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
   messages: [message({}), queued, ...more],
 })
 const job = (over: Partial<JobEvent> = {}): JobEvent => ({ app: 'music', ref: '118', status: 'submitted', done: 0, total: 40, title: 'Late Night Drive', untrusted: true, ended: false, ...over })

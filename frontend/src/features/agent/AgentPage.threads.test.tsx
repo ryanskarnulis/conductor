@@ -167,6 +167,25 @@ describe('AgentPage: side threads (#139)', () => {
     expect(await screen.findByLabelText('Message conductor')).toBeInTheDocument()
   })
 
+  it('closes without a note when nothing happened, and opens again from the recently closed (#226)', async () => {
+    await startGarage()
+    const closed = { ...garage, closed_at: now, result: 'Side thread “Garage shelves” closed. Nothing was changed or found there.' }
+    vi.mocked(closeThread).mockResolvedValue({ thread: closed, message: null })
+    fireEvent.click(screen.getByRole('button', { name: 'Done · back to the timeline' }))
+    expect(await screen.findByText('Added “measure the garage wall”.')).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: /Side thread result/ })).not.toBeInTheDocument()
+
+    vi.mocked(listThreads).mockImplementation((asked?: boolean) => Promise.resolve(asked ? [closed] : []))
+    fireEvent.click(screen.getByRole('button', { name: 'Side thread' }))
+    const recent = await screen.findByRole('region', { name: 'Recently closed side threads' })
+    expect(listThreads).toHaveBeenLastCalledWith(true)
+    expect(recent).toHaveTextContent('closed today')
+    fireEvent.click(within(recent).getByRole('button', { name: 'Garage shelves' }))
+    const head = await screen.findByRole('region', { name: 'Side thread: Garage shelves' })
+    expect(head).toHaveTextContent('Closed. What flowed back: Side thread “Garage shelves” closed. Nothing was changed or found there.')
+    expect(screen.queryByLabelText('Message conductor')).not.toBeInTheDocument()
+  })
+
   it('starts incognito without a name', async () => {
     renderPage()
     await screen.findByText('Added “measure the garage wall”.')

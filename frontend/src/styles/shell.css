@@ -178,6 +178,11 @@
   background: transparent;
 }
 
+/* "Show earlier" (#226): what came before the last quiet gap. */
+.tl-earlier {
+  align-self: center;
+}
+
 /* Job notes (#90) stay in view on a phone too: they are what a job left. */
 .shell-jobnotes {
   display: flex;
@@ -264,7 +269,8 @@
   padding: var(--space-6);
 }
 
-.shell[data-view='phone'] .shell-turn--old {
+/* ...until "Show earlier" (#226) asks for them. */
+.shell[data-view='phone'] .shell-convo:not([data-earlier]) .shell-turn--old {
   display: none;
 }
 
