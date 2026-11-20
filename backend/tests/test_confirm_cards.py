@@ -387,3 +387,21 @@ def test_spoken_a_title_is_never_cut_and_unlike_questions_are_said_whole() -> No
     assert narrator.several(alike, "voice").startswith("Trash the task “Test one” and “Test two”?")
     unlike = ["Trash Kitchen and its 12 tasks?", "Reset the board?"]
     assert narrator.several(unlike, "voice").startswith(" ".join(unlike))
+
+
+def test_an_incognito_turns_answered_card_is_not_open_again(client: TestClient) -> None:
+    fake = FakeClient([_asked_three(), _trashed(1), _trashed(0), _trashed(2)])
+    fleet = _fleet()
+    build_delegate_tools(fleet, _factory(fake))
+    provider = ScriptedProvider([ASK, YES, text_turn("Trashed Test 1 and Test 3.")])
+    app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+        provider, fleet, narrate=True
+    )
+    conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
+    _say(client, conversation, "delete the test tasks", incognito=True)
+    done = _answer(client, conversation, "tok-b", "yes")
+    assert done.status_code == 200 and done.json()["outcome"] == "done"
+    # The stored answer keeps its receipt and none of the app's words.
+    assert done.json()["message"]["tool_calls"][-1]["result"] == "(incognito)"
+    _say(client, conversation, "yes")
+    assert _sent(fake) == [None, "tok-b", "tok-a", "tok-c"]

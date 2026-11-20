@@ -262,12 +262,13 @@ def incognito_messages(db: Session, conversation_id: int | None = None) -> set[i
 
 
 def _waiting_only(calls: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
-    """An incognito turn's calls that left an app's question waiting: what a
-    yes needs, and nothing the app answered."""
+    """An incognito turn's calls that left an app's question waiting, and the
+    answers its cards took (so an answered one isn't open again): what a yes
+    needs, and nothing the app answered."""
     kept = [
         {**incognito.tool_call(call), "result": None, "app_record": None}
         for call in calls or []
-        if call.get("app_confirm")
+        if call.get("app_confirm") or call.get("answers")
     ]
     return kept or None
 
