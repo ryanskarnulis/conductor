@@ -29,7 +29,7 @@ import { activityLabel, elapsedSuffix } from './delegateCalls'
 import { JobCards, JobNotes } from './JobCards'
 import { groupJobNotes, jobCards, type TurnItem } from './jobStream'
 import { useJobs } from './useJobs'
-import { nextSceneState, type SceneState } from './sceneState'
+import { useSceneState } from './useSceneState'
 import { ShellScene } from './ShellScene'
 import { SortPanel } from '../sort/SortPanel'
 import { latestSortTurnId } from '../sort/sortTurn'
@@ -299,12 +299,8 @@ export function AgentPage() {
   const presence = presenceFor(sending, activity, confirm !== null || pause !== null)
 
   // The scene reads the same facts as the panel, each frame, from this ref.
-  const sceneRef = useRef<SceneState>(nextSceneState(null, null, 'idle', null, 0))
   const confirmApp = confirm?.raw.app ?? (pause?.kind === 'confirm' ? pause.appKey : null)
-  useEffect(() => {
-    sceneRef.current = nextSceneState(sceneRef.current, latest, presence.state, confirmApp, performance.now(), cards)
-  }, [latest, presence.state, confirmApp, cards])
-  const getSceneState = useCallback(() => sceneRef.current, [])
+  const getSceneState = useSceneState(latest, presence.state, confirmApp, cards)
 
   // Voice-output toggle (fleet UX rule: voice in → voice out, typed in → silent).
   const [voiceOutput, setVoiceOutput] = useState(() => localStorage.getItem('agent-voice-output') !== 'off')

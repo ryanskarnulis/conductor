@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentMessage, JobEvent, LiveReceipt, ToolCallRecord } from '../../types/agent'
 import { applyJobEvent, EMPTY_JOBS, jobCards, type JobsState } from './jobStream'
-import { nextSceneState } from './sceneState'
+import { HOLD_MS, nextSceneState, nextSceneWake, RELEASE_MS } from './sceneState'
 import { applyTurnEvent, EMPTY_STREAM, type TurnEventName } from './turnStream'
 import { buildTurns, pendingConfirm } from './turnView'
 
@@ -119,6 +119,25 @@ describe('the Living Web follows the job cards', () => {
     const b = idle(cardsOf(job({ done: 2 })), a, 700)
     expect(b.strands.music.since).toBe(100)
     expect(b.idx).toBe(a.idx + 1) // the ring moved: a reduced-motion scene redraws
+  })
+
+  it('keeps a running job’s strand for as long as it runs, and lets go once it has ended (#232)', () => {
+    const a = idle(cardsOf(job({ done: 1 })))
+    const b = idle(cardsOf(job({ done: 2 })), a, 600_000)
+    expect(b.strands.music).toEqual({ state: 'job', since: 100 })
+    expect(nextSceneWake(b, 600_000)).toBeNull()
+    const over = cardsOf(job({ status: 'completed', done: 40, ended: true, note_message_id: 3 }))
+    const c = idle(over, b, 600_100)
+    expect(c.strands.music).toEqual({ state: 'done', since: 600_100 })
+    expect(idle(over, c, 600_100 + HOLD_MS).strands.music.release).toBe(600_100 + HOLD_MS)
+    expect(idle(over, c, 600_100 + HOLD_MS + RELEASE_MS).strands).toEqual({})
+  })
+
+  it('keeps the strand of a job that runs on after its turn has ended', () => {
+    const turn = { key: 't', said: 'x', note: false, ack: null, resumedNote: null, steps: [{ appKey: 'music', kind: 'ask', app: 'music', text: '', state: 'done' as const }], receipts: [], pause: null, announce: null, reply: 'ok', stopReason: null, live: false }
+    const a = nextSceneState(null, turn, 'idle', null, 100, cardsOf(job()))
+    const b = nextSceneState(a, turn, 'idle', null, 100 + HOLD_MS * 5, cardsOf(job()))
+    expect(b.strands.music).toEqual({ state: 'job', since: 100 })
   })
 
   it('draws nothing for an app that is not on the web', () => {
