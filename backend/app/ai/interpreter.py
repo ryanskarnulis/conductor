@@ -446,6 +446,10 @@ class Interpreter:
             return self._split(state, turn, plan, controls, paused=paused, pending=pending)
         first = plan.steps[0]
         if isinstance(first, plans.Confirm):
+            if first.answer == "yes" and plans.declines(state.words):
+                # Code's backstop: a refusal is never read as a yes.
+                logger.warning("confirm_yes_on_a_refusal", words=state.words[:80])
+                first = first.model_copy(update={"answer": "no"})
             if (
                 first.answer == "yes"
                 and (gate is None or gate.reason == "gate")

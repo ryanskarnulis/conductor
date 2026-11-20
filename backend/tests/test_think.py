@@ -516,6 +516,35 @@ def test_no_sets_the_proposal_aside_and_nothing_runs(
     assert kept.status == "set_aside"
 
 
+@pytest.mark.parametrize("words", ["not now", "Not now.", "no thanks", "nope", "never mind"])
+def test_a_refusal_the_planner_read_as_a_yes_still_sets_the_proposal_aside(
+    words: str,
+    run_with: Any,
+    world: World,
+    fleet: Fleet,
+    session_factory: sessionmaker[Session],
+    db_session: Session,
+) -> None:
+    """Live 2026-11-20: the card's "Not now" button sends "not now", the 12B
+    compiled a confirm yes, and seven tasks were created."""
+    _proposed(run_with, session_factory, fleet)
+    reply = run_with(ScriptedProvider([plan_turn(confirm("yes"))]), words)
+    assert "set that plan aside" in reply["content"]
+    assert world.receipts == []
+    db_session.expire_all()
+    kept = db_session.execute(
+        select(LedgerPlan).where(LedgerPlan.source == think.KIND)
+    ).scalar_one()
+    assert kept.status == "set_aside"
+
+
+def test_a_yes_is_not_mistaken_for_a_refusal() -> None:
+    for words in ("yes", "yes, don't wait", "ok do it", "go ahead", "sure", "nothing to add, yes"):
+        assert not plans.declines(words), words
+    for words in ("not now", "no", "No, thanks.", "don't", "later", "cancel that", "not yet"):
+        assert plans.declines(words), words
+
+
 def test_anything_else_lets_the_proposal_lapse(
     run_with: Any,
     world: World,
