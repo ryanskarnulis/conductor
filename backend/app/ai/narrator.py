@@ -233,11 +233,61 @@ def live_confirm(records: Sequence[ToolCallRecord]) -> ToolCallRecord | None:
 def _confirm(
     records: Sequence[ToolCallRecord], asking: ToolCallRecord, surface: str | None
 ) -> Narration:
-    question = str((asking.app_confirm or {})["question"]).strip()
+    questions = asked_questions(asking)
+    question = questions[0] if len(questions) == 1 else several(questions, surface)
     before = [record for record in records if record is not asking]
     line = _appendix(_facts(before), spoken=surface in SPOKEN)
     reply = f"{line} {question}" if line else question
     return Narration(reply, "confirm")
+
+
+def asked_questions(record: ToolCallRecord) -> list[str]:
+    """Every question a call's app is waiting on, in the order asked."""
+    armed = confirmation.asked(
+        {"app_confirm": record.app_confirm, "app_confirms": record.app_confirms}
+    )
+    return [one.question.strip() for one in armed if one.question.strip()]
+
+
+def several(questions: Sequence[str], surface: str | None) -> str:
+    """Several questions as one reply, built by code. Read: each on its own
+    line, word for word (the page shows a card for each). Spoken: what they
+    share is said once and every item is named ("Trash the task “A”, “B” and
+    “C”?"), then what a yes does."""
+    if surface not in SPOKEN:
+        return "\n".join(questions)
+    return f"{_folded(questions)} A yes does all {len(questions)}."
+
+
+def _folded(questions: Sequence[str]) -> str:
+    """Questions that open (and maybe end) alike, as one: the shared words
+    once, each one's own words listed. Anything else is said in full."""
+    full = " ".join(questions)
+    if any(not question.endswith("?") for question in questions):
+        return full
+    words = [question[:-1].split() for question in questions]
+    shortest = min(len(one) for one in words)
+    lead = 0
+    while lead < shortest and len({tuple(one[: lead + 1]) for one in words}) == 1:
+        lead += 1
+    # Never cut inside a quoted title.
+    while lead and not _balanced(" ".join(words[0][:lead])):
+        lead -= 1
+    tail = 0
+    while tail < shortest - lead and len({tuple(one[len(one) - tail - 1 :]) for one in words}) == 1:
+        tail += 1
+    while tail and not _balanced(" ".join(words[0][len(words[0]) - tail :])):
+        tail -= 1
+    own = [" ".join(one[lead : len(one) - tail]) for one in words]
+    if not lead or not all(own) or len(set(own)) != len(own):
+        return full
+    listed = ", ".join(own[:-1]) + " and " + own[-1]
+    ending = " " + " ".join(words[0][len(words[0]) - tail :]) if tail else ""
+    return f"{' '.join(words[0][:lead])} {listed}{ending}?"
+
+
+def _balanced(text: str) -> bool:
+    return text.count('"') % 2 == 0 and text.count("“") == text.count("”")
 
 
 def _did_nothing(record: ToolCallRecord) -> bool:

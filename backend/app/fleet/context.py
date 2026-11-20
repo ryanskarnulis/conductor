@@ -87,6 +87,9 @@ class DelegationContext:
     # before this one, so a yes can only answer a question the person has
     # seen. A question asked during this run is never here.
     pending_confirm: PendingConfirm | None = None
+    # Every question it left waiting, in the order asked (several gated calls
+    # are several questions); ``pending_confirm`` is the first of them.
+    pending_confirms: list[PendingConfirm] = field(default_factory=list)
     # A compiled plan's parallel reads (#72) run delegate calls from several
     # threads: the thread store is touched one at a time (its DB work is a few
     # short statements; only the network runs at once).
@@ -104,13 +107,35 @@ class DelegationContext:
         with self._lock:
             self.thread_store.forget(self.master_conversation_id, app_name)
 
+    def __post_init__(self) -> None:
+        if self.pending_confirm is None and self.pending_confirms:
+            self.pending_confirm = self.pending_confirms[0]
+
+    def open_confirms(self) -> list[PendingConfirm]:
+        """The waiting questions, in the order asked."""
+        if self.pending_confirms:
+            return list(self.pending_confirms)
+        return [self.pending_confirm] if self.pending_confirm is not None else []
+
+    def next_confirm(self, app_name: str) -> PendingConfirm | None:
+        """The question a yes to ``app_name`` answers next: its first open one."""
+        return next((one for one in self.open_confirms() if one.app == app_name), None)
+
     def take_pending_confirm(self, app_name: str) -> PendingConfirm | None:
-        """The waiting question if it is ``app_name``'s; used at most once."""
-        pending = self.pending_confirm
-        if pending is None or pending.app != app_name:
+        """``app_name``'s next waiting question, if it has one; each is used
+        at most once."""
+        pending = self.next_confirm(app_name)
+        if pending is None:
             return None
-        self.pending_confirm = None
+        left = [one for one in self.open_confirms() if one is not pending]
+        self.pending_confirms = left
+        self.pending_confirm = left[0] if left else None
         return pending
+
+    def lapse_confirms(self) -> None:
+        """The waiting questions lapse: their tokens are never sent."""
+        self.pending_confirms = []
+        self.pending_confirm = None
 
     def audit_delegate_call(
         self,

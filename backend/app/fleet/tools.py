@@ -443,19 +443,23 @@ def _finish(
         # alone, never from its words.
         typed = assistant.needs_input
         runtime.delegated_asks.set({"needs_input": None if typed is None else typed.model_dump()})
-    asked = assistant.confirm_required
-    if assistant.stop_reason == "confirm_required" and asked is not None:
-        runtime.delegated_confirm.set(
+    armed = assistant.armed()
+    if assistant.stop_reason == "confirm_required" and armed:
+        kept = [
             AppConfirm(
                 app=app.name,
                 thread_id=subagent_id,
                 token=asked.token,
                 tool=asked.tool,
                 question=asked.question,
+                preview=asked.preview.model_dump(exclude_none=True) if asked.preview else None,
                 expires_at=asked.expires_at.isoformat() if asked.expires_at else None,
             ).model_dump()
-        )
-        return _confirm_reply(app, asked.question)
+            for asked in armed
+        ]
+        runtime.delegated_confirm.set(kept[0])
+        runtime.delegated_confirms.set(tuple(kept))
+        return _confirm_reply(app, " ".join(asked.question for asked in armed))
     return _format_reply(app, assistant)
 
 

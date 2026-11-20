@@ -209,6 +209,34 @@ def close_turn(
     )
 
 
+def answer_step(
+    db: Session, assistant_message_id: int, record: ToolCallRecord, *, settled: bool
+) -> None:
+    """A question answered from its card, on the turn that asked it: one more
+    step on that turn's plan, with the app's receipts, like any confirmed
+    call. ``settled``: no question of the turn is open any more, so a plan
+    that paused on them waits on nothing."""
+
+    def write() -> LedgerTurn | None:
+        turn = db.execute(
+            select(LedgerTurn).where(LedgerTurn.assistant_message_id == assistant_message_id)
+        ).scalar_one_or_none()
+        if turn is None or not turn.plans:
+            return None
+        plan = turn.plans[-1]
+        seq = max((step.seq for each in turn.plans for step in each.steps), default=0) + 1
+        _journal_step(db, plan, seq, record, hidden=turn.incognito)
+        if settled and plan.status == "paused" and plan.pause == "app_confirm":
+            plan.status, plan.note = "ran", "its questions were answered from their cards"
+        db.flush()
+        db.expire(plan, ["steps"])
+        return turn
+
+    turn = _safely(db, "ledger_answer_step_failed", write)
+    if turn is not None:
+        _safely(db, "ledger_memory_index_failed", lambda: memory_index.index_again(db, turn))
+
+
 # How many job notes in a row :func:`paused_plan` looks past for the person's turn.
 _NOTES_SCANNED = 20
 

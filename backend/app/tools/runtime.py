@@ -43,6 +43,12 @@ delegated_record: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
 # rule; never on the model's message, which gets the question alone.
 delegated_confirm: ContextVar[dict[str, Any] | None] = ContextVar("delegated_confirm", default=None)
 
+# Every question that call armed, in call order (several gated calls in one
+# turn are several questions); ``delegated_confirm`` is the first of them.
+delegated_confirms: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
+    "delegated_confirms", default=None
+)
+
 # For a delegate call to a v1.2 app (#202): ``{"needs_input": <its question or
 # None>}``, so a typed app's asking is read from ``needs_input`` alone, never
 # from its wording. Unset (``None``) for a v1.1 app. Same lifetime rule.

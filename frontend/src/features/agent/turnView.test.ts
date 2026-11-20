@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentMessage, LiveReceipt, ToolCallRecord } from '../../types/agent'
 import { nextSceneState } from './sceneState'
 import { applyTurnEvent, EMPTY_STREAM, type TurnEventName, type TurnStream } from './turnStream'
-import { buildTurns, pendingConfirm, presenceFor, PROPOSAL_QUESTION, receiptFrom } from './turnView'
+import { buildTurns, confirmCards, pendingConfirm, presenceFor, PROPOSAL_QUESTION, receiptFrom } from './turnView'
 
 function msg(over: Partial<AgentMessage>): AgentMessage {
   return { id: 1, conversation_id: 1, role: 'user', content: 'hi', tool_calls: null, stop_reason: null, created_at: '2026-11-06T18:00:00Z', ...over }
@@ -362,7 +362,8 @@ describe('pauses and resumes', () => {
     const gate = live(streamOf([['turn_started', beat], ['plan', asking], ['paused', { reason: 'gate', question: 'Just to check?', app: 'music', step: 's1' }]]))
     expect(gate.pause).toMatchObject({ kind: 'confirm', appKey: 'music', app: 'music', question: 'Just to check?' })
     const app = live(streamOf([['turn_started', beat], ['plan', plan], ['paused', { reason: 'app_confirm', question: 'Trash it?', app: 'tasks', step: 's1' }]]))
-    expect(app.pause).toMatchObject({ kind: 'confirm', appKey: 'tasks', app: 'PCC', why: 'PCC asks before this write. Say “yes”, or tap.' })
+    // An app's questions are cards from the stored turn, one each: no pause card.
+    expect(app.pause).toBeNull()
   })
 
   it('says how a turn resumed a plan', () => {
@@ -419,5 +420,74 @@ describe('a side thread’s result in the timeline (#139)', () => {
     expect(turns).toHaveLength(2)
     expect(turns[0]).toMatchObject({ note: true, reply: null, threadNote: null })
     expect(turns[1]).toMatchObject({ said: '', reply: note.content, threadNote: { id: 7, title: 'Garage' }, stopReason: null })
+  })
+})
+
+describe('confirmCards', () => {
+  const NOW = Date.parse('2026-11-06T18:00:00Z')
+  const soon = '2026-11-06T18:10:00Z'
+  const armed = ['A', 'B', 'C'].map((title, n) => ({ app: 'tasks', thread_id: 9, token: `tok-${n}`, tool: 'trash_task', question: `Trash the task “${title}”?`, expires_at: soon }))
+  const asking = askTasks({ app_confirm: armed[0], app_confirms: armed })
+  const yes = (token: string, over: Partial<ToolCallRecord> = {}): ToolCallRecord => ({ tool: 'confirm', arguments: { app: 'tasks' }, result: 'ok', error: null, answers: token, ...over })
+  const trashed = { tool: 'trash_task', outcome: 'done', touched: [{ app: 'tasks', kind: 'task', id: '2', title: 'B' }], undo: { handle: 'u', how: 'restore it' } }
+
+  it('makes one open card per question, in the order asked', () => {
+    const cards = confirmCards([asking], NOW)
+    expect(cards.map((c) => [c.token, c.state, c.question])).toEqual(armed.map((a) => [a.token, 'open', a.question]))
+    expect(cards[0]).toMatchObject({ app: 'PCC', appKey: 'tasks' })
+  })
+
+  it('reads an old single question as one card', () => {
+    expect(confirmCards([askTasks({ app_confirm: confirm })], NOW)).toMatchObject([{ token: 't', state: 'open' }])
+  })
+
+  it('settles each card on its own: done with its receipt, declined, or not done', () => {
+    const calls = [
+      asking,
+      yes('tok-1', { app_record: [trashed] }),
+      yes('tok-0', { result: null, error: 'not run: declined' }),
+      yes('tok-2', { result: null, error: 'tasks didn’t take the yes (what it would change has changed since), so nothing was done. Ask tasks again.' }),
+    ]
+    const [a, b, c] = confirmCards(calls, NOW)
+    expect(a.state).toBe('declined')
+    expect(b).toMatchObject({ state: 'done', receipts: [{ verb: 'Trashed', entity: '“B”', undoHow: 'restore it' }] })
+    expect(c).toMatchObject({ state: 'failed', detail: 'tasks didn’t take the yes (what it would change has changed since), so nothing was done.' })
+  })
+
+  it('keeps the others open after one answer', () => {
+    expect(confirmCards([asking, yes('tok-1', { app_record: [trashed] })], NOW).map((c) => c.state)).toEqual(['open', 'done', 'open'])
+  })
+
+  it('shows a refusal by the app as refused', () => {
+    const refused = { tool: 'trash_task', outcome: 'refused', reason: 'task 2 is already in the trash' }
+    expect(confirmCards([asking, yes('tok-1', { app_record: [refused] })], NOW)[1]).toMatchObject({ state: 'refused', receipts: [{ verb: 'Refused' }] })
+  })
+
+  it('shows an unanswered card past its expiry as expired', () => {
+    expect(confirmCards([asking], Date.parse('2026-11-06T18:10:01Z')).map((c) => c.state)).toEqual(['expired', 'expired', 'expired'])
+    // An answered one keeps its outcome.
+    expect(confirmCards([asking, yes('tok-1', { app_record: [trashed] })], Date.parse('2026-11-06T19:00:00Z'))[1].state).toBe('done')
+  })
+
+  it('drops the cards a later message to the app voided', () => {
+    expect(confirmCards([asking, askTasks()], NOW)).toEqual([])
+  })
+
+  it('puts the cards on the last turn only, and a card’s receipt on the card', () => {
+    const answered = msg({ id: 2, role: 'assistant', tool_calls: [asking, yes('tok-1', { app_record: [trashed] })] })
+    const [turn] = buildTurns([msg({ id: 1 }), answered], null, null, null, null, NOW)
+    expect(turn.confirms?.map((c) => c.state)).toEqual(['open', 'done', 'open'])
+    expect(turn.receipts).toEqual([])
+    expect(turn.announce).toBe('Waiting on you: Trash the task “A”? Trash the task “C”?')
+    expect(pendingConfirm([msg({ id: 1 }), answered], NOW)?.question).toBe('Trash the task “A”?')
+    // A newer turn folds it: no cards, and the receipt is the turn's own.
+    const [old] = buildTurns([msg({ id: 1 }), answered, msg({ id: 3 }), msg({ id: 4, role: 'assistant', content: 'ok' })], null, null, null, null, NOW)
+    expect(old.confirms).toEqual([])
+    expect(old.receipts).toMatchObject([{ verb: 'Trashed', entity: '“B”' }])
+  })
+
+  it('has nothing waiting once every card is settled or expired', () => {
+    const late = Date.parse('2026-11-06T19:00:00Z')
+    expect(pendingConfirm([msg({ id: 1 }), msg({ id: 2, role: 'assistant', tool_calls: [asking] })], late)).toBeNull()
   })
 })

@@ -138,6 +138,12 @@ class ToolCallRecord(BaseModel):
     # when it asked nothing. ``None`` for a v1.1 app, whose asking is read from
     # its words (``narrator.app_asks``).
     app_asks: dict[str, Any] | None = None
+    # Every confirmation that call armed, in call order (several gated calls
+    # in one turn are several questions); ``app_confirm`` is the first.
+    app_confirms: list[dict[str, Any]] | None = None
+    # For a ``confirm`` call: the token of the one question it answered, so
+    # the app's other open questions stay open. Persisted, never sent to a model.
+    answers: str | None = None
     # For a call that carries an undo (#74, ``app.ai.control``): the ledger
     # receipts it undoes, marked undone once the app says it did.
     undoes: list[int] | None = None
@@ -246,11 +252,13 @@ class Runtime:
         record = ToolCallRecord(tool=call.name, arguments=call.arguments)
         # A yes to an app's question about an undo carries what it undoes (#74).
         record.undoes = _answered_undo(call)
+        record.answers = _answered_token(call)
         # Cleared per dispatch and reset after, so what one delegate call
         # reported can never be read as the next call's.
         delegated = runtime.delegated_tools.set(None)
         delegated_record = runtime.delegated_record.set(None)
         delegated_confirm = runtime.delegated_confirm.set(None)
+        delegated_confirms = runtime.delegated_confirms.set(None)
         delegated_asks = runtime.delegated_asks.set(None)
         try:
             outcome = registry.call_tool(call.name, call.arguments, actor=actor)
@@ -268,6 +276,7 @@ class Runtime:
             runtime.delegated_tools.reset(delegated)
             runtime.delegated_record.reset(delegated_record)
             runtime.delegated_confirm.reset(delegated_confirm)
+            runtime.delegated_confirms.reset(delegated_confirms)
             runtime.delegated_asks.reset(delegated_asks)
         logger.info("agent_tool_call", tool=call.name, ok=record.error is None, error=record.error)
         return record
@@ -370,20 +379,29 @@ class Runtime:
         run_trace.write_record(self.tracer, build, failed=failed)
 
 
-def _answered_undo(call: ToolCall) -> list[int] | None:
-    """The ledger receipts a ``confirm`` call undoes (#74): those the app's
-    waiting question was about, when it came from an undo. Read before the
-    call takes the question."""
+def _next_answered(call: ToolCall) -> confirmation.PendingConfirm | None:
+    """The waiting question a ``confirm`` call is about to answer: its app's
+    first open one. Read before the call takes it."""
     if call.name != confirmation.CONFIRM_TOOL:
         return None
     try:
-        pending = current_delegation_context().pending_confirm
+        context = current_delegation_context()
     except NoDelegationContextError:
         return None
-    app = str(call.arguments.get("app") or "").strip().lower()
-    if pending is None or not pending.undoes or pending.app != app:
-        return None
-    return list(pending.undoes)
+    return context.next_confirm(str(call.arguments.get("app") or "").strip().lower())
+
+
+def _answered_undo(call: ToolCall) -> list[int] | None:
+    """The ledger receipts a ``confirm`` call undoes (#74): those the app's
+    waiting question was about, when it came from an undo."""
+    pending = _next_answered(call)
+    return list(pending.undoes) if pending is not None and pending.undoes else None
+
+
+def _answered_token(call: ToolCall) -> str | None:
+    """Which question a ``confirm`` call answers: its token."""
+    pending = _next_answered(call)
+    return pending.token if pending is not None else None
 
 
 def _take_app_report(record: ToolCallRecord) -> None:
@@ -392,6 +410,8 @@ def _take_app_report(record: ToolCallRecord) -> None:
     app_record = runtime.delegated_record.get()
     record.app_record = list(app_record) if app_record is not None else None
     record.app_confirm = runtime.delegated_confirm.get()
+    several = runtime.delegated_confirms.get()
+    record.app_confirms = list(several) if several else None
     record.app_asks = runtime.delegated_asks.get()
 
 
