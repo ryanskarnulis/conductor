@@ -293,3 +293,34 @@ def test_voice_endpoints_are_rate_limited(
     throttled = voice_client.post("/api/voice/speak", json={"text": "two"})
     assert throttled.status_code == 429
     assert "Retry-After" in throttled.headers
+
+
+# --- Spoken dates (live test 2026-11-20) --------------------------------------
+#
+# Kokoro read "2026-11-22" as digits and "minus". The reply text keeps the
+# date as written; only what is sent to the voice changes.
+
+
+def test_a_written_date_is_spoken_as_month_and_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import date
+
+    from app import clock
+    from app.ai.speech import speakable
+
+    monkeypatch.setattr(clock, "local_today", lambda: date(2026, 11, 20))
+    said = speakable('I updated "Test the fence" to be due on Sunday 2026-11-22.')
+    assert said == 'I updated "Test the fence" to be due on Sunday November 22nd.'
+    assert speakable("due 2026-11-01, 2026-11-02, 2026-11-03 and 2026-11-11") == (
+        "due November 1st, November 2nd, November 3rd and November 11th"
+    )
+    # Another year is said; a non-date and an id are left alone.
+    assert speakable("due 2027-01-05") == "due January 5th, 2027"
+    assert speakable("ref 2026-13-40, order 12026-11-22-7") == "ref 2026-13-40, order 12026-11-22-7"
+
+
+def test_the_voice_is_sent_the_spoken_form() -> None:
+    server = FakeSpeechServer()
+    speech = SpeechClient(vocabulary=VOCABULARY, client=server.client())
+    speech.speak("Due 2026-11-22.")
+    (request,) = server.requests
+    assert "2026-11-22" not in json.loads(request.read())["input"]
