@@ -935,6 +935,24 @@ _NOT_A_CHANGE = re.compile(
 )
 
 
+# Words that turn a waiting question down. The page's "Not now" button sends
+# exactly "not now"; live on 2026-11-20 the 12B compiled that as a yes and a
+# seven-step proposal ran. Only a lead, so "yes, don't wait" is not one.
+_DECLINES = re.compile(
+    r"^\W*(?:no(?:pe|t\s+(?:now|yet|today|right\s+now))?|nah|never\s*mind|cancel|stop|"
+    r"don'?t|do\s+not|later|maybe\s+later|skip(?:\s+it)?|leave\s+it|forget\s+it)\b",
+    re.IGNORECASE,
+)
+
+
+def declines(words: str) -> bool:
+    """Whether the person's words open by turning something down. A confirm
+    the planner compiled as a yes is read as a no when they do: a refusal is
+    never an approval, whatever the model made of it. Refusing by mistake
+    costs a second ask; approving by mistake runs writes."""
+    return _DECLINES.match(words) is not None
+
+
 def is_correction(words: str) -> bool:
     """Whether the words correct something just said or under way: a lead
     word, then what instead (a day, "just"/"only"/"instead", "make it …")."""
