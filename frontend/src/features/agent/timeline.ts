@@ -93,6 +93,36 @@ export function windowStart(turns: readonly FoldTurn[], now: number, gapMs: numb
   return start
 }
 
+/** How many turns or note groups one "Show earlier" brings back (#233):
+ * about twenty messages, enough to read back without a press per turn. */
+export const REVEAL_BATCH = 10
+
+/** How far above the fold to show so the item at `index` is on the page:
+ * never fewer than are shown already. A search hit unfolds this much. */
+export function revealedFor(index: number, foldAt: number, revealed: number): number {
+  return index < 0 ? revealed : Math.max(revealed, foldAt - index)
+}
+
+/** What a scroll area's place is read from. */
+export interface ScrollBox {
+  scrollHeight: number
+  scrollTop: number
+  clientHeight: number
+}
+
+/** How far the bottom edge of the view is from the end of the content. */
+export function fromEnd(box: ScrollBox): number {
+  return box.scrollHeight - box.scrollTop - box.clientHeight
+}
+
+/** The scrollTop that keeps the place after content arrived above (#233):
+ * what was on screen stays on screen. The distance from the end is what is
+ * kept, so it also holds when the area itself grew (a phone's bottom sheet
+ * grows upward). */
+export function keptScrollTop(before: ScrollBox, now: Pick<ScrollBox, 'scrollHeight' | 'clientHeight'>): number {
+  return Math.max(0, now.scrollHeight - now.clientHeight - fromEnd(before))
+}
+
 /** Incognito turns itself off after the same quiet gap the planner uses (#82):
  * true once `gapMs` has passed since it was last switched on or used. */
 export function incognitoLapsed(lastUsedAt: number | null, now: number, gapMs: number): boolean {

@@ -183,6 +183,11 @@
   align-self: center;
 }
 
+/* Everything before the latest turn (#233): one list with it, except on a phone. */
+.tl-above {
+  display: contents;
+}
+
 /* Job notes (#90) stay in view on a phone too: they are what a job left. */
 .shell-jobnotes {
   display: flex;
@@ -269,8 +274,20 @@
   padding: var(--space-6);
 }
 
-/* ...until "Show earlier" (#226) asks for them. */
-.shell[data-view='phone'] .shell-convo:not([data-earlier]) .shell-turn--old {
+/* The timeline's earlier turns sit in one block above the latest (#233). The
+   page sizes the sheet to the latest turn, so the web keeps its room and the
+   block is reached by scrolling up; the thread form and errors stay beside
+   the latest turn. */
+.shell[data-view='phone'] .tl-above {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  order: -1;
+  min-width: 0;
+}
+
+/* A side thread on a phone still shows its latest turn only. */
+.shell[data-view='phone'] .shell-convo[data-thread] .shell-turn--old {
   display: none;
 }
 
@@ -310,9 +327,13 @@
   color: var(--muted);
 }
 
-/* The phone shows the latest turn only, so it has no days to separate. */
+/* At rest the phone shows the latest turn only: days separate what is above. */
 .shell[data-view='phone'] .tl-day {
   display: none;
+}
+
+.shell[data-view='phone'] .tl-above .tl-day {
+  display: flex;
 }
 
 .tl-day::before,
