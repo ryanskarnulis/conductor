@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { windowStart, type FoldTurn } from './timeline'
+import { REVEAL_BATCH, fromEnd, keptScrollTop, revealedFor, windowStart, type FoldTurn } from './timeline'
 import type { AgentMessage } from '../../types/agent'
 import { dayLabel, daySeparators, incognitoLapsed, isIncognitoPlaceholder, surfaceLabel, withLiveWords } from './timeline'
 
@@ -84,5 +84,30 @@ describe('windowStart (#226)', () => {
 
   it('folds nothing without a gap to count', () => {
     expect(windowStart([said(200), said(1)], now, 0)).toBe(0)
+  })
+})
+
+describe('reading back (#233)', () => {
+  it('keeps the place when content arrives above', () => {
+    // 1000px of earlier turns land above: the same content is at the top edge.
+    expect(keptScrollTop({ scrollHeight: 500, scrollTop: 40, clientHeight: 300 }, { scrollHeight: 1500, clientHeight: 300 })).toBe(1040)
+    // At the top with nothing scrolled, the view stays on what it showed.
+    expect(keptScrollTop({ scrollHeight: 300, scrollTop: 0, clientHeight: 300 }, { scrollHeight: 900, clientHeight: 300 })).toBe(600)
+  })
+
+  it('keeps the bottom edge when the area grew too (a phone sheet grows upward)', () => {
+    const before = { scrollHeight: 900, scrollTop: 700, clientHeight: 200 }
+    const top = keptScrollTop(before, { scrollHeight: 1400, clientHeight: 500 })
+    expect(top).toBe(900)
+    expect(fromEnd({ scrollHeight: 1400, scrollTop: top, clientHeight: 500 })).toBe(fromEnd(before))
+    expect(keptScrollTop(before, { scrollHeight: 300, clientHeight: 500 })).toBe(0)
+  })
+
+  it('unfolds as far as a hit, never folding back what is shown', () => {
+    expect(revealedFor(20, 25, 0)).toBe(5)
+    expect(revealedFor(20, 25, REVEAL_BATCH)).toBe(REVEAL_BATCH)
+    // A hit in the window, or one not on the page, unfolds nothing.
+    expect(revealedFor(27, 25, 0)).toBe(0)
+    expect(revealedFor(-1, 25, 3)).toBe(3)
   })
 })

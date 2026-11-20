@@ -132,7 +132,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   arrive only as cross-day hits labelled with their day. Session evals'
   "new conversation" is the record moved back a day (`tests/eval_db.age`).
   The page opens on that same window (#226, `timeline.windowStart`, from
-  `quiet_gap_seconds`): older turns and notes sit behind "Show earlier".
+  `quiet_gap_seconds`): older turns and notes sit behind "Show earlier",
+  a batch a press with the place kept (#233). A phone's sheet fits the
+  latest turn so the web keeps its room; the window's earlier turns are
+  scrolled just above it, and reading back gives the sheet its full height.
 - **Incognito** (#82, `app/ai/incognito.py`): a per-request switch. The
   person's words and the reply are stored as "(incognito)", and calls,
   steps and finished plans keep no words; receipts and entities stay. Memory

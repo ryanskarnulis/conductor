@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import { Ear, EarOff, EyeOff, ListMusic, SendHorizontal, Square, Volume2, VolumeX } from 'lucide-react'
 import { cancelTurn, getTimeline, type SendOptions } from '../../api/agent'
@@ -33,7 +33,19 @@ import { useSceneState } from './useSceneState'
 import { ShellScene } from './ShellScene'
 import { SortPanel } from '../sort/SortPanel'
 import { latestSortTurnId } from '../sort/sortTurn'
-import { dayLabel, daySeparators, incognitoLapsed, surfaceLabel, windowStart, withLiveWords } from './timeline'
+import {
+  REVEAL_BATCH,
+  dayLabel,
+  daySeparators,
+  fromEnd,
+  incognitoLapsed,
+  keptScrollTop,
+  revealedFor,
+  surfaceLabel,
+  windowStart,
+  withLiveWords,
+  type ScrollBox,
+} from './timeline'
 import type { TurnStream } from './turnStream'
 import { buildTurns, pendingConfirm, presenceFor, type ShellTurn } from './turnView'
 import { useConversation } from './useConversation'
@@ -177,6 +189,9 @@ function TurnView({
   )
 }
 
+/** How long after a touch or wheel a scroll counts as the person's own. */
+const GESTURE_MS = 1500
+
 function withEnds(items: TurnItem[]): { item: TurnItem; end: number }[] {
   let end = -1
   return items.map((item) => {
@@ -272,8 +287,8 @@ export function AgentPage() {
     document.addEventListener('visibilitychange', on)
     return () => document.removeEventListener('visibilitychange', on)
   }, [])
-  const [earlier, setEarlier] = useState(false)
-  const foldRef = useRef<HTMLDivElement>(null)
+  // How many items above the fold are shown (#233): "Show earlier" adds a batch.
+  const [revealed, setRevealed] = useState(0)
   const windowAt = useMemo(
     () => (thread === null ? windowStart(turns, now, (timeline?.quiet_gap_seconds ?? 0) * 1000) : 0),
     [thread, turns, now, timeline],
@@ -283,13 +298,12 @@ export function AgentPage() {
   const items = useMemo(() => withEnds(groupJobNotes(turns)), [turns])
   const folded = items.findIndex(({ end }) => end >= windowAt)
   const foldAt = windowAt === 0 ? 0 : folded < 0 ? items.length : folded
-  const shown = useMemo(() => (earlier ? items : items.slice(foldAt)).map(({ item }) => item), [items, earlier, foldAt])
-  const separators = useMemo(() => daySeparators(shown.map((item) => (item.kind === 'notes' ? item.turns[0]?.at : item.turn.when))), [shown])
-  const showEarlier = () => setEarlier(true)
-  // The earlier turns arrive above: keep the place, with the newest of them in view.
-  useEffect(() => {
-    if (earlier) foldRef.current?.scrollIntoView?.({ block: 'center' })
-  }, [earlier])
+  const shownFrom = Math.max(0, foldAt - revealed)
+  const shown = useMemo(() => items.slice(shownFrom), [items, shownFrom])
+  const separators = useMemo(
+    () => daySeparators(shown.map(({ item }) => (item.kind === 'notes' ? item.turns[0]?.at : item.turn.when))),
+    [shown],
+  )
   const confirm = sending ? null : pendingConfirm(messages)
   // A job's note or a side thread's result lands in the conversation but is
   // never the turn the page is about.
@@ -297,6 +311,57 @@ export function AgentPage() {
   const latest = latestAt >= 0 ? turns[latestAt] : null
   const pause = !sending && latest ? latest.pause : null
   const presence = presenceFor(sending, activity, confirm !== null || pause !== null)
+  // What came before the latest turn (#233). On the timeline it is one block
+  // above it: a phone's sheet fits the latest turn and the block is reached
+  // by scrolling up. A side thread keeps its one list.
+  const aboveCount = thread === null ? Math.max(0, shown.findIndex(({ end }) => end >= latestAt)) : 0
+  const above = shown.slice(0, aboveCount)
+  const convoRef = useRef<HTMLDivElement>(null)
+  const aboveRef = useRef<HTMLDivElement>(null)
+  // Reading back: the person scrolled up, asked for earlier turns or opened
+  // a search hit. It lasts until the next turn is sent or arrives.
+  const turnMark = `${messages.length}:${pendingText === null ? '' : 'sending'}`
+  const [readingAt, setReadingAt] = useState<string | null>(null)
+  const reading = readingAt === turnMark
+  const gestureAt = useRef(0)
+  const onGesture = () => {
+    gestureAt.current = Date.now()
+  }
+  const onConvoScroll = () => {
+    const el = convoRef.current
+    if (!el || !phone || reading || Date.now() - gestureAt.current > GESTURE_MS) return
+    if (fromEnd(el) > 8) setReadingAt(turnMark)
+  }
+  // A phone's sheet is as tall as the latest turn, so the web keeps its room
+  // above it (the reason the phone once hid earlier turns). They are in the
+  // scroll area now, just above the top edge; reading back gives the sheet
+  // its full height. Measured on every render: a streaming turn grows.
+  const fitRef = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    const el = convoRef.current
+    if (!el) return
+    const block = phone && !reading ? aboveRef.current : null
+    const fit = block ? Math.round(el.scrollHeight - (block.getBoundingClientRect().bottom - el.getBoundingClientRect().top + el.scrollTop)) : null
+    if (fit === fitRef.current) return
+    fitRef.current = fit
+    el.style.maxHeight = fit === null ? '' : `${fit}px`
+    // At the end, where the latest turn is; the thread form opens at its top.
+    if (fit !== null) el.scrollTop = el.scrollHeight - (startOpen ? fit : 0)
+  })
+  // "Show earlier" brings a batch back above and keeps the place.
+  const placeRef = useRef<ScrollBox | null>(null)
+  const showEarlier = () => {
+    const el = convoRef.current
+    if (el) placeRef.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop, clientHeight: el.clientHeight }
+    setRevealed((n) => n + REVEAL_BATCH)
+    setReadingAt(turnMark)
+  }
+  useLayoutEffect(() => {
+    const el = convoRef.current
+    const was = placeRef.current
+    placeRef.current = null
+    if (el && was) el.scrollTop = keptScrollTop(was, el)
+  }, [revealed])
 
   // The scene reads the same facts as the panel, each frame, from this ref.
   const confirmApp = confirm?.raw.app ?? (pause?.kind === 'confirm' ? pause.appKey : null)
@@ -424,9 +489,12 @@ export function AgentPage() {
     return () => clearTimeout(timer)
   }, [handoff])
 
-  // Keep the newest turn in view (guarded: jsdom has no scrollIntoView).
+  // Keep the newest turn in view (guarded: jsdom has no scrollIntoView). A
+  // fitted phone sheet sits at its very end, so no earlier turn peeks in.
   useEffect(() => {
-    convoEndRef.current?.scrollIntoView?.({ block: 'end' })
+    const el = convoRef.current
+    if (el && fitRef.current !== null) el.scrollTop = el.scrollHeight
+    else convoEndRef.current?.scrollIntoView?.({ block: 'end' })
   }, [messages.length, pendingText, activity])
 
   // A search hit brings its turn into view, when it's on the page.
@@ -437,9 +505,52 @@ export function AgentPage() {
   }, [openTo, searchOpen])
   const openHit = (messageId: number | null) => {
     setSearchOpen(false)
-    setEarlier(true)
+    // Unfold as far as the hit, and no further.
+    const key = `m${messageId}`
+    const at = items.findIndex(({ item }) => (item.kind === 'notes' ? item.turns.some((turn) => turn.key === key) : item.turn.key === key))
+    setRevealed((n) => revealedFor(at, foldAt, n))
+    setReadingAt(turnMark)
     setOpenTo(messageId)
   }
+
+  const earlierButton = !thread && shownFrom > 0 && (
+    <button type="button" className="cd-btn cd-btn--small tl-earlier" onClick={showEarlier}>
+      Show earlier
+    </button>
+  )
+  const day = (index: number) => {
+    const at = separators.get(index)
+    return (
+      at && (
+        <p className="tl-day" role="separator">
+          {dayLabel(at)}
+        </p>
+      )
+    )
+  }
+  // The first turn below the block has its day drawn at the block's end.
+  const renderItem = (item: TurnItem, index: number) => (
+    <Fragment key={item.kind === 'notes' ? item.key : item.turn.key}>
+      {(above.length === 0 || index !== above.length) && day(index)}
+      {item.kind === 'notes' ? (
+        <JobNotes turns={item.turns} />
+      ) : item.turn.threadNote ? (
+        <ThreadNote
+          title={item.turn.threadNote.title ?? 'Side thread'}
+          text={item.turn.reply ?? ''}
+          onOpen={item.turn.threadNote.id > 0 ? () => void threads.view(item.turn.threadNote?.id ?? 0) : undefined}
+        />
+      ) : (
+        <TurnView
+          turn={item.turn}
+          latest={item.index === latestAt}
+          confirm={item.index === latestAt && confirm ? confirm : null}
+          busy={sending}
+          onAnswer={answer}
+        />
+      )}
+    </Fragment>
+  )
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -558,8 +669,19 @@ export function AgentPage() {
               <div
                 className="shell-convo"
                 aria-label={thread ? `Side thread: ${thread.title ?? 'Side thread'}` : 'Timeline'}
-                data-earlier={earlier ? '' : undefined}
+                data-thread={thread ? '' : undefined}
+                ref={convoRef}
+                onScroll={onConvoScroll}
+                onWheel={onGesture}
+                onTouchMove={onGesture}
               >
+                {above.length > 0 && (
+                  <div className="tl-above" ref={aboveRef}>
+                    {earlierButton}
+                    {above.map(({ item }, index) => renderItem(item, index))}
+                    {day(above.length)}
+                  </div>
+                )}
                 {startOpen && (
                   <div id="shell-thread-start">
                     <ThreadStart
@@ -605,41 +727,8 @@ export function AgentPage() {
                   </p>
                 )}
                 {loading && <div className="page-loading">{thread ? 'Loading the side thread…' : 'Loading the timeline…'}</div>}
-                {!thread && !earlier && foldAt > 0 && (
-                  <button type="button" className="cd-btn cd-btn--small tl-earlier" onClick={showEarlier}>
-                    Show earlier
-                  </button>
-                )}
-                {shown.map((item, index) => {
-                  const day = separators.get(index)
-                  return (
-                    <Fragment key={item.kind === 'notes' ? item.key : item.turn.key}>
-                      {earlier && foldAt > 0 && index === foldAt && <div ref={foldRef} className="agent-thread-sentinel" aria-hidden="true" />}
-                      {day && (
-                        <p className="tl-day" role="separator">
-                          {dayLabel(day)}
-                        </p>
-                      )}
-                      {item.kind === 'notes' ? (
-                        <JobNotes turns={item.turns} />
-                      ) : item.turn.threadNote ? (
-                        <ThreadNote
-                          title={item.turn.threadNote.title ?? 'Side thread'}
-                          text={item.turn.reply ?? ''}
-                          onOpen={item.turn.threadNote.id > 0 ? () => void threads.view(item.turn.threadNote?.id ?? 0) : undefined}
-                        />
-                      ) : (
-                        <TurnView
-                          turn={item.turn}
-                          latest={item.index === latestAt}
-                          confirm={item.index === latestAt && confirm ? confirm : null}
-                          busy={sending}
-                          onAnswer={answer}
-                        />
-                      )}
-                    </Fragment>
-                  )
-                })}
+                {above.length === 0 && earlierButton}
+                {shown.slice(above.length).map(({ item }, index) => renderItem(item, index + above.length))}
                 <JobCards
                   cards={cards}
                   announce={jobs.state.announce}
