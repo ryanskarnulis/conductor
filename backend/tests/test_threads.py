@@ -264,14 +264,44 @@ def test_the_result_never_carries_incognito_forgotten_undone_or_memory_work(
     assert all(c.undo_handle is None for c in copies)
 
 
-def test_a_thread_that_did_nothing_says_so_without_a_model(timeline: Timeline) -> None:  # noqa: F811
-    thread = _start(timeline.client, title="Idle")
+def test_a_thread_that_did_nothing_posts_no_note_and_is_still_found(
+    timeline: Timeline,  # noqa: F811
+) -> None:
+    """#226: nothing changed or found means nothing lands in the timeline."""
+    client = timeline.client
+    thread = _start(client, title="Idle")
     provider = _narrator("should never be read")
-    closed = _close(timeline.client, thread["id"], surface="voice")
-    assert closed["message"]["content"] == (
+    closed = _close(client, thread["id"], surface="voice")
+    assert closed["message"] is None
+    assert provider.requests == []
+    # The thread is closed and keeps code's line; the timeline has no note.
+    assert closed["thread"]["closed_at"] is not None
+    assert closed["thread"]["result"] == (
         "Side thread “Idle” closed. Nothing was changed or found there."
     )
-    assert provider.requests == []
+    detail = client.get(f"/api/agent/conversations/{timeline.id}").json()
+    assert detail["messages"] == []
+    turns = timeline.db.execute(select(LedgerTurn).where(LedgerTurn.kind == ledger.THREAD_TURN))
+    assert turns.scalars().all() == []
+    # Closed once, and still found and read: among the closed threads, by id.
+    assert client.post(f"/api/agent/threads/{thread['id']}/close", json={}).status_code == 409
+    assert client.get("/api/agent/threads").json() == []
+    (found,) = client.get("/api/agent/threads", params={"closed": True}).json()
+    assert found["id"] == thread["id"] and found["title"] == "Idle"
+    assert client.get(f"/api/agent/threads/{thread['id']}").json()["closed_at"]
+    assert client.get(f"/api/agent/conversations/{thread['id']}").status_code == 200
+
+
+def test_the_closed_threads_are_the_newest_few(timeline: Timeline) -> None:  # noqa: F811
+    client = timeline.client
+    ids = []
+    for n in range(threads_service.MAX_CLOSED + 1):
+        ids.append(_start(client, title=f"T{n}")["id"])
+        _close(client, ids[-1])
+    still_open = _start(client, title="Open")
+    listed = [t["id"] for t in client.get("/api/agent/threads", params={"closed": True}).json()]
+    assert listed == ids[:0:-1]
+    assert still_open["id"] not in listed
 
 
 def test_a_thread_whose_only_turn_failed_names_the_app_that_did_not_answer(

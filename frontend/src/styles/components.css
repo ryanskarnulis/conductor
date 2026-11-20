@@ -186,6 +186,10 @@ q.cd-job-title{quotes:"“" "”"}
 .cd-thstart{display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-5);border-radius:var(--radius);border:1px solid var(--silk-border);background:var(--surface-soft)}
 .cd-thstart input{min-height:38px;padding:0 var(--space-4);border:1px solid var(--silk-border);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;font-size:14px}
 .cd-thstart input:focus-visible{outline:2px solid var(--glow);outline-offset:1px}
+.cd-thclosed{display:flex;flex-direction:column;gap:var(--space-2);margin-top:var(--space-3)}
+.cd-thclosed ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--space-2)}
+.cd-thclosed li{display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap}
+.cd-thclosed button{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cd-togglemenu{position:relative;display:inline-flex}
 .cd-togglemenu-btn[data-marked]{border-color:var(--violet);color:var(--violet)}
 .cd-togglemenu-btn:focus-visible,.cd-togglemenu-item:focus-visible{outline:2px solid var(--glow);outline-offset:2px}

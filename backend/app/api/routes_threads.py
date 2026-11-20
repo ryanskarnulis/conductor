@@ -89,9 +89,12 @@ def _get_or_404(db: Session, thread_id: int) -> Conversation:
 
 
 @router.get("", response_model=list[ThreadRead])
-def list_threads(db: Session = Depends(get_db)) -> Sequence[ThreadRead]:
-    """The side threads still open, oldest first."""
-    return [thread_read(db, thread) for thread in threads_service.open_threads(db)]
+def list_threads(closed: bool = False, db: Session = Depends(get_db)) -> Sequence[ThreadRead]:
+    """The side threads still open, oldest first; with ``closed``, the few
+    closed most recently instead, newest first (#226: one that left no note
+    in the timeline is opened from here)."""
+    found = threads_service.closed_threads(db) if closed else threads_service.open_threads(db)
+    return [thread_read(db, thread) for thread in found]
 
 
 @router.post(
@@ -127,8 +130,9 @@ def close_thread(
 ) -> ThreadClosed:
     """Close a side thread: its result, narrated from its receipts with code's
     checks, is posted into the timeline as a note (it lapses no waiting
-    question there). Posted once: a second close is **409**, as is a close
-    while a turn still runs in the thread."""
+    question there). A thread where nothing was changed or found posts no
+    note (#226, ``message`` is null). Posted once: a second close is **409**,
+    as is a close while a turn still runs in the thread."""
     thread = _get_or_404(db, thread_id)
     if threads_service.is_closed(thread):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="already closed")
@@ -146,14 +150,23 @@ def close_thread(
     finally:
         foreground.left()
     text = note.reply or thread_note.fallback(ending.end, data.surface)
-    message = threads_service.close(db, thread, text, ending.receipts, now=utcnow())
-    if message is None:
+    closed = threads_service.close(
+        db,
+        thread,
+        text,
+        ending.receipts,
+        now=utcnow(),
+        note=threads_service.leaves_note(ending.end),
+    )
+    if closed is None:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="already closed")
     db.commit()
-    db.refresh(message)
     db.refresh(thread)
     logger.info("agent_thread_closed", thread_id=thread.id, path=note.path)
-    read = MessageRead.model_validate(message)
-    read.thread = NoteThreadRead(id=thread.id, title=thread.title)
+    read: MessageRead | None = None
+    if closed.message is not None:
+        db.refresh(closed.message)
+        read = MessageRead.model_validate(closed.message)
+        read.thread = NoteThreadRead(id=thread.id, title=thread.title)
     return ThreadClosed(thread=thread_read(db, thread), message=read)

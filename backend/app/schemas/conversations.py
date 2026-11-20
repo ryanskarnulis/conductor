@@ -252,7 +252,8 @@ class ThreadClose(BaseModel):
 
 
 class ThreadClosed(BaseModel):
-    """A closed side thread and the result note it posted to the timeline."""
+    """A closed side thread and the result note it posted to the timeline
+    (none when nothing was changed or found there, #226)."""
 
     thread: ThreadRead
-    message: MessageRead
+    message: MessageRead | None

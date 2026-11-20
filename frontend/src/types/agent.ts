@@ -121,10 +121,11 @@ export interface ThreadInfo {
   carries: ThreadCarry[]
 }
 
-/** What closing a side thread gave back: the thread, and its note in the timeline. */
+/** What closing a side thread gave back: the thread, and its note in the
+ * timeline (none when nothing was changed or found there, #226). */
 export interface ThreadClosed {
   thread: ThreadInfo
-  message: AgentMessage
+  message: AgentMessage | null
 }
 
 /** Where a turn came from (backend `MessageCreate.surface`). */
@@ -290,7 +291,7 @@ export interface JobCancelResult {
   done: number
   total: number | null
   cancel_requested: boolean
-  message: AgentMessage
+  message: AgentMessage | null
 }
 
 export interface TurnEnded {

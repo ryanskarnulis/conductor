@@ -446,6 +446,27 @@ export function ThreadNote({ title, text, onOpen }: { title: string; text: strin
   )
 }
 
+/** The side threads closed most recently (#226): one where nothing happened
+ * leaves no note in the timeline, so it is opened again from here. */
+export function ThreadsClosed({ threads, onOpen }: { threads: { id: number; title: string; closed: string }[]; onOpen: (id: number) => void }) {
+  if (threads.length === 0) return null
+  return (
+    <section className="cd-thclosed" aria-label="Recently closed side threads">
+      <p className="cd-why">Recently closed, to read again:</p>
+      <ul>
+        {threads.map((thread) => (
+          <li key={thread.id}>
+            <button type="button" className="cd-btn cd-btn--small" onClick={() => onOpen(thread.id)}>
+              {thread.title}
+            </button>
+            <span className="cd-why">closed {thread.closed}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 /** The timeline and each open side thread; one is on the page at a time. */
 export function ThreadTabs({
   threads,

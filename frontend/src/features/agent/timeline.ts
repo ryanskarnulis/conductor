@@ -56,6 +56,43 @@ export function daySeparators(times: (string | null | undefined)[]): Map<number,
   return found
 }
 
+/** What the fold reads of a turn: when it was said, and whether it is a note
+ * (a job's or a side thread's), which never breaks a quiet gap. */
+export interface FoldTurn {
+  when?: string | null
+  live: boolean
+  jobNote?: boolean
+  threadNote?: unknown
+}
+
+/** Where the current window starts (#226): the index of the first turn since
+ * the timeline's last quiet gap, counted back from `now` the way the planner
+ * counts it (`window_since`), so a page opened a gap after the last turn
+ * starts empty. Turns before it fold away behind "Show earlier". A note that
+ * landed within the gap just before the window stays with it; the turn in
+ * flight is always in it. `gapMs` of 0 folds nothing. */
+export function windowStart(turns: readonly FoldTurn[], now: number, gapMs: number): number {
+  if (gapMs <= 0) return 0
+  let start = turns.length
+  let later = now
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i]
+    const at = turn.live || !turn.when ? NaN : Date.parse(turn.when)
+    if (Number.isNaN(at)) {
+      start = i
+      continue
+    }
+    if (turn.jobNote || turn.threadNote) {
+      if (start === i + 1 && now - at < gapMs) start = i
+      continue
+    }
+    if (later - at >= gapMs) break
+    start = i
+    later = at
+  }
+  return start
+}
+
 /** Incognito turns itself off after the same quiet gap the planner uses (#82):
  * true once `gapMs` has passed since it was last switched on or used. */
 export function incognitoLapsed(lastUsedAt: number | null, now: number, gapMs: number): boolean {
