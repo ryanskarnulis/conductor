@@ -897,7 +897,8 @@ class Spider {
 /* ---------------------------------------------------------------- post: HDR bloom, glitch, grade */
 const post = (() => {
   const rtOpt = { type: THREE.HalfFloatType, depthBuffer: false };
-  const sceneRT = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: isPhone ? 0 : 4 });
+  /* the scene draws into this target, so the canvas's own antialias flag never applies: multisample here, on phones too (#224) */
+  const sceneRT = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 4 });
   const hA = new THREE.WebGLRenderTarget(4, 4, rtOpt), hB = new THREE.WebGLRenderTarget(4, 4, rtOpt);
   const qA = new THREE.WebGLRenderTarget(4, 4, rtOpt), qB = new THREE.WebGLRenderTarget(4, 4, rtOpt);
   const outRT = new THREE.WebGLRenderTarget(4, 4, { depthBuffer: false });
@@ -940,12 +941,16 @@ void main(){
     gl_FragColor = vec4(col, a);
   }
 }` });
-  function size(w, h) {
-    sceneRT.setSize(w, h); hA.setSize(w >> 1, h >> 1); hB.setSize(w >> 1, h >> 1); qA.setSize(w >> 2, h >> 2); qB.setSize(w >> 2, h >> 2);
+  /* bw x bh: the size the bloom chain is cut from; smaller than the scene on phones, so bloom keeps its cost and its width */
+  let bw = 4, bh = 4;
+  function size(w, h, bloomW = w, bloomH = h) {
+    bw = bloomW; bh = bloomH;
+    sceneRT.setSize(w, h); hA.setSize(bw >> 1, bh >> 1); hB.setSize(bw >> 1, bh >> 1); qA.setSize(bw >> 2, bh >> 2); qB.setSize(bw >> 2, bh >> 2);
     comp.uniforms.uRes.value.set(w, h);
   }
   function pass(mat, target) { quad.material = mat; renderer.setRenderTarget(target); renderer.render(quadScene, quadCam); }
-  function run(target, w, h) {
+  function run(target) {
+    const w = bw, h = bh;
     bright.uniforms.t.value = sceneRT.texture; pass(bright, hA);
     blur.uniforms.t.value = hA.texture; blur.uniforms.dir.value.set(1 / (w >> 1), 0); pass(blur, hB);
     blur.uniforms.t.value = hB.texture; blur.uniforms.dir.value.set(0, 1 / (h >> 1)); pass(blur, hA);
@@ -1121,9 +1126,11 @@ function measurePanel() {
 }
 function resize() {
   const r = canvas.getBoundingClientRect();
-  DPR = Math.min(devicePixelRatio || 1, isPhone ? 1.5 : 2);
+  /* 2 on phones too (#224): 1.5 on a 3x screen was half resolution, visibly blocky. Not 3: that is 2.25x the pixels again */
+  DPR = Math.min(devicePixelRatio || 1, 2);
   W = Math.max(2, Math.round(r.width * DPR)); H = Math.max(2, Math.round(r.height * DPR));
-  renderer.setSize(W, H, false); post.size(W, H); measurePanel(); stillFrames = 30;
+  const bloom = isPhone ? Math.min(DPR, 1.5) / DPR : 1;
+  renderer.setSize(W, H, false); post.size(W, H, Math.max(4, Math.round(W * bloom)), Math.max(4, Math.round(H * bloom))); measurePanel(); stillFrames = 30;
 }
 function applyView(dt) {
   panelNow = panelNow < 0 || ctx.snap ? panelPx : damp(panelNow, panelPx, 5, dt);
@@ -1203,7 +1210,7 @@ function frame(now) {
   renderer.info.reset();
   renderer.setRenderTarget(post.sceneRT); renderer.render(scene, camera);
   const tris = renderer.info.render.triangles;
-  post.run(null, W, H);
+  post.run(null);
   const calls = renderer.info.render.calls;
   ctx.snap = false;
   if (++frameNo % 20 === 0) { renderer.getContext().finish(); costs.push(performance.now() - t0); if (costs.length > 60) costs.shift(); }
