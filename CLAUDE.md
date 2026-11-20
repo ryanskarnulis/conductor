@@ -447,7 +447,9 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   Living Web (`src/scene/livingWeb.js`, three.js) is `aria-hidden`, loads as
   a lazy chunk after first paint, and shows nothing the panel doesn't say in
   words. Both read one derivation (`turnView.ts` → `sceneState.ts`), and
-  nothing looks done before its receipt says so.
+  nothing looks done before its receipt says so. A finished turn's or job's
+  strand lets go on the derivation's clock (#232, `HOLD_MS`, `RELEASE_MS`); a
+  running or waiting one keeps it.
 - **The live plan view** (#89) draws from the same stream: the plan appears
   queued beside the code-built ack, each step lights on its own event, a
   `{sN}` stays a dashed ref until its receipt names a title (never filled

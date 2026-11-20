@@ -1033,12 +1033,15 @@ let reducedNow = LW.rm;
 /* ---------------------------------------------------------------- one strand per app, its look a function of ledger state */
 const COL = { blue: [.32, .78, 1.25], green: [.56, .86, .66], amber: [.93, .79, .54], rose: [.95, .56, .64], silk: [.5, .62, .8] };
 const fr = x => ((x % 1) + 1) % 1;
+/* letting go (#232): the strand leaves Glitch and draws in to its app over LET_GO ms, the app's mark eases back to rest just behind it.
+   Both fit inside sceneState's RELEASE_MS, after which the strand is gone from the ledger. */
+const LET_GO = 600, MARK_FROM = 300, MARK_FADE = 600, tRest = new THREE.Color(), tFrom = V3();
 class Strand {
   constructor(app) {
     this.app = app; this.an = ANCHORS[AIDX[app]]; this.rope = new Rope(30); this.rib = new Ribbon(1, 30, .016);
-    scene.add(this.rib.mesh); this.rib.mesh.visible = false; this.tip = V3(); this.key = ''; this.prog = -1; this.arrived = false;
+    scene.add(this.rib.mesh); this.rib.mesh.visible = false; this.tip = V3(); this.key = ''; this.prog = -1; this.arrived = false; this.letGo = false;
   }
-  anchor(state, age, c) {
+  anchor(state, age, c, rel = -1) {
     const an = this.an, mo = c.motion, T = c.tReal;
     let col = PAL.accent, k = 1.1, ring = 1, em = null;
     if (state === 'queued') k = 1.4;
@@ -1049,16 +1052,23 @@ class Strand {
     if (state === 'failed') { col = PAL.danger; k = 2.6; em = PAL.danger; }
     an.mat.color.set(col).multiplyScalar(k); an.ring.scale.setScalar(ring);
     const m = an.core.material; m.emissiveIntensity = an.core.userData.ei * (state === 'done' && age >= 180 ? 1.6 : state === 'failed' ? .5 : 1);
+    if (rel >= 0) {                         /* the mark eases back to the resting ring */
+      const f = ease(clamp((rel - MARK_FROM) / MARK_FADE, 0, 1));
+      an.mat.color.lerp(tRest.set(PAL.accent).multiplyScalar(1.1), f); m.emissiveIntensity += (an.core.userData.ei - m.emissiveIntensity) * f;
+    }
     an.core.rotation.y = Math.sin(T * .55 + an.p.x) * .38 * mo; an.core.rotation.x = .38;   /* a slow turn, tipped toward the camera */
     const job = LW.S.jobs && LW.S.jobs[this.app]; an.prog.visible = state === 'job' && !!job && job.of > 0;   /* this app's jobs only: a ring needs a known total */
     if (an.prog.visible) { const p = Math.max(.02, Math.min(1, job.n / job.of)); if (p !== this.prog) { this.prog = p; an.prog.geometry.dispose(); an.prog.geometry = new THREE.TorusGeometry(.44, .02, 8, 96, Math.PI * 2 * p); } }
   }
   update(c, info, clock) {
     const sp = active, R = this.rope, mo = c.motion;
-    const state = info ? info.state : 'none';
+    let state = info ? info.state : 'none';
     let age = info ? clock - info.since : 0;
-    this.anchor(state, age, c);
-    if (state === 'none') { this.rib.mesh.visible = false; this.key = ''; return; }
+    const rel = info && info.release != null ? Math.max(0, clock - info.release) : -1;
+    if (rel >= 0 && !mo) state = 'none';    /* reduced motion: a released strand is already gone, the web at rest */
+    this.anchor(state, age, c, rel);
+    const go = rel < 0 ? 0 : ease(clamp(rel / LET_GO, 0, 1));
+    if (state === 'none' || go >= 1) { this.rib.mesh.visible = false; this.key = ''; return; }
     if (!mo) age = 1e6;                     /* reduced motion: every transition is already finished */
     let reach = .8;
     if (state === 'queued') reach = .8 * clamp((age - (info.k || 0) * 300) / 300, 0, 1);
@@ -1067,12 +1077,14 @@ class Strand {
     this.tip.lerpVectors(sp.spinW, this.an.p, reach);
     const key = state + info.since;
     if (this.key === '') R.reset(sp.spinW, this.tip);
-    if (key !== this.key) { if (state === 'failed' && mo) R.pluck(.14, V3(0, 0, 1)); this.key = key; this.arrived = false; }
+    if (key !== this.key) { if (state === 'failed' && mo) R.pluck(.14, V3(0, 0, 1)); this.key = key; this.arrived = false; this.letGo = false; }
+    if (rel >= 0 && !this.letGo) { this.letGo = true; R.pluck(.05, V3(0, 0, 1)); }
+    const from = go > 0 ? tFrom.lerpVectors(sp.spinW, this.tip, go) : sp.spinW;   /* the end he held, drawing in to the app */
     if (state === 'done' && !this.arrived && age >= 1180) {
       this.arrived = true;
       if (age < 2600) { R.pluck(.06, V3(0, 0, 1)); ringPulse(sp.pos, PAL.ok); c.flash = 1; }
     }
-    R.step(c.dt, sp.spinW, this.tip, state === 'failed' ? 1.12 : state === 'queued' ? 1.03 : 1.015, 2.4);
+    R.step(c.dt, from, this.tip, state === 'failed' ? 1.12 : state === 'queued' ? 1.03 : 1.015, 2.4);
     for (let i = 0; i < R.n; i++) {
       R.r[i].copy(R.p[i]);
       if (state === 'job') { const u = i / (R.n - 1); R.r[i].z += Math.sin(Math.PI * u * 5) * Math.sin(c.t * 38) * .018 * Math.sin(Math.PI * u) * mo; }
@@ -1094,7 +1106,7 @@ class Strand {
       return col(COL.rose, 1.6 * fl);
     };
     this.rib.mesh.visible = true;
-    this.rib.set(0, R.r, fn, u => (.7 + .5 * Math.sin(Math.PI * u)) * (state === 'queued' ? .8 : 1) * (state === 'failed' && u > .88 ? .55 : 1));
+    this.rib.set(0, R.r, fn, u => (.7 + .5 * Math.sin(Math.PI * u)) * (state === 'queued' ? .8 : 1) * (state === 'failed' && u > .88 ? .55 : 1) * (1 - .5 * go));
     this.rib.flush();
   }
 }
