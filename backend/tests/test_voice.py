@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Generator
+from pathlib import Path
 
 import httpx
 import pytest
@@ -219,6 +220,25 @@ def test_transcribe_endpoint_returns_text(voice_client: TestClient) -> None:
     )
     assert response.status_code == 200
     assert response.json() == {"text": "ask tasks what's due today"}
+
+
+def test_transcribe_saves_nothing_unless_capture_is_switched_on(
+    voice_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = get_settings()
+    files = {"audio": ("clip.webm", b"opus-bytes", "audio/webm")}
+
+    assert voice_client.post("/api/voice/transcribe", files=files).status_code == 200
+    assert list(tmp_path.iterdir()) == []
+
+    monkeypatch.setattr(settings, "conductor_voice_capture_dir", tmp_path / "capture")
+    assert voice_client.post("/api/voice/transcribe", files=files).status_code == 200
+    saved = sorted(path.suffix for path in (tmp_path / "capture").iterdir())
+    assert saved == [".json", ".webm"]
+    audio = next((tmp_path / "capture").glob("*.webm"))
+    assert audio.read_bytes() == b"opus-bytes"
+    heard = json.loads(audio.with_suffix(".json").read_text())
+    assert heard == {"heard": "ask tasks what's due today"}
 
 
 def test_speak_endpoint_returns_audio(voice_client: TestClient) -> None:

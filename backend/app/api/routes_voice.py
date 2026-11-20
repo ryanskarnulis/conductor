@@ -10,7 +10,10 @@ the upstream fails. Nothing here touches the database or the delegate tools.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Generator
+from datetime import UTC, datetime
+from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
@@ -19,6 +22,7 @@ from pydantic import BaseModel, field_validator
 from app.ai.speech import speech_client_from_settings
 from app.ai.speech_client import SpeechClient, SpeechError
 from app.api.rate_limit import rate_limit
+from app.config import get_settings
 
 logger = structlog.get_logger(__name__)
 
@@ -48,6 +52,21 @@ def _require(speech: SpeechClient | None) -> SpeechClient:
     return speech
 
 
+def _capture(data: bytes, filename: str, text: str) -> None:
+    """Keep one utterance and what was heard (the debugging switch
+    ``conductor_voice_capture_dir``). A failed save never fails the turn."""
+    directory = get_settings().conductor_voice_capture_dir
+    if directory is None:
+        return
+    stem = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f"{stem}{Path(filename).suffix or '.webm'}").write_bytes(data)
+        (directory / f"{stem}.json").write_text(json.dumps({"heard": text}))
+    except OSError as exc:
+        logger.warning("voice_capture_failed", error=str(exc))
+
+
 class SpeakRequest(BaseModel):
     text: str
 
@@ -74,8 +93,9 @@ async def transcribe(
     this endpoint itself reads and writes nothing."""
     client = _require(speech)
     data = await audio.read()
+    filename = audio.filename or "audio.webm"
     try:
-        text = client.transcribe(data, filename=audio.filename or "audio.webm")
+        text = client.transcribe(data, filename=filename)
     except SpeechError as exc:
         logger.error("voice_transcribe_failed", error=str(exc))
         raise HTTPException(
@@ -83,6 +103,7 @@ async def transcribe(
             detail=f"speech service error: {exc}",
         ) from exc
     logger.info("voice_transcribed", audio_bytes=len(data), text_length=len(text))
+    _capture(data, filename, text)
     return TranscriptionResult(text=text)
 
 

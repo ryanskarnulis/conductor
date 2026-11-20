@@ -122,6 +122,11 @@ class Settings(BaseSettings):
     # (app/ai/context_capture.py; heavy, a debugging switch).
     conductor_trace_path: Path | None = None
     conductor_context_path: Path | None = None
+    # A debugging switch, off by default: every utterance's audio and the
+    # text heard from it are saved in this directory, to measure speech
+    # models against the person's real voice. Turn it off and delete the
+    # directory when the measuring is done.
+    conductor_voice_capture_dir: Path | None = None
 
     # --- recall by meaning (shared workspace embeddings service) ------------
     # ../embeddings/: EmbeddingGemma 2 on 8600, OpenAI /v1/embeddings (#147).
