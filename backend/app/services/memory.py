@@ -175,10 +175,30 @@ def _index(db: Session, turn: LedgerTurn) -> None:
     turn.terms = sorted(words)
     entity_ids = sorted({item.entity.id for item in touched})
     turn.topic_id = _topic_for(db, turn, words, entity_ids)
+    _lend(touched, said)
+
+
+def _lend(touched: Sequence[_Touched], said: set[str]) -> None:
+    """Each touched entity takes its own title's words and, when its receipt
+    named only a few things, the person's."""
     for item in touched:
         own = memory.terms(item.title or "") | {memory.stem(item.entity.kind.lower())}
         context = said if item.crowd <= NAMED_PER_RECEIPT else set()
         item.entity.terms = memory.merge(item.entity.terms, own | context, cap=ENTITY_TERMS)
+
+
+def index_again(db: Session, turn: LedgerTurn) -> None:
+    """A turn that gained receipts after it was indexed (a question answered
+    from its card): what they touched joins its words; its topic stays."""
+    if turn.terms is None or turn.incognito or turn.forgotten_at is not None:
+        return
+    touched = _touched(db, [turn.id]).get(turn.id, [])
+    titles: set[str] = set()
+    for item in touched:
+        titles |= memory.terms(item.title or "")
+    turn.terms = sorted(set(turn.terms) | titles)
+    _lend(touched, memory.terms(turn.words))
+    db.flush()
 
 
 def _topic_for(db: Session, turn: LedgerTurn, words: set[str], entity_ids: list[int]) -> int | None:

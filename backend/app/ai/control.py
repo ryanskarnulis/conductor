@@ -591,7 +591,7 @@ def undo(
         if record is None:
             break
         record.undoes = [receipt.id for receipt in groups[ask.app]]
-        question = (record.app_confirm or {}).get("question")
+        question = "\n".join(narrator.asked_questions(record))
         if question:
             # The app's own question; the yes carries what it undoes, and
             # the rest of the undo goes on after it.
@@ -745,8 +745,8 @@ def _unrun(app: str, message: str, error: str) -> ToolCallRecord:
 
 
 def _lapse() -> None:
-    """The app's waiting question lapses: its token is never sent."""
-    current_delegation_context().pending_confirm = None
+    """The app's waiting questions lapse: their tokens are never sent."""
+    current_delegation_context().lapse_confirms()
 
 
 def _say(interp: Interpreter, state: _Run, reply: str) -> AgentRunResult:

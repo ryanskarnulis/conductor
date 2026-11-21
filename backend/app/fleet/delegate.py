@@ -311,6 +311,23 @@ def _lenient_confirm(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
 Confirm = Annotated[ConfirmRequired | None, WrapValidator(_lenient_confirm)]
 
 
+def _lenient_confirms(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+    """Each armed confirmation is read on its own: one conductor can't read
+    drops only itself, and a list it can't read at all is no list."""
+    if not isinstance(value, list):
+        return None
+    kept = []
+    for item in value:
+        try:
+            kept.append(ConfirmRequired.model_validate(item))
+        except ValidationError:
+            logger.warning("delegate_confirm_unreadable")
+    return handler(kept) or None
+
+
+Confirms = Annotated[list[ConfirmRequired] | None, WrapValidator(_lenient_confirms)]
+
+
 class MessageRead(BaseModel):
     id: int
     conversation_id: int
@@ -324,9 +341,19 @@ class MessageRead(BaseModel):
     record: Record = None
     # Set on a ``confirm_required`` stop: the armed call's token and question.
     confirm_required: Confirm = None
+    # Every call the run armed, in call order (several gated calls in one
+    # turn); ``confirm_required`` is the first. An older app sends only that.
+    confirms_required: Confirms = None
     # v1.2 (#202): the app's own question when it did nothing,
     # ``{question, candidates}``; read only from an app that declares v1.2.
     needs_input: NeedsInput = None
+
+    def armed(self) -> list[ConfirmRequired]:
+        """Every confirmation this message armed, in call order: the list
+        when the app sent one, else its one ``confirm_required``."""
+        if self.confirms_required:
+            return list(self.confirms_required)
+        return [self.confirm_required] if self.confirm_required is not None else []
 
 
 class FailureBody(BaseModel):

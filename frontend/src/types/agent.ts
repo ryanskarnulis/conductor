@@ -24,6 +24,11 @@ export interface ToolCallRecord {
   /** The question the app is waiting on (#68), with its single-use token.
    * Persisted and shown, never sent to the model. */
   app_confirm?: AppConfirm | null
+  /** Every question that call armed, in call order: one card each.
+   * `app_confirm` is the first. */
+  app_confirms?: AppConfirm[] | null
+  /** For a `confirm` call: the token of the one question it answered. */
+  answers?: string | null
 }
 
 /** One entity a tool call changed or found (delegate v1.1 `touched`). The
@@ -57,7 +62,19 @@ export interface AppConfirm {
   token: string
   tool: string
   question: string
+  /** What the call would change, as the app sent it. */
+  preview?: { count?: number | null; touched?: TouchedRef[] | null } | null
   expires_at?: string | null
+}
+
+/** What a card's answer did (backend ConfirmAnswerRead). `failed`: the app
+ * didn't take the yes, and nothing is claimed. */
+export interface ConfirmAnswer {
+  token: string
+  answer: 'yes' | 'no'
+  outcome: 'done' | 'refused' | 'failed' | 'declined'
+  detail: string | null
+  message: AgentMessage
 }
 
 /** STANDARD.md §3's stop vocabulary, the same strings in every app. */

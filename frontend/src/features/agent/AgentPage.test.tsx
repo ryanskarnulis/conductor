@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cancelTurn, getConversation, getTimeline, getTurnActivity, postMessage } from '../../api/agent'
+import { answerConfirmation, cancelTurn, getConversation, getTimeline, getTurnActivity, postMessage } from '../../api/agent'
 import { getWorklist } from '../../api/sort'
 import type { AgentMessage, ConversationDetail } from '../../types/agent'
 import { AgentPage } from './AgentPage'
@@ -22,6 +22,7 @@ vi.mock('../../api/agent', () => ({
   // Side threads (#139): none open.
   listThreads: vi.fn(() => Promise.resolve([])),
   cancelTurn: vi.fn(),
+  answerConfirmation: vi.fn(),
   getConversation: vi.fn(),
   getTurnActivity: vi.fn(),
   getTimeline: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock('../../api/agent', () => ({
 const mockTimeline = vi.mocked(getTimeline)
 const mockGet = vi.mocked(getConversation)
 const mockPost = vi.mocked(postMessage)
+const mockAnswer = vi.mocked(answerConfirmation)
 const mockActivity = vi.mocked(getTurnActivity)
 const mockWorklist = vi.mocked(getWorklist)
 const mockCancel = vi.mocked(cancelTurn)
@@ -301,7 +303,7 @@ describe('AgentPage', () => {
     expect(screen.queryByText(/Asking chess…/)).not.toBeInTheDocument()
   })
 
-  it('shows an app\'s pending question as a confirmation card and answers it by saying yes', async () => {
+  it('shows an app\'s pending question as a confirmation card and answers it with its token, not a turn', async () => {
     const waiting = message({
       id: 2,
       role: 'assistant',
@@ -328,8 +330,103 @@ describe('AgentPage', () => {
     expect(screen.getByRole('list', { name: 'Plan steps' })).toHaveTextContent('waiting on you')
     expect(screen.getAllByRole('status').map((el) => el.textContent)).toContain('Waiting on you')
 
+    mockAnswer.mockReturnValue(new Promise(() => {}))
     fireEvent.click(screen.getByRole('button', { name: 'Yes, do it' }))
-    expect(mockPost).toHaveBeenCalledWith(1, 'yes')
+    expect(mockAnswer).toHaveBeenCalledWith(1, 'tok', 'yes')
+    expect(mockPost).not.toHaveBeenCalled()
+  })
+
+  describe('several app questions', () => {
+    const later = new Date(Date.now() + 600_000).toISOString()
+    const armed = ['Test 1', 'Test 2', 'Test 3'].map((title, n) => ({
+      app: 'tasks',
+      thread_id: 3,
+      token: `tok-${n + 1}`,
+      tool: 'trash_task',
+      question: `Trash the task “${title}”?`,
+      expires_at: later,
+    }))
+    const asking = {
+      tool: 'ask_tasks',
+      arguments: { message: 'delete the test tasks' },
+      result: 'needs confirmation',
+      error: null,
+      app_record: armed.map(() => ({ tool: 'trash_task', outcome: 'not_run', reason: 'needs confirmation' })),
+      app_confirm: armed[0],
+      app_confirms: armed,
+    }
+    const turn = (...answers: AgentMessage['tool_calls'] & object) =>
+      ({ ...detail, messages: [message({ content: 'delete the test tasks' }), message({ id: 2, role: 'assistant', content: armed.map((a) => a.question).join('\n'), stop_reason: 'completed', tool_calls: [asking, ...answers] })] }) as ConversationDetail
+    const yes = (token: string, over: object = {}) => ({ tool: 'confirm', arguments: { app: 'tasks' }, result: 'ok', error: null, answers: token, ...over })
+    const trashed = { tool: 'trash_task', outcome: 'done', touched: [{ app: 'tasks', kind: 'task', id: '2', title: 'Test 2' }], undo: { handle: 'u2', how: 'restore the task' } }
+    const cards = () => screen.findAllByRole('group', { name: /^Confirmation/ })
+
+    it('shows one card per question, each with its own Yes and Not now', async () => {
+      mockGet.mockResolvedValue(turn())
+      renderAt('/c/1')
+      const shown = await cards()
+      expect(shown).toHaveLength(3)
+      shown.forEach((card, n) => {
+        expect(card).toHaveTextContent(armed[n].question)
+        expect(within(card).getByRole('button', { name: 'Yes, do it' })).toBeEnabled()
+        expect(within(card).getByRole('button', { name: 'Not now' })).toBeEnabled()
+      })
+    })
+
+    it('answers one card with its token; it becomes that call’s receipt and the others stay open', async () => {
+      mockGet.mockResolvedValueOnce(turn())
+      mockGet.mockResolvedValue(turn(yes('tok-2', { app_record: [trashed] })))
+      mockAnswer.mockResolvedValue({ token: 'tok-2', answer: 'yes', outcome: 'done', detail: null, message: message({ id: 2 }) })
+      renderAt('/c/1')
+      const shown = await cards()
+      fireEvent.click(within(shown[1]).getByRole('button', { name: 'Yes, do it' }))
+      expect(mockAnswer).toHaveBeenCalledWith(1, 'tok-2', 'yes')
+      expect(mockPost).not.toHaveBeenCalled()
+
+      const done = await screen.findByRole('group', { name: 'Confirmation: Done' })
+      expect(done).toHaveTextContent('Trash the task “Test 2”?')
+      expect(done).toHaveTextContent('Trashed · PCC · “Test 2”')
+      expect(done).toHaveTextContent('Say “undo that” to take it back (restore the task).')
+      expect(within(done).queryByRole('button')).toBeNull()
+      const open = screen.getAllByRole('group', { name: 'Confirmation' })
+      expect(open).toHaveLength(2)
+      expect(within(open[0]).getByRole('button', { name: 'Yes, do it' })).toBeEnabled()
+    })
+
+    it('Not now closes that card alone, and nothing is sent as a turn', async () => {
+      mockGet.mockResolvedValueOnce(turn())
+      mockGet.mockResolvedValue(turn(yes('tok-1', { result: null, error: 'not run: declined' })))
+      mockAnswer.mockResolvedValue({ token: 'tok-1', answer: 'no', outcome: 'declined', detail: null, message: message({ id: 2 }) })
+      renderAt('/c/1')
+      fireEvent.click(within((await cards())[0]).getByRole('button', { name: 'Not now' }))
+      expect(mockAnswer).toHaveBeenCalledWith(1, 'tok-1', 'no')
+      expect(await screen.findByRole('group', { name: 'Confirmation: Left as it is' })).toHaveTextContent('Trash the task “Test 1”?')
+      expect(screen.getAllByRole('group', { name: 'Confirmation' })).toHaveLength(2)
+      expect(mockPost).not.toHaveBeenCalled()
+    })
+
+    it('shows the app’s refusal of a token on that card, claiming nothing', async () => {
+      const refusal = 'tasks didn’t take the yes (what it would change has changed since), so nothing was done. Ask tasks again.'
+      mockGet.mockResolvedValueOnce(turn())
+      mockGet.mockResolvedValue(turn(yes('tok-3', { result: null, error: refusal })))
+      mockAnswer.mockResolvedValue({ token: 'tok-3', answer: 'yes', outcome: 'failed', detail: refusal, message: message({ id: 2 }) })
+      renderAt('/c/1')
+      fireEvent.click(within((await cards())[2]).getByRole('button', { name: 'Yes, do it' }))
+      const failed = await screen.findByRole('group', { name: 'Confirmation: Not done' })
+      expect(failed).toHaveTextContent('so nothing was done.')
+      expect(failed).not.toHaveTextContent('Trashed')
+    })
+
+    it('shows a card past its expiry as expired, with no buttons', async () => {
+      const past = new Date(Date.now() - 1000).toISOString()
+      const stale = { ...asking, app_confirm: { ...armed[0], expires_at: past }, app_confirms: [{ ...armed[0], expires_at: past }, armed[1]] }
+      mockGet.mockResolvedValue({ ...detail, messages: [message({}), message({ id: 2, role: 'assistant', content: 'q', stop_reason: 'completed', tool_calls: [stale] })] })
+      renderAt('/c/1')
+      const expired = await screen.findByRole('group', { name: 'Confirmation: Expired' })
+      expect(expired).toHaveTextContent('Trash the task “Test 1”?')
+      expect(within(expired).queryByRole('button')).toBeNull()
+      expect(screen.getAllByRole('group', { name: 'Confirmation' })).toHaveLength(1)
+    })
   })
 
   it('shows what the apps did, from their typed records', async () => {

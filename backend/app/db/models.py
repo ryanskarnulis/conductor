@@ -98,7 +98,8 @@ class ConversationMessage(Base, TimestampMixin):
     ``app/ai/runtime.py::ToolCallRecord``), ``stop_reason`` is how it ended. This is the display/chat-trajectory store; what each
     turn did, step by step with the apps' receipts, is the ledger's
     (:class:`LedgerTurn`, #69). No ``deleted_at``: messages are immutable once written
-    and share their conversation's soft-delete fate.
+    (one exception: an app question answered from its card appends that call to
+    the asking turn's ``tool_calls``) and share their conversation's soft-delete fate.
     """
 
     __tablename__ = "conversation_messages"

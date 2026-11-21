@@ -50,6 +50,9 @@ MAX_ENTITIES = 10
 MAX_JOBS = 5
 MAX_TITLE_CHARS = 60
 MAX_QUESTION_CHARS = 300
+# Several open questions (one per gated call): how many are quoted, each
+# clipped like a title.
+MAX_QUESTIONS = 6
 MAX_MATCHES = 3
 MAX_SAID_CHARS = 100
 # The matches' share of the block: three lines and their heading.
@@ -184,9 +187,19 @@ def render(
     if jobs:
         lines.append("Running jobs (as of each one's last report):")
         lines += [f"- {job}" for job in jobs]
-    asked = confirmation.pending(history)
+    several = confirmation.open_confirms(history)
+    asked = several[0] if several else None
     question = _waiting(history)
-    if asked is not None:
+    if asked is not None and len(several) > 1:
+        # Several gated calls, several questions: one yes answers them all.
+        quoted = " ".join(f'"{_clip(one.question)}"' for one in several[:MAX_QUESTIONS])
+        more = f" and {len(several) - MAX_QUESTIONS} more" if len(several) > MAX_QUESTIONS else ""
+        lines.append(
+            f"Waiting on the person: {asked.app} asked {len(several)} questions: {quoted}{more}. "
+            f'If their message says yes to them, call confirm(app="{asked.app}"); '
+            "if not, don't — the questions lapse."
+        )
+    elif asked is not None:
         lines.append(
             f'Waiting on the person: {asked.app} asked "{_clip_question(asked.question)}" '
             f'If their message says yes to it, call confirm(app="{asked.app}"); '

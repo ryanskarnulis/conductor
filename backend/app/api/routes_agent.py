@@ -26,6 +26,7 @@ binding and the activity endpoint, which PCC's local-tool agent doesn't need.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import AsyncIterator, Generator, Sequence
 from typing import Any
@@ -50,13 +51,13 @@ from app.ai import (
 )
 from app.ai.plan import RunningJob
 from app.ai.interpreter import Interpreter, conductor_from_settings
-from app.ai.runtime import Activity, AgentRunFailed
+from app.ai.runtime import Activity, AgentRunFailed, ToolCallRecord
 from app.ai.plan import PausedPlan
 from app.ai.providers.llamacpp import provider_from_settings
 from app.ai.state_block import Now
 from app.api import turn_activity
 from app.api.rate_limit import rate_limit
-from app.db.models import Conversation, ConversationMessage
+from app.db.models import Conversation, ConversationMessage, utcnow
 from app.db.session import SessionLocal, get_db
 from app.fleet.context import DelegationContext, ThreadStore, use_delegation_context
 from app.fleet import jobs as fleet_jobs
@@ -65,6 +66,8 @@ from app.fleet.manifests import Fleet
 from app.fleet.thread_cleanup import SubagentThreadCleanup
 from app.fleet.thread_store import DbThreadStore
 from app.schemas.conversations import (
+    ConfirmAnswerCreate,
+    ConfirmAnswerRead,
     ConversationCreate,
     ConversationDetail,
     ConversationRead,
@@ -568,6 +571,106 @@ def post_note(
     return _read(note, timeline_service.Tag(data.surface, False))
 
 
+# One card's answer at a time (single worker): each rewrites the asking
+# turn's record, and two at once would drop one.
+_CARD_LOCK = threading.Lock()
+
+
+@router.post(
+    "/conversations/{conversation_id}/confirmations",
+    response_model=ConfirmAnswerRead,
+    dependencies=[Depends(rate_limit("agent_notes", per_min_attr="fleet_actions_per_min"))],
+)
+def answer_confirmation(
+    conversation_id: int,
+    data: ConfirmAnswerCreate,
+    db: Session = Depends(get_db),
+    conductor: Interpreter = Depends(get_conductor),
+    thread_store: ThreadStore = Depends(get_thread_store),
+) -> ConfirmAnswerRead:
+    """Answer one app question from its card. **No model runs.**
+
+    Several gated calls are several questions, each with its own token
+    (delegate-api "Confirmation"). Yes sends that one token to the app, which
+    runs exactly that call; the answer goes on the asking turn's record and
+    the ledger like any confirmed call. Not now sends nothing and closes that
+    card alone. Either way the turn's other questions stay open. A question
+    is open only while its turn is the conversation's last (409 otherwise,
+    and while a turn is running or past its expiry). The app refusing the
+    token (its 409: stale, expired, used, unknown) is a ``failed`` answer on
+    the record: nothing is claimed done.
+    """
+    conversation = _get_or_404(db, conversation_id)
+    _writable_or_409(conversation)
+    if turn_activity.get(conversation_id) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="a turn is running; answer after it")
+    with _CARD_LOCK:
+        thread = conversation if threads_service.is_thread(conversation) else None
+        since = None if thread is not None else _window(db, conversation.id)
+        still_open = confirmation.open_confirms(_stored_turns(db, conversation.id, since))
+        pending = next((one for one in still_open if one.token == data.token), None)
+        asking = conversations_service.last_exchange(db, conversation.id, since=since)
+        if pending is None or asking is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="that question is no longer open")
+        if data.answer == "yes" and confirmation.expired(pending.expires_at, utcnow()):
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="that question expired; ask again")
+        hidden = asking.id in conversations_service.incognito_messages(db, conversation.id)
+        with incognito.turn(hidden):
+            if data.answer == "no":
+                record = ToolCallRecord(
+                    tool=confirmation.CONFIRM_TOOL,
+                    arguments={"app": pending.app},
+                    error=confirmation.DECLINED,
+                    answers=pending.token,
+                )
+            else:
+                context = DelegationContext(
+                    master_conversation_id=conversations_service.thread_key(
+                        db, conversation.id, since
+                    ),
+                    thread_store=thread_store,
+                    pending_confirms=[pending],
+                )
+                with use_delegation_context(context):
+                    record = conductor.answer_confirm(pending.app)
+                record.answers = pending.token
+                if pending.several:
+                    record.undoes = None
+            conversations_service.append_call(db, asking, record, hidden=hidden)
+            ledger.answer_step(db, asking.id, record, settled=len(still_open) == 1)
+            db.commit()
+            db.refresh(asking)
+            outcome, detail = _card_outcome(data.answer, record)
+            logger.info(
+                "agent_confirm_card",
+                conversation_id=conversation_id,
+                app=pending.app,
+                answer=data.answer,
+                outcome=outcome,
+            )
+    tags = timeline_service.message_tags(db, [asking.id])
+    return ConfirmAnswerRead(
+        token=pending.token,
+        answer=data.answer,
+        outcome=outcome,
+        detail=detail,
+        message=_read(asking, tags.get(asking.id)),
+    )
+
+
+def _card_outcome(answer: str, record: ToolCallRecord) -> tuple[Any, str | None]:
+    """What a card's answer came to, from its record alone."""
+    if answer == "no":
+        return "declined", None
+    if record.error is not None:
+        return "failed", record.error
+    entries = record.app_record or []
+    if entries and not any(entry.get("outcome") == "done" for entry in entries):
+        reason = next((entry.get("reason") for entry in entries if entry.get("reason")), None)
+        return "refused", str(reason) if reason else None
+    return "done", None
+
+
 @router.post(
     "/conversations/{conversation_id}/messages",
     response_model=MessageExchange,
@@ -658,7 +761,7 @@ def _post_message(
         master_conversation_id=conversations_service.thread_key(db, conversation.id, since),
         thread_store=thread_store,
         # Only a question the person saw last turn can take a yes (#68).
-        pending_confirm=confirmation.pending(turns),
+        pending_confirms=confirmation.open_confirms(turns),
     )
 
     def report(activity: Activity) -> None:

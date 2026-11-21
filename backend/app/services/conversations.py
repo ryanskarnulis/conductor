@@ -262,12 +262,13 @@ def incognito_messages(db: Session, conversation_id: int | None = None) -> set[i
 
 
 def _waiting_only(calls: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
-    """An incognito turn's calls that left an app's question waiting: what a
-    yes needs, and nothing the app answered."""
+    """An incognito turn's calls that left an app's question waiting, and the
+    answers its cards took (so an answered one isn't open again): what a yes
+    needs, and nothing the app answered."""
     kept = [
         {**incognito.tool_call(call), "result": None, "app_record": None}
         for call in calls or []
-        if call.get("app_confirm")
+        if call.get("app_confirm") or call.get("answers")
     ]
     return kept or None
 
@@ -410,6 +411,32 @@ def append_assistant_message(
         run_id=run.run_id,
     )
     return message
+
+
+def last_exchange(
+    db: Session, conversation_id: int, *, since: datetime | None = None
+) -> ConversationMessage | None:
+    """The newest message that is part of the conversation itself (a job's
+    note or a thread's result is neither said nor answered): the turn whose
+    questions are still open, as :func:`stored_turns` reads it."""
+    for message in reversed(list_messages(db, conversation_id, since=since, newest=WINDOW_SCANNED)):
+        if message.stop_reason not in _NOTES:
+            return message
+    return None
+
+
+def append_call(
+    db: Session, message: ConversationMessage, record: ToolCallRecord, *, hidden: bool = False
+) -> None:
+    """Put one more call on a stored turn's record: the person's answer from
+    a question's card, on the turn that asked it. The one write a stored
+    message takes after its turn ended; its words never change."""
+    call = record.model_dump()
+    if hidden:
+        call = incognito.tool_call(call)
+    message.tool_calls = [*(message.tool_calls or []), call]
+    message.conversation.updated_at = utcnow()
+    db.flush()
 
 
 def _derive_title(content: str) -> str:

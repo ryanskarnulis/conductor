@@ -91,6 +91,17 @@ class ToolCallRead(BaseModel):
     app_record: list[dict[str, Any]] | None = None
     # The app's armed question and its token, kept for the person's yes (#68).
     app_confirm: dict[str, Any] | None = None
+    # Every question that call armed, in call order (one card each).
+    app_confirms: list[dict[str, Any]] | None = None
+    # For a ``confirm`` call: the token of the one question it answered.
+    answers: str | None = None
+
+
+class ConfirmAnswerCreate(BaseModel):
+    """The person's answer from one question's card."""
+
+    token: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    answer: Literal["yes", "no"]
 
 
 class NoteThreadRead(BaseModel):
@@ -116,6 +127,19 @@ class MessageRead(BaseModel):
     incognito: bool = False
     # A side thread's result note (#139): the thread it came from.
     thread: NoteThreadRead | None = None
+
+
+class ConfirmAnswerRead(BaseModel):
+    """What a card's answer did. ``done``: the app ran the call; ``refused``:
+    it ran and said no; ``failed``: it didn't take the yes (its 409, an
+    outage) and nothing is claimed; ``declined``: nothing was sent. The
+    asking turn's message comes back with the answer on its record."""
+
+    token: str
+    answer: Literal["yes", "no"]
+    outcome: Literal["done", "refused", "failed", "declined"]
+    detail: str | None = None
+    message: MessageRead
 
 
 class ConversationDetail(ConversationRead):

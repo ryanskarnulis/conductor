@@ -2,6 +2,7 @@ import { apiClient, apiUrl } from './client'
 import type { Heard } from '../voice/tts'
 import type {
   AgentMessage,
+  ConfirmAnswer,
   ConversationDetail,
   JobCancelResult,
   MessageExchange,
@@ -73,6 +74,19 @@ export async function postMessage(
     timeoutMs: AGENT_RUN_TIMEOUT_MS,
   })
   return (await res.json()) as MessageExchange
+}
+
+/** Answer one app question from its card. No model runs: yes sends that
+ * question's token to its app, no sends nothing; the turn's other questions
+ * stay open. A 409 means the question is no longer open. */
+export async function answerConfirmation(conversationId: number, token: string, answer: 'yes' | 'no'): Promise<ConfirmAnswer> {
+  const res = await apiClient(`/api/agent/conversations/${conversationId}/confirmations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, answer }),
+    timeoutMs: AGENT_RUN_TIMEOUT_MS,
+  })
+  return (await res.json()) as ConfirmAnswer
 }
 
 export async function getTurnActivity(conversationId: number): Promise<TurnActivity> {

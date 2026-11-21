@@ -104,7 +104,13 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   `confirm_required` question goes to the person and the token stays on the
   turn's record (`app_confirm`, never sent to the model). Only a question from
   the last turn can take a yes (a `confirm` step, which sends `Confirm-Token`
-  on the asking thread); anything else lapses it. For an `ask_` app without
+  on the asking thread); anything else lapses it. Several gated calls are
+  several questions (`confirms_required` → `app_confirms`, one token each):
+  the page shows a card per question, and a card's button is
+  `POST …/confirmations` (no model): yes redeems that one token, "Not now"
+  sends nothing, and the answer is appended to the asking turn's record and
+  ledger plan (`answers` names the token), so the others stay open. A spoken
+  yes answers every one still open, in order; a refusal none. For an `ask_` app without
   the flag, code's gate asks first (a `destructive` ask pauses on it). `open_`
   apps confirm their own resets; "resign the game" is a plain handoff.
 - **Asks to one app have no cap of their own** (#218): the plan says what

@@ -73,6 +73,11 @@
 .cd-confirm p,.cd-question p{margin:0}
 .cd-confirm b,.cd-question b{color:var(--warn);font-weight:600}
 .cd-confirm .why,.cd-question .why{font-size:13px;color:var(--silk)}
+.cd-confirm--done,.cd-confirm--declined,.cd-confirm--expired{border-color:var(--silk-border);background:transparent}
+.cd-confirm--done b{color:var(--ok)}
+.cd-confirm--declined b,.cd-confirm--expired b{color:var(--silk)}
+.cd-confirm--failed,.cd-confirm--refused{border-color:var(--danger);background:transparent}
+.cd-confirm--failed b,.cd-confirm--refused b{color:var(--danger)}
 .cd-choice{min-height:40px;padding:0 14px;border-radius:var(--radius-step);border:1px solid var(--warn);background:transparent;color:var(--ink);cursor:pointer;font-size:13.5px;text-align:left}
 .cd-choice:hover{background:var(--warn-soft)}
 

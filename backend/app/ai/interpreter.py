@@ -353,6 +353,8 @@ class Interpreter:
             state.plan = TurnPlan(status="ran", note="stopped")
             return rt.stop("cancelled", [], [])
         pending = current_delegation_context().pending_confirm
+        # Several gated calls left several questions: a yes answers them all.
+        waiting = current_delegation_context().open_confirms()
         # Code's question and a think's proposal (#78) both take a yes that
         # runs a paused plan.
         gate = paused if paused is not None and paused.reason in ("gate", "proposal") else None
@@ -455,7 +457,7 @@ class Interpreter:
                 and (gate is None or gate.reason == "gate")
                 and not control.heard_question(
                     _heard(state),
-                    pending.question if pending is not None and gate is None else None,
+                    waiting[-1].question if waiting and gate is None else None,
                 )
             ):
                 # The yes answers a question they spoke over (#198).
@@ -472,6 +474,15 @@ class Interpreter:
         if first.do in plans.CONTROL_KINDS:
             return control.run(self, state, turn, first, state.view, paused=paused, pending=pending)
         return self._execute(state, turn, plan.steps, 0, {})
+
+    # --- a card's answer ---------------------------------------------------------------------
+
+    def answer_confirm(self, app: str, *, actor: str = ACTOR) -> ToolCallRecord:
+        """The person's yes from one question's card: that question's token
+        goes to its app (the bound delegation context holds exactly that
+        question) and the app runs that one call. No plan, no model call."""
+        call = ToolCall(id="card-1", name=_CONFIRM_TOOL, arguments={"app": app})
+        return self._rt.dispatch(call, actor)
 
     # --- compiling ---------------------------------------------------------------------------
 
@@ -659,17 +670,34 @@ class Interpreter:
             return self._rt.finish("completed", _LEFT_IT, [], state.messages)
         turn_events.resumed("app_confirm")
         turn_events.plan(turn.body, 0)
-        record = self._dispatch(state, _CONFIRM_TOOL, {"app": pending_app or ""})
-        if undoing is not None and record is not None and self._went_well(record):
+        # One yes answers every question still open, each with its own token,
+        # in the order asked; one the app refuses doesn't stop the others.
+        apps = [one.app for one in current_delegation_context().open_confirms()]
+        answered: list[ToolCallRecord] = []
+        for app in apps or [pending_app or ""]:
+            if answered and _stopped(state.stop):
+                break
+            record = self._dispatch(state, _CONFIRM_TOOL, {"app": app})
+            if record is not None:
+                answered.append(record)
+        went_well = len(answered) == max(len(apps), 1) and all(
+            self._went_well(record) for record in answered
+        )
+        if len(answered) > 1 and not went_well:
+            # Which of an undo's receipts each question redeemed isn't known:
+            # none is marked undone unless every one went through.
+            for record in answered:
+                record.undoes = None
+        if undoing is not None and went_well:
             # The yes was to an undo's question: the rest of that undo goes on.
             undo_step, position, handled = undoing
             turn.body = {"steps": [undo_step.model_dump()]}
             return control.undo(
                 self, state, turn, undo_step, state.view, position=position, handled=handled
             )
-        if record is None or not self._went_well(record):
+        if not went_well:
             return self._finish(state, turn, rest)
-        return self._execute(state, turn, rest, 1, {})
+        return self._execute(state, turn, rest, len(answered), {})
 
     def _proposal(
         self, state: _Run, turn: TurnPlan, proposal: PausedPlan, answer: str
@@ -972,9 +1000,9 @@ class Interpreter:
         """An app asked the person to confirm: the plan waits on their answer
         if anything is left to run after it."""
         plan_length = len((turn.body or {}).get("steps") or [])
-        asked = next((r.app_confirm for r in reversed(state.records) if r.app_confirm), None)
-        question = asked.get("question") if asked else None
-        turn_events.paused("app_confirm", question=question, app=step.app, step=step.id)
+        asking = next((r for r in reversed(state.records) if r.app_confirm), None)
+        question = "\n".join(narrator.asked_questions(asking)) if asking else None
+        turn_events.paused("app_confirm", question=question or None, app=step.app, step=step.id)
         if resume_at < plan_length:
             turn.status, turn.pause = "paused", "app_confirm"
             turn.resume_at, turn.pause_app = resume_at, step.app

@@ -4,6 +4,7 @@ import { Ear, EarOff, EyeOff, ListMusic, SendHorizontal, Square, Volume2, Volume
 import { cancelTurn, getTimeline, type SendOptions } from '../../api/agent'
 import {
   Ack,
+  AnsweredCard,
   ConfirmationCard,
   Narration,
   PlanSteps,
@@ -123,12 +124,16 @@ function TurnView({
   confirm,
   busy,
   onAnswer,
+  onCard,
 }: {
   turn: ShellTurn
   latest: boolean
+  /** A think's proposal waiting on a yes (an app's questions are `turn.confirms`). */
   confirm: { app: string; question: string } | null
   busy: boolean
   onAnswer: (words: string) => void
+  /** One app question answered from its card: its token and yes or no. */
+  onCard: (token: string, answer: 'yes' | 'no') => void
 }) {
   const stop = turn.stopReason !== null && turn.stopReason !== 'completed' ? STOP_FALLBACK[turn.stopReason] : null
   const classes = `shell-turn${latest ? '' : ' shell-turn--old'}${turn.incognito ? ' shell-turn--incognito' : ''}`
@@ -163,11 +168,27 @@ function TurnView({
           disabled={busy}
         />
       )}
-      {latest && !turn.pause && confirm && (
+      {(turn.confirms ?? []).map((card) =>
+        card.state === 'open' ? (
+          <ConfirmationCard
+            key={card.token}
+            app={card.app}
+            question={card.question}
+            why={`${card.app} asks before this write. Say “yes”, or tap.`}
+            actionLabel="Yes, do it"
+            onConfirm={() => onCard(card.token, 'yes')}
+            onDecline={() => onCard(card.token, 'no')}
+            disabled={busy}
+          />
+        ) : (
+          <AnsweredCard key={card.token} app={card.app} question={card.question} state={card.state} detail={card.detail} receipts={card.receipts} />
+        ),
+      )}
+      {latest && !turn.pause && confirm && (turn.confirms ?? []).length === 0 && (
         <ConfirmationCard
           app={confirm.app}
           question={confirm.question}
-          why={`${confirm.app} asks before this write. Say “yes”, or tap.`}
+          why="Say “yes”, or tap."
           actionLabel="Yes, do it"
           onConfirm={() => onAnswer('yes')}
           onDecline={() => onAnswer('not now')}
@@ -232,7 +253,9 @@ export function AgentPage() {
   const [startOpen, setStartOpen] = useState(false)
   const [threadName, setThreadName] = useState('')
 
-  const { detail, loading, error, pendingText, handoff, send, liveWords, note, refresh: refreshThread } = useConversation(activeId)
+  const { detail, loading, error, pendingText, handoff, send, liveWords, note, refresh: refreshThread, answerCard: cardAnswer } = useConversation(activeId)
+  // One card's answer in flight: the cards wait for it.
+  const [answering, setAnswering] = useState(false)
 
   // The sort panel opens on a turn where music actually ran its sorting tool
   // and then stays open (see sortTurn.ts) until dismissed. This session's
@@ -274,7 +297,19 @@ export function AgentPage() {
     return () => mql.removeEventListener('change', on)
   }, [])
 
-  const turns = useMemo(() => buildTurns(messages, pendingText, activity, stream, held), [messages, pendingText, activity, stream, held])
+  // An open card past its expiry shows as expired: this clock is read again
+  // when the next one runs out.
+  const [cardNow, setCardNow] = useState(() => Date.now())
+  const turns = useMemo(() => buildTurns(messages, pendingText, activity, stream, held, cardNow), [messages, pendingText, activity, stream, held, cardNow])
+  const nextExpiry = useMemo(
+    () => Math.min(...turns.flatMap((turn) => (turn.confirms ?? []).flatMap((card) => (card.state === 'open' && card.expiresAt ? [Date.parse(card.expiresAt)] : [])))),
+    [turns],
+  )
+  useEffect(() => {
+    if (!Number.isFinite(nextExpiry)) return
+    const timer = setTimeout(() => setCardNow(Date.now()), Math.max(0, nextExpiry - Date.now()) + 50)
+    return () => clearTimeout(timer)
+  }, [nextExpiry])
   // The page opens on the current window (#226): turns and notes from before
   // the timeline's last quiet gap fold away behind "Show earlier". A side
   // thread is read whole. The clock is read when the page opens and again
@@ -304,7 +339,7 @@ export function AgentPage() {
     () => daySeparators(shown.map(({ item }) => (item.kind === 'notes' ? item.turns[0]?.at : item.turn.when))),
     [shown],
   )
-  const confirm = sending ? null : pendingConfirm(messages)
+  const confirm = sending ? null : pendingConfirm(messages, cardNow)
   // A job's note or a side thread's result lands in the conversation but is
   // never the turn the page is about.
   const latestAt = turns.findLastIndex((turn) => !turn.jobNote && !turn.threadNote)
@@ -545,8 +580,9 @@ export function AgentPage() {
           turn={item.turn}
           latest={item.index === latestAt}
           confirm={item.index === latestAt && confirm ? confirm : null}
-          busy={sending}
+          busy={sending || answering}
           onAnswer={answer}
+          onCard={answerCard}
         />
       )}
     </Fragment>
@@ -562,6 +598,12 @@ export function AgentPage() {
   const answer = (words: string) => {
     if (sending || activeId === null) return
     void say(words)
+  }
+  // A card's button is its own path: that question's token, no model turn.
+  const answerCard = (token: string, said: 'yes' | 'no') => {
+    if (sending || answering || activeId === null) return
+    setAnswering(true)
+    void cardAnswer(token, said).finally(() => setAnswering(false))
   }
   const stopTurn = () => {
     if (activeId !== null) void cancelTurn(activeId)

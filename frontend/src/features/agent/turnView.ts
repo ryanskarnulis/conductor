@@ -32,6 +32,21 @@ export type PauseView =
   | { kind: 'question'; question: string; options: string[] }
   | { kind: 'confirm'; appKey: string | null; app: string; question: string; why: string }
 
+/** One app question as its card: open (Yes / Not now), or what came of it.
+ * Each is answered on its own, by its token. */
+export interface ConfirmCard {
+  token: string
+  appKey: string
+  app: string
+  question: string
+  state: 'open' | 'expired' | 'done' | 'refused' | 'failed' | 'declined'
+  /** Why a yes wasn't done, in the record's words. */
+  detail?: string
+  /** The call's receipts, once the app ran it. */
+  receipts: (ReceiptData & { appKey: string })[]
+  expiresAt: string | null
+}
+
 export interface ShellTurn {
   key: string
   /** What the person said, or the note they left from the UI. */
@@ -45,6 +60,9 @@ export interface ShellTurn {
   receipts: (ReceiptData & { appKey: string })[]
   /** What the plan waits on, while it waits. */
   pause: PauseView | null
+  /** The app questions this turn left, one card each: only while it is the
+   * conversation's last turn. Answered ones show their outcome. */
+  confirms?: ConfirmCard[]
   /** One line for a screen reader: what the plan just did or waits on. */
   announce: string | null
   reply: string | null
@@ -118,7 +136,10 @@ export function receiptFrom(entry: AppRecordEntry, app: string): (ReceiptData & 
   }
 }
 
-type StepSource = Pick<ToolCallRecord, 'tool' | 'arguments' | 'error'> & { app_confirm?: unknown }
+type StepSource = Pick<ToolCallRecord, 'tool' | 'arguments' | 'error'> & { app_confirm?: unknown; answers?: string | null }
+
+/** A card's "Not now" on the record (backend `confirmation.DECLINED`). */
+const DECLINED = 'not run: declined'
 
 /** An error text the loop writes for a call it never dispatched (backend
  * `run_record.classify`): that step didn't run, which is not the same as failing. */
@@ -148,6 +169,8 @@ function stepFrom(call: StepSource, waiting: boolean): ShellTurn['steps'][number
   }
   if (call.tool === 'confirm') {
     const app = typeof call.arguments.app === 'string' ? call.arguments.app : ''
+    // A card's "Not now" is on the record as a confirm that was never sent.
+    if (call.error === DECLINED) return { appKey: app || null, kind: 'confirm', app: appLabel(app || 'conductor'), text: 'not now', state: 'not_run', detail: 'declined' }
     return { appKey: app || null, kind: 'confirm', app: appLabel(app || 'conductor'), text: 'yes', ...outcome('done') }
   }
   const looked = lookedAtFromTool(call.tool)
@@ -248,11 +271,12 @@ export function streamPause(stream: TurnStream): PauseView | null {
     if (!question) return null
     return { kind: 'question', question, options: (step?.options ?? []).filter((o): o is string => typeof o === 'string' && o !== '') }
   }
-  if (!paused.question) return null
+  // An app's confirm questions are cards from the stored turn, one each.
+  if (!paused.question || paused.reason === 'app_confirm') return null
   // An app's own question (#168): the person answers it in words; their answer goes back to it.
   if (paused.reason === 'app_question') return { kind: 'question', question: paused.question, options: [] }
   const app = appLabel(paused.app ?? 'conductor')
-  const why = paused.reason === 'gate' ? `Conductor checks before asking ${app}. Say “yes”, or tap.` : `${app} asks before this write. Say “yes”, or tap.`
+  const why = `Conductor checks before asking ${app}. Say “yes”, or tap.`
   return { kind: 'confirm', appKey: paused.app ? paused.app.replace(/-/g, '_') : null, app, question: paused.question, why }
 }
 
@@ -310,22 +334,64 @@ export function lastExchange(messages: AgentMessage[]): AgentMessage | undefined
   return undefined
 }
 
-/** The question the conversation's last turn leaves waiting, if any — the
- * frontend twin of backend `confirmation.pending`: a later call to the same
- * app in that turn voids it. */
-export function pendingConfirm(messages: AgentMessage[]): (PendingConfirmView & { raw: Pick<AppConfirm, 'app'> }) | null {
+/** The app a stored call spoke to (backend `confirmation.record_app`). */
+function callApp(call: ToolCallRecord): string | null {
+  return call.tool.startsWith('ask_') ? call.tool.slice(4) : call.tool === 'confirm' ? String(call.arguments.app ?? '') : null
+}
+
+/** Every question a call armed, in call order (rows from before the list
+ * hold only the first). */
+function armedBy(call: ToolCallRecord): AppConfirm[] {
+  return call.app_confirms?.length ? call.app_confirms : call.app_confirm ? [call.app_confirm] : []
+}
+
+function firstSentence(text: string): string {
+  const end = text.search(/[.!?](\s|$)/)
+  return end < 0 ? text : text.slice(0, end + 1)
+}
+
+/** One assistant turn's app questions as cards — the frontend twin of
+ * backend `confirmation.open_in`. A later message to the same app without a
+ * token voids that app's questions (no card); a `confirm` that says which one
+ * it answered (`answers`) settles that card alone. An unanswered card past
+ * its `expires_at` is expired, not answerable. */
+export function confirmCards(calls: ToolCallRecord[], now: number = Date.now()): ConfirmCard[] {
+  let cards: { asked: AppConfirm; answer: ToolCallRecord | null }[] = []
+  for (const call of calls) {
+    const app = callApp(call)
+    if (call.answers) {
+      const card = cards.find((c) => c.asked.token === call.answers && c.answer === null)
+      if (card) card.answer = call
+    } else if (app !== null) {
+      cards = cards.filter((c) => c.answer !== null || c.asked.app !== app)
+    }
+    for (const asked of armedBy(call)) cards.push({ asked, answer: null })
+  }
+  return cards.map(({ asked, answer }) => {
+    const base = { token: asked.token, appKey: asked.app, app: appLabel(asked.app), question: asked.question, expiresAt: asked.expires_at ?? null }
+    if (answer === null) {
+      const at = asked.expires_at ? Date.parse(asked.expires_at) : NaN
+      return { ...base, state: !Number.isNaN(at) && at <= now ? ('expired' as const) : ('open' as const), receipts: [] }
+    }
+    if (answer.error === DECLINED) return { ...base, state: 'declined' as const, receipts: [] }
+    if (answer.error) return { ...base, state: 'failed' as const, detail: firstSentence(answer.error), receipts: [] }
+    const entries = answer.app_record ?? []
+    const receipts = entries.map((entry) => receiptFrom(entry, asked.app)).filter((r): r is NonNullable<typeof r> => r !== null)
+    const done = entries.length === 0 || entries.some((entry) => entry.outcome === 'done')
+    return { ...base, state: done ? ('done' as const) : ('refused' as const), receipts }
+  })
+}
+
+/** The first question the conversation's last turn leaves open, if any (the
+ * twin of backend `confirmation.pending`), or a think's proposal. */
+export function pendingConfirm(messages: AgentMessage[], now: number = Date.now()): (PendingConfirmView & { raw: Pick<AppConfirm, 'app'> }) | null {
   const last = lastExchange(messages)
   if (!last || last.role !== 'assistant') return null
   // A think's proposal (#78), posted as its job's note: the reply lists the
   // plan, and a yes runs exactly that.
   if ((last.stop_reason as string | null) === 'think_proposal') return { app: 'conductor', question: PROPOSAL_QUESTION, raw: { app: 'conductor' } }
-  let live: AppConfirm | null = null
-  for (const call of last.tool_calls ?? []) {
-    const app = call.tool.startsWith('ask_') ? call.tool.slice(4) : call.tool === 'confirm' ? String(call.arguments.app ?? '') : null
-    if (live !== null && app === live.app) live = null
-    if (call.app_confirm) live = call.app_confirm
-  }
-  return live ? { app: appLabel(live.app), question: live.question, raw: live } : null
+  const open = confirmCards(last.tool_calls ?? [], now).find((card) => card.state === 'open')
+  return open ? { app: open.app, question: open.question, raw: { app: open.appKey } } : null
 }
 
 /** Turns, oldest first: each user message with the assistant reply that
@@ -337,9 +403,10 @@ export function buildTurns(
   activity: TurnActivity | null,
   stream: TurnStream | null = null,
   held: TurnStream | null = null,
+  now: number = Date.now(),
 ): ShellTurn[] {
   const turns: ShellTurn[] = []
-  const waitingOn = pendingConfirm(messages)
+  const waitingOn = pendingConfirm(messages, now)
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i]
     // A reply with no message of yours before it (history that starts
@@ -353,9 +420,16 @@ export function buildTurns(
     const calls = reply?.tool_calls ?? []
     // The turn that ended on a pause keeps the plan the stream drew, so the
     // plan doesn't vanish the moment its question appears.
-    const kept = held !== null && isLast && reply !== null && held.paused !== null && held.ended?.message_id === reply.id ? held : null
+    // Once a card was answered the stored record has more than the stream drew.
+    const answered = calls.some((call) => call.answers)
+    const kept = held !== null && isLast && reply !== null && !answered && held.paused !== null && held.ended?.message_id === reply.id ? held : null
     const pause = kept ? streamPause(kept) : null
     const steps = kept ? streamSteps(kept) : calls.map((call) => stepFrom(call, isLast && waitingOn !== null))
+    // Its app questions as cards, while it is the last turn. A card shows
+    // its own call's receipt, so that call's chips aren't drawn twice.
+    const confirms = isLast ? confirmCards(calls, now) : []
+    const onCards = new Set(confirms.filter((card) => card.state !== 'open' && card.state !== 'expired').map((card) => card.token))
+    const open = confirms.filter((card) => card.state === 'open')
     turns.push({
       key: `m${m.id}`,
       said: orphan ? '' : (m.content ?? ''),
@@ -364,8 +438,10 @@ export function buildTurns(
       resumedNote: kept ? streamResumedNote(kept) : null,
       steps,
       pause,
-      announce: kept ? announceFor(steps, pause) : null,
+      confirms,
+      announce: open.length > 0 ? `Waiting on you: ${open.map((card) => card.question).join(' ')}` : kept ? announceFor(steps, pause) : null,
       receipts: calls.flatMap((call) => {
+        if (call.answers && onCards.has(call.answers)) return []
         const app = appFromTool(call.tool)
           ? call.tool.slice(4)
           : lookedAtFromTool(call.tool)

@@ -147,6 +147,8 @@ def test_post_message_runs_the_turn_and_persists_exchange(client: TestClient) ->
             "app_tools": None,
             "app_record": None,
             "app_confirm": None,
+            "app_confirms": None,
+            "answers": None,
         }
     ]
 

@@ -156,6 +156,37 @@ export function ConfirmationCard({
   )
 }
 
+/** A question that was answered or can't be any more: what came of it. A
+ * yes the app ran shows that call's receipt; one it didn't take says so. */
+export function AnsweredCard({
+  app,
+  question,
+  state,
+  detail,
+  receipts = [],
+}: {
+  app: string
+  question: string
+  state: 'done' | 'refused' | 'failed' | 'declined' | 'expired'
+  detail?: string
+  receipts?: ReceiptData[]
+}) {
+  const head = { done: 'Done', refused: 'Refused', failed: 'Not done', declined: 'Left as it is', expired: 'Expired' }[state]
+  const undo = receipts.find((receipt) => receipt.undoHow)?.undoHow
+  return (
+    <div className={`cd-confirm cd-confirm--${state}`} role="group" aria-label={`Confirmation: ${head}`}>
+      <b>
+        {head} · {app}
+      </b>
+      <p>{question}</p>
+      {receipts.length > 0 && <Receipts receipts={receipts} />}
+      {detail ? <p className="why">{detail}</p> : null}
+      {state === 'expired' ? <p className="why">It waited too long. Ask again to get a fresh question.</p> : null}
+      {undo ? <p className="why">Say “undo that” to take it back ({undo}).</p> : null}
+    </div>
+  )
+}
+
 /** Conductor needs a choice to continue. Never a yes/no about a write. */
 export function QuestionCard({
   question,

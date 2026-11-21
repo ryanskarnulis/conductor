@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getConversation, postMessage, postNote, type SendOptions } from '../../api/agent'
+import { answerConfirmation, getConversation, postMessage, postNote, type SendOptions } from '../../api/agent'
 import { ApiError } from '../../api/client'
 import type { ConversationDetail } from '../../types/agent'
 import { handoffFrom, type Handoff } from './handoff'
@@ -27,6 +27,9 @@ interface UseConversation {
   note: (content: string) => Promise<void>
   /** Read the thread again: a job's note (#90) was posted without a send. */
   refresh: () => Promise<void>
+  /** Answer one app question from its card: no model runs, and the turn's
+   * other questions stay open. The thread is read again either way. */
+  answerCard: (token: string, answer: 'yes' | 'no') => Promise<void>
 }
 
 /** Human-readable failure line for a `postMessage` run. */
@@ -171,5 +174,20 @@ export function useConversation(
     }
   }, [conversationId, onExchange])
 
-  return { detail, loading, error, pendingText, handoff, send, liveWords, note, refresh }
+  const answerCard = useCallback(
+    async (token: string, answer: 'yes' | 'no'): Promise<void> => {
+      if (conversationId === null) return
+      setErrorState(null)
+      try {
+        await answerConfirmation(conversationId, token, answer)
+      } catch (e: unknown) {
+        // Nothing is claimed: the card stays as the server has it.
+        setErrorState({ id: conversationId, value: sendErrorMessage(e) })
+      }
+      await refresh()
+    },
+    [conversationId, refresh],
+  )
+
+  return { detail, loading, error, pendingText, handoff, send, liveWords, note, refresh, answerCard }
 }
