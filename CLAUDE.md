@@ -229,7 +229,13 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   ask to an app without `confirms` pauses on code's question; `ask_user`, an
   app's `confirm_required` and an app's own question (`app_question`, #168:
   the answer goes back to the step that asked) pause too, and the next turn
-  resumes the same plan. The planner prompt and the ten step kinds stay byte-stable: plan-level
+  resumes the same plan. **A named group goes to the app in the person's
+  words** (#248): State's recent entities resolve pointers ("it", "those"),
+  never a group ("the test tasks"), since they hold only what was touched
+  lately. A one-ask plan that lists State's titles or numbers the person
+  didn't name (two or more, no pointer in the words) gets its request put
+  back to their words by code (`plan.in_their_words`); a longer plan gets
+  one repair (`plan.names_for_a_group`). The planner prompt and the ten step kinds stay byte-stable: plan-level
   evals (`tests/test_plan_evals.py`, `CONDUCTOR_PLAN_EVALS=1`) gate any change
   to them, to the compiler, or to a manifest.
 - **`look(app)` reads a glance, never asks an agent** (#73). An app's

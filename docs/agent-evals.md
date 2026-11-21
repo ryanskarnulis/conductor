@@ -2482,3 +2482,45 @@ and BI2 4/5, the rest 5/5.
 No real plan has needed more than three asks to one app yet, and none has
 come near the 12-step ceiling (max 6 steps in the `long` group); that half of
 #218 waits on the deployed ledger.
+
+
+## A named group goes in the person's words (#248, 2026-11-20)
+
+"delete the test tasks" was compiled as an ask listing the "Test…" titles in
+State's recent entities (or their numbers, "mow the lawn" among them). Code now
+puts a one-ask plan's request back to the person's words when it lists two or
+more State entities they didn't name (`plan.in_their_words`); a longer plan
+gets one repair (`plan.names_for_a_group`). The planner prompt is unchanged.
+
+Three cases joined `ref` (n=20 each), before and after on the same day:
+
+| case | before | after |
+|---|---|---|
+| group-delete-test-tasks (the deployed turn's State) | 8/20 | 20/20 |
+| group-finish-garden-tasks | 14–20/20 | 20/20 |
+| group-named-ones (control: the two they named) | 16–19/20 | 20/20 |
+
+Plan-level evals (n=20, gemma-4-12b, 2217 s), score and first try:
+
+| group | floor | this run | before (#218) |
+|---|---|---|---|
+| golden | 0.8 | 400, 400 /420 | 400, 400 |
+| cross | 0.8 | 154, 108 /160 | 155, 104 |
+| ref | 0.85 | 135, 135 /140 | 79, 79 /80 |
+| control | 0.8 | 300, 211 /300 | 300, 211 |
+| memory | 0.8 | 312, 300 /320 | 310, 300 |
+| knowledge | 0.65 | 60, 60 /60 | 60, 60 |
+| hard | 0.5 | 19, 19 /20 | 20, 20 |
+| self | 0.55 | 99, 97 /100 | 99, 97 |
+| mixed | 0.85 | 198, 178 /200 | 200, 179 |
+| long | 0.7 | 160, 152 /160 | 160, 155 |
+| stale | 0.8 | 100, 100 /100 | 100, 100 |
+
+Every group is over its floor. `ref`'s five misses are all `s7-dennis`
+(15/20; 14–17/20 on main the same day, so not this change).
+
+Session evals (full run, 1090 s, infra 0): 85 passed; gate scenario T1 read
+2/5 (turn 2 planned as an ask to tasks instead of a recall). It has no State
+entities for this check to read; rerun alone it was 5/5 and 4/5 on this
+branch and 4/5 on main. No session scenario covers a named group yet: the
+fake tasks agent has no several-task trash.

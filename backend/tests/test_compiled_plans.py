@@ -1953,6 +1953,94 @@ def test_a_recall_for_one_not_had_yet_goes_back_for_the_ask(
         assert 'like "the other' in found[0]
 
 
+_TEST_TASKS = [
+    ("404", "Test the fence"),
+    ("419", "mow the lawn"),
+    ("409", "Test the tools"),
+    ("408", "Test the os"),
+    ("407", "Test the mower"),
+]
+
+
+@pytest.mark.parametrize(
+    ("words", "asked", "sent_back"),
+    [
+        # #248, the deployed turn and what the 12B wrote for it in the evals:
+        # a group named, State's few entities listed by title, quoted, or by number.
+        ("delete the test tasks", "delete the tasks: Test the fence, Test the mower, Test the os, and Test the tools", True),
+        ("delete the test tasks", "delete the tasks: Test the fence, mow the lawn, Test the tools, Test the os, and Test the mower", True),
+        ("delete the test tasks", "delete the tasks 'Test the fence', 'Test the mower' and 'Test the os'", True),
+        ("delete the test tasks", "delete tasks 404, 407, 408, 409, and 419", True),
+        ("Delete the test tasks.", "delete Test the mower and Test the os", True),
+        # Their own words, the ones they named, a pointer at State, or one thing.
+        ("delete the test tasks", "delete the test tasks", False),
+        ("delete the mower and the tools tasks", "delete Test the mower and Test the tools", False),
+        ("delete the mower and the tools tasks", "delete task 407 and task 409", False),
+        ("delete tasks 407 and 408", "delete tasks 407 and 408", False),
+        ("delete the mower task", "delete Test the mower and Test the os", False),
+        ("delete those", "delete Test the mower and Test the os", False),
+        ("delete both of them", "delete tasks 407 and 408", False),
+        ("delete it", "delete Test the mower", False),
+    ],
+)  # fmt: skip
+def test_state_entities_listed_for_a_named_group_go_back_to_the_persons_words(
+    words: str, asked: str, sent_back: bool
+) -> None:
+    plan = plans.load(steps(ask("tasks", asked, destructive=True)))
+    found = plans.names_for_a_group(plan, words, _TEST_TASKS)
+    assert bool(found) is sent_back
+    restored = plans.in_their_words(plan, words, _TEST_TASKS)
+    assert isinstance(restored, plans.StepPlan)
+    step = restored.steps[0]
+    assert isinstance(step, plans.Ask)
+    # One ask: code puts their words back, and the mark it carried stays.
+    assert step.request == (words if sent_back else asked)
+    assert step.destructive
+    if found:
+        assert "the person named a group" in found[0]
+        assert "add no titles or numbers from State" in found[0]
+
+
+def test_a_longer_plan_listing_a_group_is_sent_back_not_rewritten() -> None:
+    body = steps(
+        ask("tasks", "delete Test the mower and Test the os", destructive=True),
+        ask("music", "download the new Caribou album"),
+    )
+    plan, words = plans.load(body), "delete the test tasks and download the new Caribou album"
+    assert plans.in_their_words(plan, words, _TEST_TASKS) == plan
+    assert plans.names_for_a_group(plan, words, _TEST_TASKS)
+
+
+def test_the_compiler_restores_the_persons_words_without_a_second_call(fleet: Fleet) -> None:
+    state = (
+        "[State at the start of this turn — written by conductor, not the person]\n"
+        "Recent entities (newest first, as of then):\n"
+        + "\n".join(f"- tasks task {ref}: {title}" for ref, title in _TEST_TASKS)
+        + "\n[End of state]"
+    )
+    body = {
+        "about": "an app",
+        **steps(ask("tasks", "delete tasks 404, 407, 408, 409, and 419", True)),
+    }
+    calls: list[Any] = []
+
+    def chat(messages: list[dict[str, Any]], _max: int, _fmt: dict[str, Any]) -> ChatResult:
+        calls.append(messages)
+        return plan_turn(body)
+
+    compiled = compiler.compile_turn(
+        chat,
+        system_prompt="",
+        context=state,
+        words="delete the test tasks",
+        fleet=fleet,
+        checks=plans.Checks(fleet=fleet, context=state),
+    )
+    assert len(calls) == 1 and not compiled.repaired
+    assert isinstance(compiled.plan, plans.StepPlan)
+    assert plans.step_text(compiled.plan.steps[0]) == "delete the test tasks"
+
+
 def test_an_amend_or_cancel_reaches_a_plan_paused_on_an_apps_question(
     run_with: Any, world: World, db_session: Session
 ) -> None:

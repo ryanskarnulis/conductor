@@ -1119,6 +1119,84 @@ def recalls_unnamed(plan: Plan, words: str) -> list[str]:
     return []
 
 
+# Words that point at what State lists ("delete those", "both of them"): then
+# its names are what the person meant.
+_POINTS_AT_STATE = re.compile(r"\b(?:those|these|them|both)\b", re.IGNORECASE)
+_TITLE_FILLER = frozenset({"the", "a", "an", "of", "to", "and", "my", "for", "in", "on"})
+
+
+def _plain(text: str) -> list[str]:
+    """Lowercase words and numbers, quotes and punctuation gone."""
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _added(request: str, words: str, listed: Collection[tuple[str, str]]) -> list[str]:
+    """State's entities (``(id, title)``) a request names, by title or by
+    number, that the person didn't: they said no word of the title that is
+    its alone among State's titles ("the mower and the tools tasks" names
+    two; "the test tasks" names none of the four "Test…" ones), nor its number."""
+    said = set(_plain(words))
+    asked = f" {' '.join(_plain(request))} "
+    counts: dict[str, int] = {}
+    for _, title in set(listed):
+        for word in set(_plain(title)) - _TITLE_FILLER:
+            counts[word] = counts.get(word, 0) + 1
+    added: list[str] = []
+    for ref, title in sorted(set(listed), key=lambda entity: entity[1]):
+        flat = " ".join(_plain(title))
+        by_title = bool(flat) and f" {flat} " in asked
+        by_number = ref.isdigit() and f" {ref} " in asked and ref not in said
+        if not by_title and not by_number:
+            continue
+        own = {word for word in set(_plain(title)) - _TITLE_FILLER if counts[word] == 1}
+        if not own & said:
+            added.append(title)
+    return added
+
+
+def names_for_a_group(plan: Plan, words: str, listed: Collection[tuple[str, str]]) -> list[str]:
+    """An ask that lists State's entities where the person named a group (#248:
+    "delete the test tasks" compiled as "delete the tasks: Test the fence,
+    Test the mower, Test the os, and Test the tools", or as "delete tasks
+    404, 407, 408, 409, and 419", the last one "mow the lawn"). Recent
+    entities are what this conversation touched, some since trashed, never
+    the whole group: the two "Test…" tasks State didn't hold were never asked
+    about. Only the app knows the members, so the request goes in the
+    person's words. Words that point at State ("delete those") keep its
+    names, and so does one thing ("delete it"). ``listed`` is each entity
+    State lists, ``(id, title)`` (``options.entities``)."""
+    if not isinstance(plan, StepPlan) or _POINTS_AT_STATE.search(words):
+        return []
+    for step in plan.steps:
+        if not isinstance(step, Ask) or step.app == MEMORY_APP:
+            continue
+        added = _added(step.request, words, listed)
+        if len(added) < 2:
+            continue
+        return [
+            f"{step.id} lists "
+            + ", ".join(f'"{title}"' for title in added)
+            + " from State, but the person named a group, not those: State holds only what "
+            "this conversation touched lately, some of it already gone, and only "
+            f"{step.app} knows everything in the group. Write {step.id}'s request in the "
+            "person's own words and add no titles or numbers from State"
+        ]
+    return []
+
+
+def in_their_words(plan: Plan, words: str, listed: Collection[tuple[str, str]]) -> Plan:
+    """A plan that is one ask, listing State's entities for a group the person
+    named (:func:`names_for_a_group`), with its request put back to their
+    words (#248): the words are the whole request, so code restores them
+    and no model is asked twice. Any other plan comes back as it is."""
+    if not isinstance(plan, StepPlan) or len(plan.steps) != 1:
+        return plan
+    if not names_for_a_group(plan, words, listed):
+        return plan
+    step = plan.steps[0]
+    return plan.model_copy(update={"steps": [step.model_copy(update={"request": words.strip()})]})
+
+
 def looked_up_fact(plan: Plan, words: str, context: str) -> list[str]:
     """A plan that first looks up a saved fact State already lists, to feed
     another app's ask ("add a task for my music sorting day": recall or ask
