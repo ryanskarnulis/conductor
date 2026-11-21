@@ -47,6 +47,8 @@ class M:
     # it from their words, so a request that copies the prompt's example
     # still passes when the fact saved is theirs.
     saves: tuple[str, str] | None = None
+    # Words the step must not hold (#248): titles from State the person never said.
+    without: tuple[str, ...] = ()
 
     def matches(self, step: BaseModel) -> bool:
         kinds = (self.do,) if isinstance(self.do, str) else self.do
@@ -56,6 +58,8 @@ class M:
             return False
         text = plans.step_text(step).lower()
         if any(word not in text for word in self.words):
+            return False
+        if any(word in text for word in self.without):
             return False
         has_ref = "{s" in text
         if self.ref is not None and has_ref != self.ref:
@@ -373,6 +377,19 @@ _S15_TURN2 = "\n".join(
     ]
 )
 
+# "delete the test tasks" (#248), as the deployed turn saw State: four "Test…"
+# tasks listed, one of them already trashed, two more that State never held.
+_TEST_TASKS = state(
+    now="voice",
+    recent="tasks task 404: Test the fence\n"
+    "- tasks task 419: mow the lawn\n"
+    "- chess game f8ee33c4cf5842fa8cfaf03677733acd: Game in progress\n"
+    '- music download_job 1209: "The Beatles - Abbey Road" (outside text)\n'
+    "- tasks task 409: Test the tools\n"
+    "- tasks task 408: Test the os\n"
+    "- tasks task 407: Test the mower",
+)
+
 CASES: tuple[Case, ...] = (
     # --- the routing goldens, as plans -------------------------------------------
     Case("tasks-due", "what's due today?", (one(READ_TASKS),), "golden"),
@@ -542,6 +559,49 @@ CASES: tuple[Case, ...] = (
             matches='tasks: "Dentist appointment" (pcc:task:44, due Wed); '
             '"Call the dentist about the bill" (pcc:task:61, due Thu)'
         ),
+    ),
+    # A group the person names ("the test tasks") goes to the app in their
+    # words (#248): State's recent entities are a few of them, some already
+    # gone, and only the app knows the rest. The trace's own State, 2026-11-20.
+    Case(
+        "group-delete-test-tasks",
+        "delete the test tasks",
+        (
+            one(
+                M(
+                    "ask",
+                    "tasks",
+                    ("test",),
+                    destructive=True,
+                    without=("fence", "mower", "the os", "tools", "40", "419"),
+                )
+            ),
+        ),
+        "ref",
+        _TEST_TASKS,
+    ),
+    Case(
+        "group-finish-garden-tasks",
+        "mark the garden tasks done",
+        (one(M("ask", "tasks", ("garden",), without=("beds", "hose", "seeds"))),),
+        "ref",
+        state(
+            recent="tasks task 31: Water the garden beds\n"
+            "- tasks task 30: Fix the garden hose\n"
+            "- tasks task 12: Call the vet\n"
+            "- tasks task 29: Order garden seeds"
+        ),
+    ),
+    # The ones they do name, and a pointer at State, still reach the app by name.
+    Case(
+        "group-named-ones",
+        "delete the mower and the tools tasks",
+        (
+            one(M("ask", "tasks", ("mower", "tools"), destructive=True, without=("the os",))),
+            one(M("ask", "tasks", ("407", "409"), destructive=True, without=("408", "404", "419"))),
+        ),
+        "ref",
+        _TEST_TASKS,
     ),
     # --- control: confirm, cancel, amend, undo -----------------------------------------
     Case(

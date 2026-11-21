@@ -22,7 +22,7 @@ from typing import Any
 
 import structlog
 
-from app.ai import facts, turn_context
+from app.ai import facts, options, turn_context
 from app.ai import plan as plans
 from app.ai.provider import ChatResult
 from app.fleet.manifests import Fleet
@@ -207,6 +207,11 @@ def _problems(plan: plans.Plan, words: str, checks: plans.Checks) -> list[str]:
     )
 
 
+def _listed(checks: plans.Checks) -> list[tuple[str, str]]:
+    """Each entity State lists, as ``(id, title)``."""
+    return [(entity.ref, entity.title) for entity in options.entities(checks.context)]
+
+
 def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Checks) -> list[str]:
     """Repairs that read the person's words against State (#134): a
     remembered topic nothing saved is about, a lookup of a fact State lists,
@@ -217,7 +222,9 @@ def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Check
     cancel, amend or undo for "forget that" with nothing to act on (#183);
     a spoken correction ("no, Saturday") filed as a no, a cancel or chat
     instead of an amend (#77);
-    and a recall feeding an ask for "their other album" (#168).
+    a recall feeding an ask for "their other album" (#168);
+    and State's entities listed where the person named a group (#248; a
+    plan that is one ask never gets here: ``plans.in_their_words``).
     The first plan gets them once; a repaired plan that keeps its choice
     still runs, since each of these plans can run and a turn that answers
     beats code's "couldn't put that together"."""
@@ -231,6 +238,7 @@ def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Check
         + plans.corrects(plan, words, checks)
         + plans.forgets_by_control(plan, words, checks)
         + plans.recalls_unnamed(plan, words)
+        + plans.names_for_a_group(plan, words, _listed(checks))
     )
 
 
@@ -274,6 +282,7 @@ def compile_turn(
             found = [f"not a plan: {str(exc).splitlines()[0][:200]}"]
             plan = None
         if plan is not None:
+            plan = plans.in_their_words(plan, words, _listed(checks))
             found = _problems(plan, words, checks)
             if attempt == 0:
                 found += _nudges(plan, compiled.about, words, checks)
