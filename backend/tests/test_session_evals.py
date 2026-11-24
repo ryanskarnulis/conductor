@@ -340,8 +340,13 @@ def test_a_t1_answer_from_the_tasks_note_passes_and_wood_fails(scripted: _Script
     script[2:] = [asks, text_turn("You went with the steel rack, not wood: it holds the paint.")]
     sample = scripted.run(TIMELINE_RECALL, script)
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    # A marked read now passes the app's own answer through (#241), so the
+    # narrator never speaks for it; an unmarked ask keeps the narrator's words.
     script = TIMELINE_RECALL.script(World())
-    script[2:] = [asks, text_turn("You went with wood, not the steel rack.")]
+    script[2:] = [
+        plan(ask("tasks", "what did we decide about the garage shelves?")),
+        text_turn("You went with wood, not the steel rack."),
+    ]
     _fails(scripted.run(TIMELINE_RECALL, script), "made up a decision")
 
 
