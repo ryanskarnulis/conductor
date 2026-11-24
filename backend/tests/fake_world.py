@@ -48,6 +48,7 @@ from typing import Any
 from app import clock
 from app.ai.facts import CONTEXT_LEAD
 from app.fleet.delegate import (
+    AnswerRead,
     ConfirmRequired,
     DelegateConfirmRefused,
     EntityRef,
@@ -389,6 +390,12 @@ class World:
         self.songs: dict[int, Song] = {}
         self.catalog: list[Album] = []
         self.jobs: dict[int, Job] = {}
+        # Whether music answers its reads in words (delegate v1.3, #241). Off:
+        # the real music app hasn't taken v1.3, so its reads are narrated.
+        self.music_answers = False
+        # An app that breaks the contract: it sends this as its ``answer`` on
+        # every reply, a write's too. Conductor must never pass it on there.
+        self.rogue_answer: str | None = None
         self.chess = ChessGame(
             result="won",
             summary="You won your last game as white in 34 moves, with the Italian.",
@@ -661,6 +668,10 @@ class AppReply:
     # The question ``needs_input`` carries when it isn't the text's last one
     # (music's fixed candidates question, music#110).
     question: str | None = None
+    # A read's answer in the app's own words (delegate v1.3, #241), as PCC's
+    # narrator writes it: an opening that stands alone, then the details.
+    # Sent only for a call whose record is all look-ups.
+    answer: AnswerRead | None = None
 
 
 def _tool(tool_name: str, **arguments: Any) -> ToolCallRead:
@@ -758,6 +769,17 @@ def _needs_input(reply: AppReply, written: list[Receipt]) -> NeedsInputRead | No
     return NeedsInputRead(question=question, candidates=candidates)
 
 
+def _answer(reply: AppReply, written: list[Receipt]) -> AnswerRead | None:
+    """The fake apps' ``answer`` (#241), under the contract's rule: a
+    completed call whose record is all look-ups, and at least one."""
+    record = _record(reply, written)
+    if reply.stop_reason != "completed" or reply.asks or reply.confirm is not None:
+        return None
+    if not record or any(entry.outcome != "looked_up" for entry in record):
+        return None
+    return reply.answer
+
+
 def _record(reply: AppReply, written: list[Receipt]) -> list[RecordEntry]:
     if reply.confirm is not None:
         return [RecordEntry(tool=reply.confirm.tool, outcome="not_run", reason="needs a yes")]
@@ -848,6 +870,8 @@ class TasksApp:
             for task in world.live_tasks()
             if any(_token_score(k, f"{task.title} {task.project} {task.notes}") for k in terms)
         ]
+        if re.search(r"\b(report|summary|overview|rundown)\b", text) or "all my tasks" in text:
+            return self._report()
         if hits:
             found, what = hits, "matching"
         elif "overdue" in text or "late" in text:
@@ -869,10 +893,47 @@ class TasksApp:
             due = f", due {task.due.isoformat()}" if task.due else ""
             notes = f" — note: {task.notes}" if task.notes else ""
             lines.append(f"- {task.title} (#{task.id}, {task.project}{due}){notes}")
+        count = f"{len(found)} task{'s' if len(found) != 1 else ''}"
+        opening = f"You have {count} {what}." if what != "matching" else f"{count} found."
+        listed = [
+            f"- {task.title} ({task.project}{f', due {task.due.isoformat()}' if task.due else ''})"
+            + (f": {task.notes}" if task.notes else "")
+            for task in found
+        ]
         return AppReply(
             "\n".join(lines),
             [_tool("list_tasks", filter=what)],
             found=[_looked_up("list_tasks", [_task_ref(task) for task in found])],
+            answer=AnswerRead(text="\n".join([opening, "", *listed]), spoken=opening),
+        )
+
+    def _report(self) -> AppReply:
+        """Every open task, grouped by project: PCC's answer to "a report of
+        my tasks" (#240), with the record's refs capped at 20 as PCC's are."""
+        world = self.world
+        world.read("tasks", "report")
+        live = world.live_tasks()
+        projects = [name for name, trashed in world.projects.items() if not trashed]
+        overdue = len(world.overdue())
+        opening = (
+            f"You have {len(live)} open tasks across {len(projects)} projects. "
+            f"{overdue} {'is' if overdue == 1 else 'are'} overdue."
+        )
+        blocks = []
+        for name in projects:
+            mine = [task for task in live if task.project == name]
+            rows = [
+                f"- {task.title}{f' (due {task.due.isoformat()})' if task.due else ''}"
+                for task in mine
+            ]
+            blocks.append("\n".join([f"**{name}** ({len(mine)})", *rows]))
+        entry = _looked_up("list_tasks", [_task_ref(task) for task in live][:20])
+        entry.count = len(live)
+        return AppReply(
+            f"{len(live)} open tasks.",
+            [_tool("list_tasks", exclude_done=True)],
+            found=[entry],
+            answer=AnswerRead(text="\n\n".join([opening, *blocks]), spoken=opening),
         )
 
     # writes
@@ -1175,10 +1236,16 @@ class MusicApp:
         self.world.read("music", "unsorted")
         songs = self.world.unsorted()
         names = "; ".join(f"{s.title} by {s.artist}" for s in songs)
+        opening = f"{len(songs)} songs still need sorting."
+        rows = [f"- {s.title} — {s.artist}" for s in songs]
         return AppReply(
             f"{len(songs)} songs still need sorting: {names}.",
             [_tool("list_unsorted")],
             found=[_looked_up("list_unsorted", [_song_ref(song) for song in songs])],
+            # Song titles are file tags: outside text, and music says so.
+            answer=AnswerRead(text="\n".join([opening, "", *rows]), spoken=opening, untrusted=True)
+            if self.world.music_answers and songs
+            else None,
         )
 
     def _resolve_song(self, message: str) -> list[Song]:
@@ -1512,6 +1579,9 @@ class FakeDelegateClient:
                 confirm_required=reply.confirm,
                 record=_record(reply, self._world.receipts[before:]),
                 needs_input=_needs_input(reply, self._world.receipts[before:]),
+                answer=AnswerRead(text=self._world.rogue_answer, untrusted=False)
+                if self._world.rogue_answer
+                else _answer(reply, self._world.receipts[before:]),
             ),
         )
 

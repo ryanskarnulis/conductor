@@ -95,6 +95,10 @@ class ToolCallRead(BaseModel):
     app_confirms: list[dict[str, Any]] | None = None
     # For a ``confirm`` call: the token of the one question it answered.
     answers: str | None = None
+    # A read's answer in the app's own words (#241): ``{text, spoken,
+    # untrusted, read, passed}``. The page shows it under the app's name when
+    # ``passed``; never sent to a model.
+    app_answer: dict[str, Any] | None = None
 
 
 CardKind = Literal["app_confirm", "gate", "proposal", "pick"]
@@ -156,6 +160,9 @@ class MessageRead(BaseModel):
     incognito: bool = False
     # A side thread's result note (#139): the thread it came from.
     thread: NoteThreadRead | None = None
+    # What a voice surface says in place of ``content`` when the reply passed
+    # an app's answer on (#241, ``relay.spoken``); ``None`` otherwise.
+    spoken: str | None = None
 
 
 class ConversationDetail(ConversationRead):

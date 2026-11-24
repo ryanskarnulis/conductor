@@ -67,6 +67,8 @@ def tool_call(stored: Mapping[str, Any]) -> dict[str, Any]:
         **stored,
         "arguments": arguments(stored.get("arguments") or {}),
         "result": None if stored.get("result") is None else PLACEHOLDER,
+        # An app's answer to a read (#241) is words: none of it is kept.
+        "app_answer": None,
     }
 
 

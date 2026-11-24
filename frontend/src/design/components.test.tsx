@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  AppAnswer,
   ConfirmationCard,
   FinishedNote,
   JobCard,
@@ -100,6 +101,18 @@ describe('design system components', () => {
     render(<Receipts receipts={[{ verb: 'Found', app: 'PCC', entity: '<img src=x onerror=alert(1)>' }]} />)
     expect(screen.getByText(/<img src=x onerror=alert\(1\)>/)).toBeInTheDocument()
     expect(document.querySelector('img')).toBeNull()
+  })
+
+  it('names an app’s answer as the app’s words and marks outside text', () => {
+    const { rerender } = render(<AppAnswer app="tasks">You have 39 open tasks.</AppAnswer>)
+    expect(screen.getByText(/tasks · its own words/)).toBeInTheDocument()
+    expect(screen.queryByText(/includes outside text/)).toBeNull()
+    rerender(
+      <AppAnswer app="music" outside>
+        Honey
+      </AppAnswer>,
+    )
+    expect(screen.getByText(/includes outside text/)).toBeInTheDocument()
   })
 
   it('answers a confirmation by its named action or Not now', () => {

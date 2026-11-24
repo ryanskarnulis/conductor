@@ -66,6 +66,9 @@ export interface ShellTurn {
   /** One line for a screen reader: what the plan just did or waits on. */
   announce: string | null
   reply: string | null
+  /** Each app's own answer to a read this turn passed on (#241): shown under
+   * the app's name, after conductor's reply. */
+  answers?: AnswerView[]
   stopReason: AgentStopReason | null
   /** True while the turn is the optimistic, in-flight one. */
   live: boolean
@@ -82,6 +85,37 @@ export interface ShellTurn {
   /** The reply is a side thread's result (#139), posted when it closed: the
    * thread it came from. Like a job's note, it answers nothing. */
   threadNote?: { id: number; title: string | null } | null
+}
+
+/** An app's answer to a read, passed on in its own words (#241). */
+export interface AnswerView {
+  app: string
+  /** The app as the screen names it (`tasks` is PCC). */
+  name: string
+  text: string
+  /** It may quote outside text (a web title, a file's tags). */
+  untrusted: boolean
+}
+
+/** The answers a turn's calls passed on, in call order. */
+export function answersFrom(calls: ToolCallRecord[]): AnswerView[] {
+  return calls.flatMap((call) => {
+    const answer = call.app_answer
+    if (!answer?.passed || !answer.text || !call.tool.startsWith('ask_')) return []
+    const app = call.tool.slice(4)
+    return [{ app, name: appLabel(app), text: answer.text, untrusted: answer.untrusted === true }]
+  })
+}
+
+/** A reply as plain text with its passed answers under it: what an incognito
+ * turn shows from the live exchange, since nothing of it is stored. */
+export function shownText(content: string | null, calls: ToolCallRecord[] | null): string {
+  const parts = [content ?? '']
+  for (const answer of answersFrom(calls ?? [])) {
+    const name = answer.name.charAt(0).toUpperCase() + answer.name.slice(1)
+    parts.push(`${name} says${answer.untrusted ? ' (includes outside text)' : ''}:\n\n${answer.text}`)
+  }
+  return parts.filter((part) => part !== '').join('\n\n')
 }
 
 export interface PendingConfirmView {
@@ -449,6 +483,7 @@ export function buildTurns(
         return (call.app_record ?? []).map((entry) => receiptFrom(entry, app)).filter((r): r is NonNullable<typeof r> => r !== null)
       }),
       reply: reply?.content ?? null,
+      answers: answersFrom(calls),
       stopReason: reply && isNote(reply) ? null : ((reply?.stop_reason as AgentStopReason | null | undefined) ?? null),
       live: false,
       jobNote: reply?.stop_reason === JOB_NOTE,

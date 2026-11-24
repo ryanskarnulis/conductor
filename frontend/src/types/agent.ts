@@ -29,6 +29,20 @@ export interface ToolCallRecord {
   app_confirms?: AppConfirm[] | null
   /** For a `confirm` call: the token of the one question it answered. */
   answers?: string | null
+  /** A read's answer in the app's own words (#241). Shown under the app's
+   * name when `passed`; render `text` as text, never as markup. */
+  app_answer?: AppAnswer | null
+}
+
+/** An app's answer to a read (delegate v1.3, backend `relay`). `passed`: it
+ * went to the person as the app's words. `untrusted`: it may quote outside
+ * text (a web title, a file's tags). */
+export interface AppAnswer {
+  text: string
+  spoken?: string | null
+  untrusted?: boolean
+  read?: boolean
+  passed?: boolean
 }
 
 /** One entity a tool call changed or found (delegate v1.1 `touched`). The
@@ -137,6 +151,9 @@ export interface AgentMessage {
   incognito?: boolean
   /** A side thread's result note (#139): the thread it came from. */
   thread?: { id: number; title: string | null } | null
+  /** What a voice surface says in place of `content` when the reply passed
+   * an app's answer on (#241): its short form, never the whole answer. */
+  spoken?: string | null
 }
 
 /** One thing a side thread carries in (#139), as data: an entity by its

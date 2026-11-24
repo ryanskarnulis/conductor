@@ -197,7 +197,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   whose record lists `done` work is reported as partly happened, by name
   (untrusted titles by kind and id). No record means unknown: never retry blind.
 - **The planner decides, the narrator speaks** (#65). A completed run's reply
-  is a tool-less call on a typed receipt of what ran (`app/ai/narrator.py`);
+  is a tool-less call on a typed receipt of what ran (`app/ai/narrator.py`),
+  except a read's answer, which passes through (#241, next rule);
   the persona (vendored Glitch, #256) lives only in the speaking prompts, and
   never overrides a fact. Code guarantees the facts (titles, counts,
   undo, a plan's unrun steps and why, quoted outside text, two sentences on
@@ -208,6 +209,29 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   its words, #168). A v1.2 app's question is its typed `needs_input` alone
   (#202); for a v1.1 app, one that ran nothing may ask without a "?" ("Please
   tell me the artist…", #189), and a few request phrasings read it.
+- **A read's answer passes through in the app's own words** (#241,
+  `app/ai/relay.py`, delegate v1.3's `answer {text, spoken, untrusted}`).
+  It passes only when the step was a read (`plans.marked_read`: sent
+  `mode: "read"` to a v1.2 app, `plan.reads_only` for a v1.1 one), the call
+  came back, its record is all `looked_up` (at least one; no `done`,
+  `refused` or `not_run`) and the app isn't asking. So no write is ever
+  claimed from an app's words; asked for a change, the narrator speaks from
+  the receipt whatever the app sent. Per step: the narrator speaks for the
+  plan's other steps and sees a passed read only as "this app answered"
+  (`relay.stand_in`: no record, note, titles or count); a plan that is all
+  passed reads calls no narrator. The answer lives on the call's record
+  (`ToolCallRecord.app_answer`, `passed`), **never in a prompt**: the stored
+  reply is conductor's own words plus code's "Tasks answered.", which is
+  what recall, the state block and the self-report quote. Nothing in it
+  fills a `{sN}` or is followed. The page shows it under the app's name,
+  links and images off, marked "includes outside text" when the app says
+  `untrusted`, its record has an untrusted ref, or it names a title this
+  window knows as outside text. Voice says `spoken` (`MessageRead.spoken`):
+  "Tasks says: …", two sentences when one app alone answered, one each
+  beside conductor's own words or another app's, at most two apps; the
+  whole answer is on the page. An incognito turn stores none of it. A plan
+  that ends on a question, a handoff or a stop passes nothing. Tasks sends
+  `answer`; music doesn't yet, so its reads are still narrated.
 - **Delegate v1.2** (#202, decided in #145): only an app whose `agent:`
   block says `context: true` gets the v1.2 fields; a v1.1 app keeps every
   guess. Its ask sends the words as written, plus `context`: the `{sN}`

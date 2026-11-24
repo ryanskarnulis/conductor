@@ -289,6 +289,27 @@ def _lenient_needs_input(value: Any, handler: ValidatorFunctionWrapHandler) -> A
 NeedsInput = Annotated[NeedsInputRead | None, WrapValidator(_lenient_needs_input)]
 
 
+class AnswerRead(BaseModel):
+    """A read's answer in the app's own words (delegate-api v1.3)."""
+
+    text: str
+    spoken: str | None = None
+    untrusted: bool = False
+
+
+def _lenient_answer(value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+    """An ``answer`` conductor can't read is no answer: the reply is narrated
+    from the record, as for an app that sent none."""
+    try:
+        return handler(value)
+    except ValidationError:
+        logger.warning("delegate_answer_unreadable")
+        return None
+
+
+Answer = Annotated[AnswerRead | None, WrapValidator(_lenient_answer)]
+
+
 class ConfirmRequired(BaseModel):
     """A gated call the app armed instead of running (delegate-api
     "Confirmation"): its token, and the question and preview its code built."""
@@ -349,6 +370,9 @@ class MessageRead(BaseModel):
     # v1.2 (#202): the app's own question when it did nothing,
     # ``{question, candidates}``; read only from an app that declares v1.2.
     needs_input: NeedsInput = None
+    # v1.3 (#241): a read's answer for the person, ``{text, spoken,
+    # untrusted}``. Shown or said as the app's words; never model input.
+    answer: Answer = None
 
     def armed(self) -> list[ConfirmRequired]:
         """Every confirmation this message armed, in call order: the list

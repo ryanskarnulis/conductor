@@ -109,6 +109,7 @@ from app.ai import (
     memory,
     narrator,
     options,
+    relay,
     run_record,
     speaker,
     think,
@@ -1104,13 +1105,26 @@ class Interpreter:
                     )
         return state.saved
 
-    @staticmethod
     def _keep(
-        state: _Run, values: dict[str, dataflow.Value], step: plans.Step, record: ToolCallRecord
+        self,
+        state: _Run,
+        values: dict[str, dataflow.Value],
+        step: plans.Step,
+        record: ToolCallRecord,
     ) -> None:
         """What a step gives later steps as ``{sN}``, from its receipt; and
-        its record, for a think's inputs (#78)."""
+        its record, for a think's inputs (#78). An app's answer (#241) is
+        stamped with whether the step was a read, and marked when it names
+        outside text; neither is ever a value for ``{sN}``."""
         state.found[step.id] = record
+        if record.app_answer is not None:
+            # A look that fell back to asking (#73) only ever asks a plain question.
+            record.app_answer["read"] = (
+                self._reads(step) if isinstance(step, plans.Ask) else isinstance(step, plans.Look)
+            )
+            relay.mark_outside(
+                record, (e.title for e in self._touched(state) if e.untrusted and e.title)
+            )
         value = (
             dataflow.from_recall(record.app_record)
             if memory.is_recall(record.tool)

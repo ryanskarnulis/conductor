@@ -324,6 +324,20 @@ export function Narration({ children, label = 'Conductor' }: { children: ReactNo
   )
 }
 
+/** An app's own answer to a read, passed on as its words (#241): named as
+ * the app's, and marked when it may quote outside text. */
+export function AppAnswer({ app, outside = false, children }: { app: string; outside?: boolean; children: ReactNode }) {
+  return (
+    <div className="cd-answer" data-app={app}>
+      <span className="cd-label">
+        {app} · its own words
+        {outside ? <span className="cd-answer-outside"> · includes outside text</span> : null}
+      </span>
+      <div className="cd-narration-text cd-answer-text">{children}</div>
+    </div>
+  )
+}
+
 /** The ledger lines the screen is drawn from; the newest is current. */
 export function Ledger({ lines, defaultOpen = false }: { lines: { time: string; event: string }[]; defaultOpen?: boolean }) {
   return (

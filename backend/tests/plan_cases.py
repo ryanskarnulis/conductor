@@ -49,6 +49,9 @@ class M:
     saves: tuple[str, str] | None = None
     # Words the step must not hold (#248): titles from State the person never said.
     without: tuple[str, ...] = ()
+    # The ask's read mark (#204): only a step marked read passes an app's
+    # answer on (#241).
+    read: bool | None = None
 
     def matches(self, step: BaseModel) -> bool:
         kinds = (self.do,) if isinstance(self.do, str) else self.do
@@ -67,6 +70,8 @@ class M:
         if self.ref_or_words and not (has_ref or any(w in text for w in self.ref_or_words)):
             return False
         if self.destructive is not None and getattr(step, "destructive", None) != self.destructive:
+            return False
+        if self.read is not None and getattr(step, "read", None) != self.read:
             return False
         if self.answer is not None and getattr(step, "answer", None) != self.answer:
             return False
@@ -383,6 +388,15 @@ CASES: tuple[Case, ...] = (
         "golden",
     ),
     Case("tasks-week", "what am I working on this week?", (one(READ_TASKS),), "golden"),
+    # The live turn of #240. A glance holds today's and overdue tasks, never
+    # a report: only an ask gets the app's own answer (#241). 7/16 on main's
+    # manifests; PCC's `agent.examples` now names it.
+    Case(
+        "tasks-report",
+        "Can you give me a report of my tasks?",
+        (one(M("ask", "tasks", read=True)),),
+        "golden",
+    ),
     Case("chess-play", "let's play chess", (one(M("open", "chess")),), "golden"),
     Case("chess-move", "play e4", (one(M("open", "chess")),), "golden"),
     Case(

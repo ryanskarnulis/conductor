@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentMessage, LiveReceipt, ToolCallRecord } from '../../types/agent'
 import { nextSceneState } from './sceneState'
 import { applyTurnEvent, EMPTY_STREAM, type TurnEventName, type TurnStream } from './turnStream'
-import { buildTurns, confirmCards, pendingConfirm, presenceFor, PROPOSAL_QUESTION, receiptFrom } from './turnView'
+import { answersFrom, buildTurns, confirmCards, pendingConfirm, presenceFor, PROPOSAL_QUESTION, receiptFrom, shownText } from './turnView'
 
 function msg(over: Partial<AgentMessage>): AgentMessage {
   return { id: 1, conversation_id: 1, role: 'user', content: 'hi', tool_calls: null, stop_reason: null, created_at: '2026-11-06T18:00:00Z', ...over }
@@ -33,6 +33,29 @@ describe('receiptFrom', () => {
 
   it('reports a refusal with its reason', () => {
     expect(receiptFrom({ tool: 'complete_task', outcome: 'refused', reason: 'task 9 is already done' }, 'tasks')).toMatchObject({ verb: 'Refused', entity: 'task 9 is already done' })
+  })
+})
+
+describe('an app’s answer to a read (#241)', () => {
+  const report = 'You have 39 open tasks.\n\n**Garden**\n- Test the fence'
+  const passed = askTasks({ app_answer: { text: report, spoken: 'You have 39 open tasks.', read: true, passed: true } })
+
+  it('shows only an answer that was passed on, under its app', () => {
+    const held = askTasks({ app_answer: { text: 'Done. Trashed Garage.', read: false } })
+    expect(answersFrom([passed, held, askTasks()])).toEqual([{ app: 'tasks', name: 'PCC', text: report, untrusted: false }])
+  })
+
+  it('rides the turn beside conductor’s own reply', () => {
+    const [turn] = buildTurns([msg({ id: 1 }), msg({ id: 2, role: 'assistant', content: 'Tasks answered.', tool_calls: [passed] })], null, null)
+    expect(turn.reply).toBe('Tasks answered.')
+    expect(turn.answers).toEqual([{ app: 'tasks', name: 'PCC', text: report, untrusted: false }])
+  })
+
+  it('marks outside text, and an incognito turn carries it in the live reply', () => {
+    const music: ToolCallRecord = { tool: 'ask_music', arguments: {}, result: 'ok', error: null, app_answer: { text: '- Honey', untrusted: true, passed: true } }
+    expect(answersFrom([music])[0].untrusted).toBe(true)
+    expect(shownText('Music answered.', [music])).toBe('Music answered.\n\nMusic says (includes outside text):\n\n- Honey')
+    expect(shownText('Added it.', [askTasks()])).toBe('Added it.')
   })
 })
 

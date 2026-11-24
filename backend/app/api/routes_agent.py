@@ -44,6 +44,7 @@ from app.ai import (
     control,
     foreground,
     incognito,
+    relay,
     job_control,
     narrator,
     think,
@@ -208,6 +209,14 @@ def _read(message: ConversationMessage, tag: timeline_service.Tag | None) -> Mes
     read = MessageRead.model_validate(message)
     if tag is not None:
         read.surface, read.incognito = tag.surface, tag.incognito
+    return _voiced(read)
+
+
+def _voiced(read: MessageRead) -> MessageRead:
+    """A spoken turn's reply with what the voice says when an app's answer
+    was passed on (#241): its short form, never the whole answer."""
+    if read.surface in relay.SPOKEN_SURFACES and read.tool_calls:
+        read.spoken = relay.spoken(read.content, [call.model_dump() for call in read.tool_calls])
     return read
 
 
@@ -221,7 +230,7 @@ def _live(
     read.content = content
     if calls is not None:
         read.tool_calls = [ToolCallRead.model_validate(record.model_dump()) for record in calls]
-    return read
+    return _voiced(read)
 
 
 def _get_or_404(db: Session, conversation_id: int) -> Conversation:

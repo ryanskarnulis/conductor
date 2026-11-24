@@ -59,7 +59,7 @@ from typing import Any, Protocol
 
 import structlog
 
-from app.ai import run_record
+from app.ai import relay, run_record
 from app.ai import trace as run_trace
 from app.ai.confirmation import CONFIRM_TOOL, AppConfirm, PendingConfirm
 from app.ai.facts import attach
@@ -438,6 +438,10 @@ def _finish(
         # alone, never from its words.
         typed = assistant.needs_input
         runtime.delegated_asks.set({"needs_input": None if typed is None else typed.model_dump()})
+    if assistant.answer is not None and assistant.stop_reason == "completed":
+        # A read's answer in the app's words (v1.3, #241): kept beside the
+        # record for the person; whether it is passed on is ``relay``'s call.
+        runtime.delegated_answer.set(relay.take(assistant.answer.model_dump()))
     armed = assistant.armed()
     if assistant.stop_reason == "confirm_required" and armed:
         kept = [
