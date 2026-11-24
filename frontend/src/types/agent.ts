@@ -67,14 +67,38 @@ export interface AppConfirm {
   expires_at?: string | null
 }
 
-/** What a card's answer did (backend ConfirmAnswerRead). `failed`: the app
- * didn't take the yes, and nothing is claimed. */
-export interface ConfirmAnswer {
-  token: string
+/** One open question waiting on the person (#251, backend CardRead): an
+ * app's confirm, code's gate, a think's proposal or a pick-one. `group` is
+ * the message that asked it (one request's cards share it); `latest` marks
+ * the cards the turn right before asked. */
+export interface WaitingCard {
+  id: string
+  kind: 'app_confirm' | 'gate' | 'proposal' | 'pick'
+  question: string
+  asked_at: string
+  group: number | null
+  app: string | null
+  options: string[]
+  expires_at: string | null
+  latest: boolean
+}
+
+/** What one card's answer did (backend CardOutcome). `failed`: the app
+ * didn't take the yes (it re-checked and the thing had changed, or its token
+ * lapsed) and nothing is claimed; `resumed`: the plan that waited ran on. */
+export interface CardOutcome {
+  id: string
   answer: 'yes' | 'no'
-  outcome: 'done' | 'refused' | 'failed' | 'declined'
+  outcome: 'done' | 'refused' | 'failed' | 'declined' | 'resumed'
   detail: string | null
-  message: AgentMessage
+}
+
+/** What a tap did (backend CardAnswerRead): each card's outcome, the turn
+ * each resumed plan ran, and the cards still open. */
+export interface CardsAnswer {
+  answers: CardOutcome[]
+  exchanges: MessageExchange[]
+  cards: WaitingCard[]
 }
 
 /** STANDARD.md §3's stop vocabulary, the same strings in every app. */

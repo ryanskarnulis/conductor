@@ -21,11 +21,11 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.ai import facts, options
+from app.ai import facts
 from app.ai import plan as plans
 from app.ai import recall
 from app.ai.runtime import ToolCallRecord
-from app.ai.state_block import Heard, calendar_lines, cut_off_line
+from app.ai.state_block import ON_A_CARD, Heard, calendar_lines, cut_off_line
 
 
 @dataclass(frozen=True)
@@ -164,33 +164,23 @@ class Long:
 
 
 @dataclass(frozen=True)
-class PicksNone:
-    """A resume whose answer picks none of the waiting question's options
-    (#77): for a spoken correction, code reads the words and amends the
-    waiting plan instead (``Interpreter``'s resume path), so it is right."""
-
-    options: tuple[str, ...]
-
-    def matches(self, plan: plans.Plan) -> bool:
-        return isinstance(plan, plans.Resume) and options.pick(plan.resume, self.options) is None
-
-
-@dataclass(frozen=True)
 class Case:
     id: str
     text: str
-    expect: tuple[Shape | Long | PicksNone, ...]
+    expect: tuple[Shape | Long, ...]
     group: str
     state: str = ""
     refs: frozenset[str] = field(default_factory=frozenset)
-    # A plan paused on ask_user, which a resume answers (the schema offers it).
+    # A plan paused on an open question (no options to tap), which a resume
+    # answers (the schema offers it).
     resumable: bool = False
     # Nothing waits and the ledger has a write the last plan finished, which
     # an amend can ask its app to change (#198, ``Checks.changeable``).
     changeable: bool = False
 
     @property
-    def confirmable(self) -> bool:
+    def asked(self) -> bool:
+        """The turn before left a card waiting (``Checks.asked``)."""
         return "pending" in self.refs
 
 
@@ -277,10 +267,6 @@ _LAST_S3 = (
     's2 ask tasks "add a task to sort {s1} this weekend" -> created task "Sort Honey" '
     "(pcc:task:301, due Sat; undo: trash)"
 )
-_PENDING = (
-    'tasks asked "Trash the Kitchen project and its 12 tasks?" '
-    "(pending plan p7, step s1, ref pending:p7)"
-)
 
 # Spoken corrections (#77): "push the dentist thing to friday" paused on which
 # dentist task (an ask_user, the day in the step after it), as the shipped
@@ -290,7 +276,6 @@ _WHICH_DENTIST_REPLY = (
     "I can push it to Friday. Which one: “Dentist appointment” or “Call the dentist "
     "about the bill”?"
 )
-_DENTIST_OPTIONS = ("Dentist appointment", "Call the dentist about the bill")
 _TWO_DENTISTS = (
     'pcc:task:44 "Dentist appointment" (due Wed); pcc:task:61 "Call the dentist about the '
     'bill" (due Thu)'
@@ -298,7 +283,8 @@ _TWO_DENTISTS = (
 
 
 def _which_dentist(**parts: str) -> str:
-    waiting = f'your last reply asked "{_WHICH_DENTIST_REPLY.split(". ", 1)[1]}"'
+    # A pick-one is a card (#251): only a tap, or its option's name, answers it.
+    waiting = f'your last reply asked "{_WHICH_DENTIST_REPLY.split(". ", 1)[1]}" {ON_A_CARD}'
     last = recall.section(
         recall.Recall.of(
             [
@@ -331,10 +317,7 @@ _JUST_ADDED_CALL_MOM = recall.section(
     )
 )
 
-_KITCHEN_CONFIRM = (
-    'tasks asked "Trash Kitchen and its 3 tasks?" If their message says yes to it, call '
-    'confirm(app="tasks"); if not, don\'t — the question lapses.'
-)
+_KITCHEN_CONFIRM = f'tasks asked "Trash Kitchen and its 3 tasks?" {ON_A_CARD}'
 _ROAD_TRIP_REPLY = "Queued the “Road Trip” playlist, 40 songs. I'll say when it's done."
 _VOICE = "Thursday 2026-11-05, 18:10, kitchen speaker (voice, no screen)"
 
@@ -603,23 +586,9 @@ CASES: tuple[Case, ...] = (
         "ref",
         _TEST_TASKS,
     ),
-    # --- control: confirm, cancel, amend, undo -----------------------------------------
-    Case(
-        "s9-yes",
-        "yes",
-        (one(M("confirm", answer="yes")),),
-        "control",
-        state(waiting=_PENDING),
-        frozenset({"pending", "pending:p7", "p7"}),
-    ),
-    Case(
-        "s9-no",
-        "no, leave it",
-        (one(M("confirm", answer="no")),),
-        "control",
-        state(waiting=_PENDING),
-        frozenset({"pending", "pending:p7", "p7"}),
-    ),
+    # --- control: cancel, amend, undo ---------------------------------------------------
+    # No confirm (#251): a yes or a no to a waiting question never reaches the
+    # planner (``plans.bare_yes``, ``plans.dismisses``; code answers).
     Case(
         "s10-stop",
         "actually, stop",
@@ -658,18 +627,13 @@ CASES: tuple[Case, ...] = (
         ),
         frozenset({"pcc:task:301", "music:album:55", "music:job:20", "job:20", "20", "last"}),
     ),
+    # A bare "yes" with nothing waiting never reaches the planner either
+    # (code files it as chat, #251), so it left these cases.
     # The same words with nothing for them (#140): nothing waits, runs or was
     # done. A cancel, amend or undo is right (code then says there's nothing
-    # to act on), and so is a chat or self answer: neither acts. A confirm
-    # with nothing waiting is the validator's to send back, so "yes" passes
-    # on its repair. A guard against a plan that invents work for an empty
-    # State (#140's narrowed schema did, and wasn't shipped).
-    Case(
-        "yes-nothing-waiting",
-        "yes",
-        (one(M("confirm")), none("chat"), none("status")),
-        "control",
-    ),
+    # to act on), and so is a chat or self answer: neither acts. A guard
+    # against a plan that invents work for an empty State (#140's narrowed
+    # schema did, and wasn't shipped).
     Case(
         "cancel-nothing-running",
         "cancel that",
@@ -689,32 +653,9 @@ CASES: tuple[Case, ...] = (
         "control",
     ),
     # Spoken corrections (#77): right after a reply, often over it, the person
-    # changes what is waiting or running. That is an amend of it, never a
-    # "no" that drops it, a new plan beside it, or the answer to its question.
-    Case(
-        "correct-waiting-day",
-        "actually make it Saturday",
-        (one(M("amend", words=("saturday",))), PicksNone(_DENTIST_OPTIONS)),
-        "control",
-        _which_dentist(),
-        resumable=True,
-    ),
-    Case(
-        "correct-over-question",
-        "no, Saturday",
-        (one(M("amend", words=("saturday",))), PicksNone(_DENTIST_OPTIONS)),
-        "control",
-        _which_dentist(now=_VOICE, cut=f"{_WHICH_DENTIST_REPLY}|21"),
-        resumable=True,
-    ),
-    Case(
-        "correct-app-confirm",
-        "no, just the paint cabinets task",
-        (one(M("amend", words=("paint cabinets",))),),
-        "control",
-        state(waiting=_KITCHEN_CONFIRM),
-        frozenset({"pending"}),
-    ),
+    # changes what is waiting or running. A correction of a card just asked
+    # ("no, Saturday" over "which one?") is code's amend since #251 and never
+    # reaches the planner (``Interpreter._correct``); these are the rest.
     # ... or what was just done (#198): the task is made and nothing waits.
     Case(
         "correct-finished-write",
@@ -737,6 +678,60 @@ CASES: tuple[Case, ...] = (
             cut=f"{_ROAD_TRIP_REPLY}|30",
         ),
         frozenset({"music:job:17", "job:17", "17"}),
+    ),
+    # --- cards (#251): a question waits on its card and never owns the next turn -------
+    # The live failure of 2026-11-23: a retry of "Delete the test tasks." was
+    # read as the answer to a pick-one asked earlier. Anything that doesn't
+    # change what was asked is a new request, planned as if nothing waited.
+    Case(
+        "card-restated-request",
+        "Delete the test tasks.",
+        (one(M("ask", "tasks", ("test",), destructive=True)),),
+        "cards",
+        _which_dentist(),
+        frozenset({"pending"}),
+    ),
+    Case(
+        "card-new-request-same-app",
+        "add a task to water the plants tomorrow",
+        (one(M("ask", "tasks", ("plants",), destructive=False)),),
+        "cards",
+        state(waiting=_KITCHEN_CONFIRM),
+        frozenset({"pending"}),
+    ),
+    Case(
+        "card-new-request-other-app",
+        "download the new Caribou album",
+        (one(M("ask", "music", ("caribou",))),),
+        "cards",
+        state(waiting=_KITCHEN_CONFIRM),
+        frozenset({"pending"}),
+    ),
+    Case(
+        "card-read-beside-pick",
+        _DUE,
+        (one(READ_TASKS),),
+        "cards",
+        _which_dentist(),
+        frozenset({"pending"}),
+    ),
+    Case(
+        "card-small-talk",
+        "thanks, that's all for now",
+        (none("chat"),),
+        "cards",
+        state(waiting=_KITCHEN_CONFIRM),
+        frozenset({"pending"}),
+    ),
+    # A yes that goes on to ask for something: the yes approves nothing (the
+    # card still waits) and the rest is the request.
+    Case(
+        "card-yes-and-more",
+        "yes, and add a task to buy milk",
+        (one(M("ask", "tasks", ("milk",), destructive=False)),),
+        "cards",
+        state(waiting=_KITCHEN_CONFIRM),
+        frozenset({"pending"}),
     ),
     # --- memory ----------------------------------------------------------------------
     Case(

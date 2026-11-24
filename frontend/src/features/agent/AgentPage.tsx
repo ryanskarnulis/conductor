@@ -5,7 +5,6 @@ import { cancelTurn, getTimeline, type SendOptions } from '../../api/agent'
 import {
   Ack,
   AnsweredCard,
-  ConfirmationCard,
   Narration,
   PlanSteps,
   Presence,
@@ -24,7 +23,7 @@ import { earcons, setSound, soundOn } from '../../design/earcons'
 import { prefersReducedMotion } from '../../design/motion'
 import { MicButton } from '../../voice/MicButton'
 import { playText, type Heard } from '../../voice/tts'
-import type { AgentStopReason, Surface, Timeline } from '../../types/agent'
+import type { AgentStopReason, CardOutcome, Surface, Timeline, WaitingCard } from '../../types/agent'
 import { ConductorMark } from './ConductorMark'
 import { activityLabel, elapsedSuffix } from './delegateCalls'
 import { JobCards, JobNotes } from './JobCards'
@@ -48,7 +47,10 @@ import {
   type ScrollBox,
 } from './timeline'
 import type { TurnStream } from './turnStream'
-import { buildTurns, pendingConfirm, presenceFor, type ShellTurn } from './turnView'
+import { buildTurns, presenceFor, type ShellTurn } from './turnView'
+import { useCards } from './useCards'
+import { WaitingOnYou } from './WaitingOnYou'
+import { resumesPlan, tapNote } from './waitingCards'
 import { useConversation } from './useConversation'
 import { carryChips, useThreads } from './useThreads'
 import { useTurnActivity } from './useTurnActivity'
@@ -121,19 +123,9 @@ function SaidLabel({ turn }: { turn: ShellTurn }) {
 function TurnView({
   turn,
   latest,
-  confirm,
-  busy,
-  onAnswer,
-  onCard,
 }: {
   turn: ShellTurn
   latest: boolean
-  /** A think's proposal waiting on a yes (an app's questions are `turn.confirms`). */
-  confirm: { app: string; question: string } | null
-  busy: boolean
-  onAnswer: (words: string) => void
-  /** One app question answered from its card: its token and yes or no. */
-  onCard: (token: string, answer: 'yes' | 'no') => void
 }) {
   const stop = turn.stopReason !== null && turn.stopReason !== 'completed' ? STOP_FALLBACK[turn.stopReason] : null
   const classes = `shell-turn${latest ? '' : ' shell-turn--old'}${turn.incognito ? ' shell-turn--incognito' : ''}`
@@ -148,52 +140,15 @@ function TurnView({
           {turn.announce}
         </div>
       )}
-      {latest && turn.pause?.kind === 'question' && (
-        <QuestionCard
-          question={turn.pause.question}
-          choices={turn.pause.options.map((label) => ({ label }))}
-          onChoose={onAnswer}
-          disabled={busy}
-          spoken={turn.pause.options.length > 0 ? 'Or say it.' : 'Say or type your answer.'}
-        />
-      )}
-      {latest && turn.pause?.kind === 'confirm' && (
-        <ConfirmationCard
-          app={turn.pause.app}
-          question={turn.pause.question}
-          why={turn.pause.why}
-          actionLabel="Yes, do it"
-          onConfirm={() => onAnswer('yes')}
-          onDecline={() => onAnswer('not now')}
-          disabled={busy}
-        />
+      {/* An open question with nothing to tap waits on words, for one turn.
+          Everything else that waits is a card under "Waiting on you" (#251). */}
+      {latest && turn.pause?.kind === 'question' && turn.pause.options.length === 0 && (
+        <QuestionCard question={turn.pause.question} choices={[]} onChoose={() => undefined} spoken="Say or type your answer." />
       )}
       {(turn.confirms ?? []).map((card) =>
-        card.state === 'open' ? (
-          <ConfirmationCard
-            key={card.token}
-            app={card.app}
-            question={card.question}
-            why={`${card.app} asks before this write. Say “yes”, or tap.`}
-            actionLabel="Yes, do it"
-            onConfirm={() => onCard(card.token, 'yes')}
-            onDecline={() => onCard(card.token, 'no')}
-            disabled={busy}
-          />
-        ) : (
+        card.state === 'open' || (card.state === 'expired' && !latest) ? null : (
           <AnsweredCard key={card.token} app={card.app} question={card.question} state={card.state} detail={card.detail} receipts={card.receipts} />
         ),
-      )}
-      {latest && !turn.pause && confirm && (turn.confirms ?? []).length === 0 && (
-        <ConfirmationCard
-          app={confirm.app}
-          question={confirm.question}
-          why="Say “yes”, or tap."
-          actionLabel="Yes, do it"
-          onConfirm={() => onAnswer('yes')}
-          onDecline={() => onAnswer('not now')}
-          disabled={busy}
-        />
       )}
       {turn.receipts.length > 0 && <Receipts receipts={latest ? turn.receipts : turn.receipts.slice(-3)} />}
       {turn.reply !== null && turn.reply !== '' && (
@@ -253,9 +208,11 @@ export function AgentPage() {
   const [startOpen, setStartOpen] = useState(false)
   const [threadName, setThreadName] = useState('')
 
-  const { detail, loading, error, pendingText, handoff, send, liveWords, note, refresh: refreshThread, answerCard: cardAnswer } = useConversation(activeId)
-  // One card's answer in flight: the cards wait for it.
+  const { detail, loading, error, pendingText, handoff, send, liveWords, note, refresh: refreshThread, tap } = useConversation(activeId)
+  // A tap in flight: the cards wait for it.
   const [answering, setAnswering] = useState(false)
+  // What the last tap came to: a card that didn't go through says why.
+  const [tapResults, setTapResults] = useState<CardOutcome[]>([])
 
   // The sort panel opens on a turn where music actually ran its sorting tool
   // and then stays open (see sortTurn.ts) until dismissed. This session's
@@ -285,6 +242,9 @@ export function AgentPage() {
   // each a card until its note lands in the thread.
   const jobs = useJobs(activeId, !sending, refreshThread)
   const cards = useMemo(() => jobCards(jobs.state, jobs.asks, new Set(messages.map((m) => m.id))), [jobs.state, jobs.asks, messages])
+  // Waiting on you (#251): every open question, read from the server each
+  // time the thread changes (a turn, a tap, a job's note).
+  const waiting = useCards(activeId, detail)
   const activity = live?.activity ?? null
   const stream = live?.stream ?? null
   const phone = usePhone()
@@ -339,13 +299,12 @@ export function AgentPage() {
     () => daySeparators(shown.map(({ item }) => (item.kind === 'notes' ? item.turns[0]?.at : item.turn.when))),
     [shown],
   )
-  const confirm = sending ? null : pendingConfirm(messages, cardNow)
   // A job's note or a side thread's result lands in the conversation but is
   // never the turn the page is about.
   const latestAt = turns.findLastIndex((turn) => !turn.jobNote && !turn.threadNote)
   const latest = latestAt >= 0 ? turns[latestAt] : null
   const pause = !sending && latest ? latest.pause : null
-  const presence = presenceFor(sending, activity, confirm !== null || pause !== null)
+  const presence = presenceFor(sending, activity, waiting.cards.length > 0 || pause !== null)
   // What came before the latest turn (#233). On the timeline it is one block
   // above it: a phone's sheet fits the latest turn and the block is reached
   // by scrolling up. A side thread keeps its one list.
@@ -399,7 +358,7 @@ export function AgentPage() {
   }, [revealed])
 
   // The scene reads the same facts as the panel, each frame, from this ref.
-  const confirmApp = confirm?.raw.app ?? (pause?.kind === 'confirm' ? pause.appKey : null)
+  const confirmApp = waiting.cards.findLast((card) => card.app !== null)?.app ?? (pause?.kind === 'confirm' ? pause.appKey : null)
   const getSceneState = useSceneState(latest, presence.state, confirmApp, cards)
 
   // Voice-output toggle (fleet UX rule: voice in → voice out, typed in → silent).
@@ -477,8 +436,16 @@ export function AgentPage() {
       if (call.tool.startsWith('ask_') && (call.app_record ?? []).some((e) => e.outcome === 'done' || e.outcome === 'looked_up')) apps.add(call.tool.slice(4))
     }
     apps.forEach((app) => earcons.receipt(app))
-    if (pendingConfirm(messages)) earcons.confirmation()
-  }, [lastMessage, messages])
+  }, [lastMessage])
+
+  // A new card sounds once (with Sound on): something waits on a tap.
+  const cardsHeardRef = useRef<Set<string> | null>(null)
+  useEffect(() => {
+    const ids = new Set(waiting.cards.map((card) => card.id))
+    const before = cardsHeardRef.current
+    cardsHeardRef.current = ids
+    if (before !== null && [...ids].some((id) => !before.has(id))) earcons.confirmation()
+  }, [waiting.cards])
 
   // Voice-initiated turns speak the reply (typed turns never do), and are
   // tagged as voice on the timeline (#82).
@@ -579,10 +546,6 @@ export function AgentPage() {
         <TurnView
           turn={item.turn}
           latest={item.index === latestAt}
-          confirm={item.index === latestAt && confirm ? confirm : null}
-          busy={sending || answering}
-          onAnswer={answer}
-          onCard={answerCard}
         />
       )}
     </Fragment>
@@ -595,15 +558,24 @@ export function AgentPage() {
     setDraft('')
     await say(content)
   }
-  const answer = (words: string) => {
-    if (sending || activeId === null) return
-    void say(words)
-  }
-  // A card's button is its own path: that question's token, no model turn.
-  const answerCard = (token: string, said: 'yes' | 'no') => {
-    if (sending || answering || activeId === null) return
+  // A card's tap is the only way anything is approved (#251). One that
+  // picks a waiting plan up runs a turn with no words: it shows live.
+  const answerCards = (tapped: WaitingCard[], said: 'yes' | 'no', option?: number) => {
+    if (sending || answering || activeId === null || tapped.length === 0) return
     setAnswering(true)
-    void cardAnswer(token, said).finally(() => setAnswering(false))
+    setTapResults([])
+    const resumes = said === 'yes' && resumesPlan(tapped) ? tapNote(tapped, option === undefined ? undefined : tapped[0].options[option]) : undefined
+    void tap(
+      tapped.map((card) => card.id),
+      said,
+      { ...(option === undefined ? {} : { option }), surface: phone ? 'phone' : 'desktop', ...(resumes ? { resumes } : {}) },
+    )
+      .then((done) => {
+        if (done === null) return waiting.refresh()
+        setTapResults(done.answers)
+        waiting.set(done.cards)
+      })
+      .finally(() => setAnswering(false))
   }
   const stopTurn = () => {
     if (activeId !== null) void cancelTurn(activeId)
@@ -812,6 +784,7 @@ export function AgentPage() {
                 <div ref={convoEndRef} className="agent-thread-sentinel" aria-hidden="true" />
               </div>
 
+              <WaitingOnYou cards={waiting.cards} results={tapResults} busy={sending || answering || threads.closing} onAnswer={answerCards} />
               {incognito && !threadClosed && (
                 <p className="tl-incognito-note" role="status">
                   {timeline?.incognito_notice}

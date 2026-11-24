@@ -202,7 +202,7 @@ def test_memory_is_one_ask_enum_value_and_one_prompt_line(fleet: Fleet) -> None:
         for k in schema["anyOf"][0]["properties"]["steps"]["items"]["anyOf"]
     }
     assert "memory" in kinds["ask"]["properties"]["app"]["enum"]
-    assert len(kinds) == 10  # the step kinds don't change
+    assert len(kinds) == 9  # the step kinds don't change (no confirm since #251)
     prompt = compiler.planner_prompt(fleet)
     assert prompt.count("- memory (ask):") == 1 and '"forget that"' in prompt
     # #138: the examples name no fact, so "forget that" has none to copy.

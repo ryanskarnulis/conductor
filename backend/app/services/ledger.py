@@ -36,8 +36,14 @@ step's receipt files the row like an app's job; the thinker records each try
 (:func:`think_started`), each interruption as a ``not_run`` receipt on the
 think step (:func:`think_interrupted`, so the tries survive a restart), and
 posts the one note with :func:`note_think`. A proposal rides that note's
-``job`` turn as a ``think`` plan paused on ``proposal``: :func:`paused_plan`
-offers it while nothing the person said came after it.
+``job`` turn as a ``think`` plan paused on ``proposal``.
+
+**Waiting plans** (#251). A paused plan waits as long as the conversation's
+window, whatever is said after it: :func:`waiting_plans` lists them for the
+page's cards, and a card's tap resumes one in a turn of its own.
+:func:`paused_plan` is the one the turn right before asked, the only one the
+person's words can pick, change or dismiss. A newer question about the same
+thing replaces an older one (``replaced``).
 """
 
 from __future__ import annotations
@@ -190,6 +196,7 @@ def close_turn(
         db.add(plan)
         _end_waiting_plan(db, turn, run.plan)
         db.flush()
+        _replace_same_question(db, turn, plan)
         for seq, record in records:
             _journal_step(db, plan, seq, record, hidden=turn.incognito)
         db.flush()
@@ -209,13 +216,11 @@ def close_turn(
     )
 
 
-def answer_step(
-    db: Session, assistant_message_id: int, record: ToolCallRecord, *, settled: bool
-) -> None:
+def answer_step(db: Session, assistant_message_id: int, record: ToolCallRecord) -> None:
     """A question answered from its card, on the turn that asked it: one more
     step on that turn's plan, with the app's receipts, like any confirmed
-    call. ``settled``: no question of the turn is open any more, so a plan
-    that paused on them waits on nothing."""
+    call. The plan's own fate is the caller's (:func:`end_plan`, or the turn
+    that resumes it)."""
 
     def write() -> LedgerTurn | None:
         turn = db.execute(
@@ -226,8 +231,6 @@ def answer_step(
         plan = turn.plans[-1]
         seq = max((step.seq for each in turn.plans for step in each.steps), default=0) + 1
         _journal_step(db, plan, seq, record, hidden=turn.incognito)
-        if settled and plan.status == "paused" and plan.pause == "app_confirm":
-            plan.status, plan.note = "ran", "its questions were answered from their cards"
         db.flush()
         db.expire(plan, ["steps"])
         return turn
@@ -237,6 +240,135 @@ def answer_step(
         _safely(db, "ledger_memory_index_failed", lambda: memory_index.index_again(db, turn))
 
 
+def end_plan(db: Session, plan_id: int | None, status: str, note: str) -> None:
+    """A waiting plan ended from its card with nothing to run: declined, or
+    every question it waited on answered."""
+    if plan_id is None:
+        return
+
+    def write() -> None:
+        plan = db.get(LedgerPlan, plan_id)
+        if plan is not None and plan.status == "paused":
+            plan.status, plan.note = status, note
+            db.flush()
+
+    _safely(db, "ledger_end_plan_failed", write)
+
+
+# The pauses a card answers (#251). ``ask_user`` and ``app_question`` only
+# when they offer something to tap; the caller checks.
+_CARD_PAUSES = ("ask_user", "gate", "app_confirm", "app_question", "proposal")
+# How many of a conversation's turns :func:`waiting_plans` reads.
+WAITING_TURNS = 200
+
+
+@dataclass(frozen=True)
+class WaitingPlan:
+    """A plan waiting on the person, with the turn that asked."""
+
+    paused: PausedPlan
+    turn_id: int
+    asked_at: datetime
+    # The assistant message its question was asked in, and the request it
+    # came from (the placeholder for an incognito turn).
+    message_id: int | None
+    words: str
+    incognito: bool = False
+
+
+def waiting_plans(
+    db: Session, conversation_id: int, *, since: datetime | None = None
+) -> list[WaitingPlan]:
+    """Every plan of this window still waiting on the person, oldest first
+    (#251): a quiet gap lapses them all, nothing said since does. A forgotten
+    turn's plan is not one."""
+    turns = (
+        db.execute(
+            select(LedgerTurn)
+            .where(
+                LedgerTurn.conversation_id == conversation_id,
+                LedgerTurn.status == "ended",
+                LedgerTurn.forgotten_at.is_(None),
+                *_since(since),
+            )
+            .order_by(LedgerTurn.id.desc())
+            .limit(WAITING_TURNS)
+        )
+        .scalars()
+        .all()
+    )
+    waiting: list[WaitingPlan] = []
+    for turn in reversed(turns):
+        if turn.kind not in ("message", JOB_TURN):
+            continue
+        for plan in turn.plans:
+            if (
+                plan.status != "paused"
+                or not plan.acted
+                or plan.body is None
+                or plan.resume_at is None
+                or plan.pause not in _CARD_PAUSES
+                or (plan.pause == "proposal") != (turn.kind == JOB_TURN)
+            ):
+                continue
+            waiting.append(
+                WaitingPlan(
+                    paused=PausedPlan(
+                        body=plan.body,
+                        reason=plan.pause,  # type: ignore[arg-type]
+                        resume_at=plan.resume_at,
+                        app=plan.pause_app,
+                        plan_id=plan.id,
+                    ),
+                    turn_id=turn.id,
+                    asked_at=_aware(turn.ended_at or turn.created_at),
+                    message_id=turn.assistant_message_id,
+                    words=turn.words,
+                    incognito=turn.incognito,
+                )
+            )
+    return waiting
+
+
+def _question_subject(plan: LedgerPlan) -> tuple[str, ...] | None:
+    """What a waiting plan's question is about, for "no duplicates" (#251):
+    code's gate by the app and the request it would send, a pick-one by its
+    question. ``None``: never a duplicate (a proposal, an app's own)."""
+    steps = (plan.body or {}).get("steps") or []
+    at = plan.resume_at
+    if plan.status != "paused" or at is None:
+        return None
+    if plan.pause == "gate" and 0 <= at < len(steps):
+        step = steps[at]
+        said = step.get("request") or step.get("target") or ""
+        return ("gate", str(plan.pause_app), " ".join(str(said).lower().split()))
+    if plan.pause == "ask_user" and 0 < at <= len(steps):
+        return ("ask_user", " ".join(str(steps[at - 1].get("question") or "").lower().split()))
+    return None
+
+
+def _replace_same_question(db: Session, turn: LedgerTurn, plan: LedgerPlan) -> None:
+    """A new question about the same thing replaces the old card (#251)."""
+    subject = _question_subject(plan)
+    if subject is None:
+        return
+    older = db.execute(
+        select(LedgerPlan)
+        .join(LedgerTurn, LedgerTurn.id == LedgerPlan.turn_id)
+        .where(
+            LedgerTurn.conversation_id == turn.conversation_id,
+            LedgerPlan.status == "paused",
+            LedgerPlan.id != plan.id,
+        )
+        .order_by(LedgerPlan.id.desc())
+        .limit(WAITING_TURNS)
+    ).scalars()
+    for other in older:
+        if _question_subject(other) == subject:
+            other.status = "replaced"
+            other.note = f"asked again by a later turn ({turn.id})"
+
+
 # How many job notes in a row :func:`paused_plan` looks past for the person's turn.
 _NOTES_SCANNED = 20
 
@@ -244,14 +376,14 @@ _NOTES_SCANNED = 20
 def paused_plan(
     db: Session, conversation_id: int, *, since: datetime | None = None
 ) -> PausedPlan | None:
-    """Last turn's compiled plan, if it is waiting on the person (#70).
+    """The plan the turn right before left waiting on the person (#70).
 
-    Only the newest turn's plan can resume: anything said or done since (a
-    note included) lets the question lapse, as an app's question does. A
-    job's note (#76) is neither, so it doesn't; but a think's proposal (#78)
-    posted since is the newest question, and it is the one a yes answers.
-    A quiet gap lapses it too (#82): only a turn at or after ``since`` (the
-    timeline's window) can be waiting.
+    The one their words can pick from, change or dismiss (#251): anything
+    said or done since (a note included) puts it out of their reach, though
+    its card still waits (:func:`waiting_plans`). A job's note (#76) is
+    neither said nor done; but a think's proposal (#78) posted since is the
+    newest question. A quiet gap lapses it (#82): only a turn at or after
+    ``since`` (the timeline's window) can be waiting.
     """
     turns = (
         db.execute(

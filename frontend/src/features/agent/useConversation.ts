@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { answerConfirmation, getConversation, postMessage, postNote, type SendOptions } from '../../api/agent'
+import { answerCards, getConversation, postMessage, postNote, type SendOptions } from '../../api/agent'
 import { ApiError } from '../../api/client'
-import type { ConversationDetail } from '../../types/agent'
+import type { CardsAnswer, ConversationDetail, Surface } from '../../types/agent'
 import { handoffFrom, type Handoff } from './handoff'
 
 interface UseConversation {
@@ -27,9 +27,11 @@ interface UseConversation {
   note: (content: string) => Promise<void>
   /** Read the thread again: a job's note (#90) was posted without a send. */
   refresh: () => Promise<void>
-  /** Answer one app question from its card: no model runs, and the turn's
-   * other questions stay open. The thread is read again either way. */
-  answerCard: (token: string, answer: 'yes' | 'no') => Promise<void>
+  /** Tap cards (#251): one, or a group's "Approve all". The only way
+   * anything is approved. `resumes` is the tap as the thread will record it,
+   * when it picks a waiting plan up: the turn then shows live, like a send.
+   * The thread is read again either way; null when the tap failed. */
+  tap: (cards: string[], answer: 'yes' | 'no', how?: { option?: number; surface?: Surface; resumes?: string }) => Promise<CardsAnswer | null>
 }
 
 /** Human-readable failure line for a `postMessage` run. */
@@ -174,20 +176,27 @@ export function useConversation(
     }
   }, [conversationId, onExchange])
 
-  const answerCard = useCallback(
-    async (token: string, answer: 'yes' | 'no'): Promise<void> => {
-      if (conversationId === null) return
+  const tap = useCallback(
+    async (cards: string[], answer: 'yes' | 'no', how: { option?: number; surface?: Surface; resumes?: string } = {}): Promise<CardsAnswer | null> => {
+      if (conversationId === null) return null
+      const { resumes, ...options } = how
       setErrorState(null)
+      if (resumes) setPending({ id: conversationId, value: resumes })
+      let done: CardsAnswer | null = null
       try {
-        await answerConfirmation(conversationId, token, answer)
+        done = await answerCards(conversationId, cards, answer, options)
+        const handed = done.exchanges.map((exchange) => handoffFrom(exchange.assistant_message.tool_calls)).find((target) => target)
+        if (handed) setHandoffState({ id: conversationId, value: handed })
       } catch (e: unknown) {
         // Nothing is claimed: the card stays as the server has it.
         setErrorState({ id: conversationId, value: sendErrorMessage(e) })
       }
       await refresh()
+      setPending((prev) => (prev !== null && prev.id === conversationId ? null : prev))
+      return done
     },
     [conversationId, refresh],
   )
 
-  return { detail, loading, error, pendingText, handoff, send, liveWords, note, refresh, answerCard }
+  return { detail, loading, error, pendingText, handoff, send, liveWords, note, refresh, tap }
 }

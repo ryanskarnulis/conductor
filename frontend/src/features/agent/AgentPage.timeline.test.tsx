@@ -15,6 +15,8 @@ vi.mock('../timeline/timelineApi', () => ({ searchTimeline: vi.fn() }))
 vi.mock('../../api/agent', () => ({
   // Side threads (#139): none open.
   listThreads: vi.fn(() => Promise.resolve([])),
+  // Waiting on you (#251): no card open.
+  getCards: vi.fn(() => Promise.resolve([])),
   cancelTurn: vi.fn(),
   getConversation: vi.fn(),
   getTimeline: vi.fn(),

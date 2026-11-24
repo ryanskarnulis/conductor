@@ -55,6 +55,7 @@ def build(
     matches: Callable[[], Sequence[state_block.Match]] | None = None,
     facts: Callable[[], Sequence[state_block.Fact]] | None = None,
     heard: Callable[[], state_block.Heard | None] | None = None,
+    card: Callable[[], bool] | None = None,
 ) -> str:
     """The context that opens the turn (without the person's words, which the
     compiler adds last). ``history`` is this conversation's stored turns;
@@ -66,7 +67,8 @@ def build(
     (#80); when it finds any, the word-matched calls from ``earlier`` are left
     out (they'd say the same thing twice). ``facts`` are what the person asked
     conductor to remember (#81). ``heard`` is the last reply when the person
-    spoke over it (#77)."""
+    spoke over it (#77). ``card``: the question the last reply asked sits on a
+    card (#251)."""
     try:
         turns = list(history())
     except Exception as exc:
@@ -118,8 +120,18 @@ def build(
             logger.warning(
                 "turn_context_heard_failed", error=str(exc), error_type=type(exc).__name__
             )
+    on_card = False
+    if card is not None:
+        try:
+            on_card = bool(card())
+        except Exception as exc:
+            logger.warning(
+                "turn_context_card_failed", error=str(exc), error_type=type(exc).__name__
+            )
     try:
-        block = state_block.render(today, now, turns, recent, running, leads, saved, cut)
+        block = state_block.render(
+            today, now, turns, recent, running, leads, saved, cut, card=on_card
+        )
         before = recall.section(recall.Recall.of(turns), hits)
     except Exception as exc:
         # A stored turn conductor can't read: the calendar alone, never no turn.

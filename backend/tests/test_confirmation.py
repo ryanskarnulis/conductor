@@ -8,6 +8,8 @@ All fakes: no live delegate calls.
 
 from __future__ import annotations
 
+import dataclasses
+
 import json
 from collections.abc import Callable, Generator
 from datetime import date, datetime
@@ -296,24 +298,36 @@ def test_the_last_turns_question_is_pending() -> None:
     assert confirmation.pending(history) == _pending()
 
 
-def test_a_question_older_than_the_last_turn_has_lapsed() -> None:
+def test_a_question_older_than_the_last_turn_is_out_of_reach_of_words() -> None:
+    # Its card still waits (``cards.open_cards``); words no longer change it.
     history = [_turn(_kept()), {"role": "user", "content": "actually no"}]
     assert confirmation.pending(history) is None
     history.append({"role": "assistant", "content": "ok", "tool_calls": None})
     assert confirmation.pending(history) is None
 
 
-def test_another_message_to_the_same_app_voids_its_question() -> None:
+def test_another_message_to_the_same_app_leaves_its_question_open() -> None:
     later = {"tool": "ask_tasks", "arguments": {"message": "what's due"}, "result": "…"}
-    assert confirmation.pending([_turn(_kept(), later)]) is None
+    assert confirmation.pending([_turn(_kept(), later)]) == _pending()
     other = {"tool": "ask_music", "arguments": {"message": "status"}, "result": "…"}
     assert confirmation.pending([_turn(_kept(), other)]) == _pending()
+
+
+def test_a_later_question_about_the_same_thing_has_the_same_subject() -> None:
+    first = _pending()
+    again = dataclasses.replace(first, token="tok-2")
+    other = dataclasses.replace(first, token="tok-3", question="Trash Garage and its 2 tasks?")
+    assert first.subject == again.subject != other.subject
+    kitchen = {"count": 4, "touched": [{"app": "tasks", "kind": "project", "id": "7"}]}
+    previewed = dataclasses.replace(first, preview=kitchen)
+    reworded = dataclasses.replace(previewed, token="tok-4", question="Trash Kitchen (4 things)?")
+    assert previewed.subject == reworded.subject
 
 
 def test_the_state_block_says_how_to_answer_it() -> None:
     block = state_block.render(date(2026, 11, 6), Now(), [_turn(_kept())])
     assert f'tasks asked "{QUESTION}"' in block
-    assert 'call confirm(app="tasks")' in block
+    assert state_block.ON_A_CARD in block and "confirm(" not in block
     assert "tok-1" not in block
 
 
@@ -356,6 +370,10 @@ def test_yes_to_the_wrong_app_keeps_the_question(context: DelegationContext) -> 
     [
         (DelegateConfirmRefused("409", kind="expired"), "waited too long"),
         (DelegateConfirmRefused("409", kind="stale"), "has changed since"),
+        (
+            DelegateConfirmRefused("409", kind="stale", said="task “X” was finished, so nothing"),
+            "tasks did nothing: task “X” was finished",
+        ),
         (DelegateConfirmRefused("409", kind="used"), "already used that yes"),
         (DelegateThreadGone("404"), "no longer has that question open"),
     ],

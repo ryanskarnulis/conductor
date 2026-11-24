@@ -413,7 +413,7 @@ def test_the_trace_says_how_the_reply_was_made(fleet: _Fleet) -> None:
 # --- the pure pieces -------------------------------------------------------------------
 
 
-def test_a_later_call_to_the_same_app_voids_its_question() -> None:
+def test_a_later_call_to_the_same_app_leaves_its_question_open() -> None:
     asked = ToolCallRecord(
         tool="ask_tasks",
         arguments={"message": "wipe"},
@@ -422,7 +422,7 @@ def test_a_later_call_to_the_same_app_voids_its_question() -> None:
     )
     again = ToolCallRecord(tool="ask_tasks", arguments={"message": "what's due"}, result="x")
     assert narrator.live_confirm([asked]) is asked
-    assert narrator.live_confirm([asked, again]) is None
+    assert narrator.live_confirm([asked, again]) is asked  # #251: only its card answers it
 
 
 def test_a_list_read_is_named_by_count_not_by_every_title() -> None:

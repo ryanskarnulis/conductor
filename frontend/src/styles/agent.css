@@ -422,3 +422,153 @@ main.agent-page {
     min-height: 60vh;
   }
 }
+
+/* ── Waiting on you (#251) ───────────────────────────────────────────────
+   Every open question as a card, between the timeline and the composer so
+   it is always in reach. It never grows past a share of the panel: with many
+   cards the section scrolls, the composer stays put. */
+
+.wait {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 42svh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--warn);
+  background: var(--warn-soft);
+}
+
+.wait-head {
+  margin: 0;
+  font-size: 13px;
+}
+
+.wait-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--warn);
+  text-align: left;
+  cursor: pointer;
+}
+
+.wait-toggle:disabled {
+  cursor: default;
+}
+
+.wait-toggle:focus-visible {
+  outline: 2px solid var(--glow);
+  outline-offset: 2px;
+}
+
+.wait-title {
+  white-space: nowrap;
+}
+
+.wait-oldest {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 400;
+  color: var(--silk);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wait-chevron {
+  margin-left: auto;
+}
+
+.wait-groups[hidden] {
+  display: none;
+}
+
+.wait-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--warn);
+  color: var(--on-status);
+  font-size: 12px;
+  text-align: center;
+}
+
+.wait-groups,
+.wait-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.wait-group + .wait-group {
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--warn);
+}
+
+.wait-all {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: 13px;
+  color: var(--silk);
+}
+
+.wait-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.wait-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: 13px;
+}
+
+.wait-meta b {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.wait-meta time {
+  color: var(--silk);
+  white-space: nowrap;
+}
+
+.wait-question,
+.wait-result,
+.wait-how {
+  margin: 0;
+}
+
+.wait-question {
+  font-size: 14.5px;
+  overflow-wrap: anywhere;
+}
+
+.wait-result {
+  font-size: 13.5px;
+  color: var(--danger);
+}
+
+.wait-how {
+  font-size: 12.5px;
+  color: var(--silk);
+}

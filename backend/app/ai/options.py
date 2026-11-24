@@ -224,6 +224,26 @@ def pick(answer: str, options: Sequence[str]) -> int | None:
     return None
 
 
+# What an answer may say besides the option it picks ("the bill one").
+_PLACE_WORDS = frozenset({*_ORDINALS, *_LAST, "one", "option", "number", "pick", "choose"})
+MAX_EXTRA_TERMS = 1
+
+
+def answers(words: str, options: Sequence[str]) -> int | None:
+    """The option the words pick when they are an answer and not a new
+    request (#251): one named outright, or a few words that point at one
+    ("the bill one", "the first"). "Add a task to pay the electric bill"
+    shares a word with an option and is no answer. Read by code right after
+    the question was asked; a model never decides it."""
+    index = pick(words, options)
+    if index is None:
+        return None
+    if _norm(options[index]) and _within(options[index], _norm(words)):
+        return index
+    extra = terms(words) - terms(options[index]) - _PLACE_WORDS
+    return index if len(extra) <= MAX_EXTRA_TERMS else None
+
+
 def _same_title(option: str, title: str) -> bool:
     """Whether an option is this title, also when State clipped it ("…")."""
     want, have = _norm(option), _norm(title)

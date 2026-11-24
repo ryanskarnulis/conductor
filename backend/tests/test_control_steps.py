@@ -34,6 +34,7 @@ from app.main import app
 from app.services import conversations as conversations_service
 from app.services import ledger
 from tests.fake_world import World, client_factory, write_fixture_fleet
+from tests import card_taps
 from tests.scripted_provider import ScriptedProvider, text_turn
 
 
@@ -57,7 +58,6 @@ def ask(app_name: str, request: str, destructive: bool = False) -> dict[str, Any
 
 CANCEL = steps({"do": "cancel", "target": "pending"})
 UNDO = steps({"do": "undo", "target": "last"})
-YES = steps({"do": "confirm", "answer": "yes"})
 S3 = steps(
     ask("music", "download the new Caribou album"),
     ask("tasks", "add a task to sort {s1} this weekend"),
@@ -99,7 +99,16 @@ def run_with(client: TestClient, fleet: Fleet, world: World) -> Generator[Any, N
         assert provider._turns == [], "the script wasn't fully consumed"
         return dict(response.json()["assistant_message"])
 
+    def tap(provider: ScriptedProvider | None = None, **how: Any) -> dict[str, Any]:
+        """Tap a waiting card (#251): the only way anything is approved."""
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+            provider or ScriptedProvider([]), fleet, narrate=True
+        )
+        return card_taps.tap(client, conversation, **how)
+
     run.conversation = conversation  # type: ignore[attr-defined]
+    run.tap = tap  # type: ignore[attr-defined]
+    run.cards = lambda: card_taps.cards(client, conversation)  # type: ignore[attr-defined]
     yield run
 
 
@@ -192,14 +201,13 @@ def test_undo_trashes_the_task_and_says_the_download_cant_be_undone(
         "tasks",
     )
 
-    # The narrator leaves out the download: code says it anyway.
-    done = run_with(
-        ScriptedProvider([plan_turn(YES), text_turn(f"Trashed “{created.title}”.")]), "yes"
-    )
+    # The tap on the app's card redeems the undo: no model, and no turn, since
+    # nothing else of the undo is left to ask.
+    done = run_with.tap()
+    assert [one["outcome"] for one in done["answers"]] == ["done"] and done["exchanges"] == []
     assert [w.kind for w in world.writes()] == ["queue", "create", "trash"]
     assert world.tasks[int(created.ref.split(":")[1])].trashed
-    assert "can't be undone" in done["content"] and "Honey" in done["content"]
-    assert "say undo" not in done["content"].lower()  # an undo's inverse is never offered
+    assert _plans(db_session)[-1].status == "accepted"
     marked = [r for r in _receipts(db_session) if r.undone_by_step_id is not None]
     assert [(r.app, r.tool) for r in marked] == [("tasks", "create_task")]
 
@@ -209,7 +217,7 @@ def test_undo_twice_never_undoes_a_receipt_again(
 ) -> None:
     _s3(run_with)
     run_with(ScriptedProvider([plan_turn(UNDO)]), "undo that")
-    run_with(ScriptedProvider([plan_turn(YES), text_turn("Trashed it.")]), "yes")
+    run_with.tap()
     writes = len(world.writes())
     again = run_with(ScriptedProvider([plan_turn(UNDO)]), "undo that")
     assert again["content"].startswith("Already undone: “")
@@ -275,20 +283,9 @@ def test_undo_that_after_a_task_and_a_download_undoes_the_task_only(
     assert stops == []
     assert _tools(asked) == ["ask_music", "ask_tasks"]
     assert "still running, so say stop to end it" in asked["content"]
-    # The narrator says the task and the download's reason but not that it runs:
-    # it gets one more try, then code says it.
-    done = run_with(
-        ScriptedProvider(
-            [
-                plan_turn(YES),
-                text_turn(f"Trashed “{created.title}”; the Honey download can't be undone."),
-                text_turn(f"Trashed “{created.title}”; the Honey download can't be undone."),
-            ]
-        ),
-        "yes",
-    )
+    run_with.tap()
     assert [w.kind for w in world.writes()] == ["queue", "create", "trash"] and stops == []
-    assert "it is still running" in done["content"]
+    assert world.tasks[int(created.ref.split(":")[1])].trashed
 
 
 def test_stop_that_read_as_an_undo_stops_the_download_and_keeps_the_task(
@@ -375,8 +372,20 @@ def test_undo_to_an_app_without_confirms_waits_at_codes_gate(
     paused = _plans(db_session)[-1]
     assert (paused.pause, paused.resume_at, paused.pause_app) == ("gate", 0, "music")
 
-    run_with(ScriptedProvider([plan_turn(YES), text_turn("Moved “Odessa” back.")]), "yes")
-    assert len(sent) == 1 and "song “Odessa”: move it back to unsorted" in sent[0]
+    (card,) = run_with.cards()
+    assert card["kind"] == "gate" and card["question"] == gated["content"]
+    # Another turn writes before the card is tapped: "the last plan" has
+    # moved on, and the undo still redeems the receipts it asked about.
+    run_with(
+        ScriptedProvider(
+            [plan_turn(steps(ask("tasks", "add a task to water the plants"))), text_turn("Ok.")]
+        ),
+        "add a task to water the plants",
+    )
+    run_with.tap(ScriptedProvider([text_turn("Moved “Odessa” back.")]))
+    assert [w.kind for w in world.writes() if w.app == "tasks"] == ["create"]  # left alone
+    undone = [message for message in sent if message.startswith("Undo what you did earlier")]
+    assert len(undone) == 1 and "song “Odessa”: move it back to unsorted" in undone[0]
     (receipt,) = [r for r in _receipts(db_session) if r.tool == "file_song"]
     assert receipt.undone_by_step_id is not None
 
@@ -403,17 +412,53 @@ def test_cancel_lapses_the_apps_token_and_says_what_wont_happen(
     trash = steps(ask("tasks", "delete the groceries task", destructive=True))
     asked = run_with(ScriptedProvider([plan_turn(trash)]), "delete the groceries task")
     assert asked["content"] == 'Trash "groceries"?'
-    cancelled = run_with(ScriptedProvider([plan_turn(CANCEL)]), "actually, cancel that")
+    # Code reads the dismissal: no planner call is scripted.
+    cancelled = run_with(ScriptedProvider([]), "actually, cancel that")
     assert cancelled["content"] == (
         'Okay, cancelled: tasks won\'t get a yes to "Trash "groceries"?".'
     )
     assert cancelled["tool_calls"] is None
-    # The token lapsed: a later yes has nothing to answer (the validator
-    # refuses it every round), code says so, and nothing is trashed.
-    late = ScriptedProvider([plan_turn(YES), plan_turn(YES), plan_turn(YES)])
-    assert run_with(late, "yes")["content"] == interpreter.UNPLANNED
+    # The card is gone, so a later yes is small talk for the planner.
+    assert run_with.cards() == []
+    late = ScriptedProvider([text_turn('{"about_you": false, "reply": "Okay."}')])
+    assert run_with(late, "yes")["content"] == "Okay."
     assert world.writes() == []
     assert ledger.paused_plan(db_session, run_with.conversation) is None
+
+
+def test_the_planners_cancel_never_closes_a_card(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    """#251: only code's reading of a dismissal, or the card's own button."""
+    trash = steps(ask("tasks", "delete the groceries task", destructive=True))
+    run_with(ScriptedProvider([plan_turn(trash)]), "delete the groceries task")
+    # The cancel gets one repair; kept, it runs and closes nothing.
+    stubborn = ScriptedProvider([plan_turn(CANCEL), plan_turn(CANCEL)])
+    reply = run_with(stubborn, "cancel whatever the fridge thing was")
+    assert "a cancel does nothing to it" in stubborn.requests[1]["messages"][-1]["content"]
+    assert reply["content"] == control.CARD_STAYS
+    assert len(run_with.cards()) == 1 and world.writes() == []
+
+
+def test_a_dismissal_reaches_only_the_question_just_asked(
+    run_with: Any, world: World, db_session: Session
+) -> None:
+    trash = steps(ask("tasks", "delete the groceries task", destructive=True))
+    run_with(ScriptedProvider([plan_turn(trash)]), "delete the groceries task")
+    run_with(
+        ScriptedProvider(
+            [plan_turn(steps(ask("tasks", "what's due today?"))), text_turn("Nothing.")]
+        ),
+        "what's due today?",
+    )
+    # Nothing was just asked: "never mind" is the planner's, and the card stays.
+    chat = ScriptedProvider(
+        [plan_turn({"answer": "chat"}), text_turn('{"about_you": false, "reply": "Okay."}')]
+    )
+    assert run_with(chat, "never mind")["content"] == "Okay."
+    assert len(run_with.cards()) == 1
+    assert [one["outcome"] for one in run_with.tap()["answers"]] == ["done"]
+    assert [w.kind for w in world.writes()] == ["trash"]
 
 
 def test_cancel_at_the_gate_ends_the_plan_on_the_ledger(
@@ -425,7 +470,7 @@ def test_cancel_at_the_gate_ends_the_plan_on_the_ledger(
     )
     run_with(ScriptedProvider([plan_turn(gated)]), "delete the album download")
     waiting = _plans(db_session)[-1]
-    reply = run_with(ScriptedProvider([plan_turn(CANCEL)]), "no wait, stop")
+    reply = run_with(ScriptedProvider([]), "no wait, stop")
     assert reply["content"] == (
         "Okay, cancelled: I won't ask music to \"delete the album download\" and I won't ask "
         'tasks to "add a task to restock that".'
@@ -452,8 +497,9 @@ def test_amend_rewrites_the_gated_step_and_resumes_the_same_plan(
     gated = steps(ask("music", "delete the album download", destructive=True))
     run_with(ScriptedProvider([plan_turn(gated)]), "delete the album download")
     waiting = _plans(db_session)[-1]
-    reply = run_with(ScriptedProvider([plan_turn(amend("just the first song"))]), "make it one")
-    changed = "delete the album download (change: just the first song)"
+    # Words that change what was just asked are code's amend (#251).
+    reply = run_with(ScriptedProvider([]), "make it just the first song")
+    changed = "delete the album download (change: make it just the first song)"
     assert reply["content"] == f'Just to check: should I ask music to "{changed}"?'
     db_session.refresh(waiting)
     assert waiting.status == "amended"
@@ -461,7 +507,10 @@ def test_amend_rewrites_the_gated_step_and_resumes_the_same_plan(
     assert (resumed.status, resumed.pause, resumed.resume_at) == ("paused", "gate", 0)
     assert resumed.body is not None and resumed.body["steps"][0]["request"] == changed
 
-    yes = run_with(ScriptedProvider([plan_turn(YES), text_turn("Done.")]), "yes")
+    # The amended question replaced the card; its tap runs the changed step.
+    (card,) = run_with.cards()
+    assert card["question"] == reply["content"]
+    yes = card_taps.reply_of(run_with.tap(ScriptedProvider([text_turn("Done.")])))
     assert yes["tool_calls"][0]["arguments"] == {"message": changed}
 
 
@@ -470,20 +519,25 @@ def test_amend_resends_the_apps_question_changed(
 ) -> None:
     trash = steps(
         ask("tasks", "delete the groceries task", destructive=True),
-        ask("music", "download the new Caribou album"),
+        ask("tasks", "add a task to restock after {s1}"),
     )
     run_with(ScriptedProvider([plan_turn(trash)]), "delete the groceries task")
     assert _plans(db_session)[-1].pause == "app_confirm"
-    reply = run_with(
-        ScriptedProvider([plan_turn(amend("and only that one"))]),
-        "only that one",
-    )
+    (old,) = run_with.cards()
+    # A spoken correction of the question just asked is code's amend (#251):
+    # no planner call, the change in their own words.
+    reply = run_with(ScriptedProvider([]), "no, only that one")
     sent = reply["tool_calls"][0]
     assert sent["tool"] == "ask_tasks"
-    assert sent["arguments"]["message"] == "delete the groceries task (change: and only that one)"
-    # The app asks again, about the changed request; the plan waits on it.
+    assert sent["arguments"]["message"] == "delete the groceries task (change: no, only that one)"
+    # The app asks again, about the changed request, on a new card; the step
+    # that needs its answer still waits with it.
     assert reply["content"].startswith("Trash ")
-    assert _plans(db_session)[-1].pause == "app_confirm"
+    waiting = _plans(db_session)[-1]
+    assert waiting.pause == "app_confirm" and waiting.body is not None
+    assert waiting.body["waiting"] == ["s2"]
+    (new,) = run_with.cards()
+    assert new["id"] != old["id"]
     assert world.writes() == []
 
 
@@ -525,19 +579,17 @@ def test_a_correction_read_as_the_answer_to_which_one_amends_instead(
         ScriptedProvider([plan_turn(steps(question, ask("tasks", "push {s1} to friday")))]),
         "push the dentist thing to friday",
     )
-    resume = {"about": "the waiting question", "resume": "Saturday"}
-    reply = run_with(ScriptedProvider([plan_turn(resume)]), "no, Saturday")
+    # It names no option, so code doesn't pick: it is a correction, and code
+    # amends the waiting plan with their words. The question is asked again.
+    reply = run_with(ScriptedProvider([]), "no, Saturday")
     assert reply["content"] == "Which one? (Dentist appointment / Call the dentist)"
     assert reply["tool_calls"] in (None, [])
     resumed = _plans(db_session)[-1]
     assert (resumed.pause, resumed.resume_at) == ("ask_user", 1)
     assert resumed.body is not None
     assert resumed.body["steps"][1]["request"] == "push {s1} to friday (change: no, Saturday)"
-    # A real pick still resumes as picked.
-    picked = run_with(
-        ScriptedProvider([plan_turn({"resume": "the appointment"}), text_turn("Moved it.")]),
-        "the appointment",
-    )
+    # A real pick still resumes as picked, read by code: no planner call.
+    picked = run_with(ScriptedProvider([text_turn("Moved it.")]), "the appointment")
     assert picked["tool_calls"][0]["tool"] == "ask_tasks"
 
 
@@ -694,62 +746,6 @@ def _report(reply: str, heard_chars: int | None) -> dict[str, Any]:
     }
 
 
-@pytest.mark.parametrize(
-    ("reply", "question", "heard_chars", "heard"),
-    [
-        ('Added “milk”. Trash "groceries"?', 'Trash "groceries"?', 13, False),
-        ('Added “milk”. Trash "groceries"?', 'Trash "groceries"?', 0, False),
-        # The cut is an estimate: all but the last word counts as heard.
-        ('Added “milk”. Trash "groceries"?', 'Trash "groceries"?', 21, True),
-        ('Added “milk”. Trash "groceries"?', 'Trash "groceries"?', 32, True),
-        # Code's own question isn't the app's words: the last question mark.
-        ('Just to check: should I ask music to "delete it"? ', None, 20, False),
-        ('Just to check: should I ask music to "delete it"? ', None, 49, True),
-        # How much played is unknown: as before.
-        ('Trash "groceries"?', 'Trash "groceries"?', None, True),
-    ],
-)
-def test_a_question_is_heard_only_when_what_played_reaches_its_end(
-    reply: str, question: str | None, heard_chars: int | None, heard: bool
-) -> None:
-    assert control.heard_question(state_block.Heard(reply, heard_chars), question) is heard
-    assert control.heard_question(None, question) is True
-
-
-def test_a_yes_to_the_apps_question_they_spoke_over_asks_it_again(
-    run_with: Any, world: World, db_session: Session
-) -> None:
-    trash = steps(ask("tasks", "delete the groceries task", destructive=True))
-    asked = run_with(ScriptedProvider([plan_turn(trash)]), "delete the groceries task")
-    assert asked["content"] == 'Trash "groceries"?'
-    again = run_with(ScriptedProvider([plan_turn(YES)]), "yes", heard=_report(asked["content"], 0))
-    assert again["content"] == f'{control.ASKING_AGAIN} Trash "groceries"?'
-    assert world.writes() == []
-    assert _tools(again) == ["ask_tasks"]
-    # Heard this time: the yes confirms the question just asked.
-    run_with(ScriptedProvider([plan_turn(YES), text_turn("Trashed it.")]), "yes")
-    assert [write.kind for write in world.writes()] == ["trash"]
-
-
-def test_a_yes_to_codes_gate_they_spoke_over_asks_it_again(
-    run_with: Any, world: World, db_session: Session
-) -> None:
-    gated = steps(ask("music", "delete the album download", destructive=True))
-    asked = run_with(ScriptedProvider([plan_turn(gated)]), "delete the album download")
-    again = run_with(ScriptedProvider([plan_turn(YES)]), "yes", heard=_report(asked["content"], 14))
-    assert again["content"] == f"{control.ASKING_AGAIN} {asked['content']}"
-    assert again["tool_calls"] is None
-    resumed = _plans(db_session)[-1]
-    assert (resumed.status, resumed.pause, resumed.resume_at) == ("paused", "gate", 0)
-    # A yes over the end of the question, heard, runs it.
-    yes = run_with(
-        ScriptedProvider([plan_turn(YES), text_turn("Done.")]),
-        "yes",
-        heard=_report(again["content"], state_block.utf16_len(again["content"]) - 2),
-    )
-    assert _tools(yes) == ["ask_music"]
-
-
 # --- a pick that also changes the plan (#198) ---------------------------------------------
 
 
@@ -818,7 +814,7 @@ def test_cancelling_an_undos_question_leaves_it_undoable(
 ) -> None:
     _s3(run_with)
     run_with(ScriptedProvider([plan_turn(UNDO)]), "undo that")
-    cancelled = run_with(ScriptedProvider([plan_turn(CANCEL)]), "no, cancel that")
+    cancelled = run_with(ScriptedProvider([]), "no, cancel that")
     assert cancelled["content"].startswith("Okay, cancelled: tasks won't get a yes to ")
     assert all(r.undone_by_step_id is None for r in _receipts(db_session))
     # An undo can't be changed partway: amending one drops it, and says so.
@@ -828,25 +824,12 @@ def test_cancelling_an_undos_question_leaves_it_undoable(
     assert [w.kind for w in world.writes()] == ["queue", "create"]
 
 
-def test_a_vague_line_about_the_undo_doesnt_stand_in_for_what_couldnt_be_undone(
-    run_with: Any,
-) -> None:
-    _s3(run_with)
-    run_with(ScriptedProvider([plan_turn(UNDO)]), "undo that")
-    vague = "Moved it to the trash. The other undo was not performed."
-    done = run_with(ScriptedProvider([plan_turn(YES), text_turn(vague)]), "yes")
-    assert done["content"].startswith(vague)
-    assert "didn't ask music to undo “Honey”, since a download can't be undone" in done["content"]
-
-
 def test_undo_that_again_never_stops_the_download_left_running(
     run_with: Any, world: World, stops: list[str]
 ) -> None:
     _s3(run_with)
     run_with(ScriptedProvider([plan_turn(UNDO)]), "undo that")
-    run_with(
-        ScriptedProvider([plan_turn(YES), text_turn("Trashed it; Honey is still running.")]), "yes"
-    )
+    run_with.tap()
     again = run_with(ScriptedProvider([plan_turn(UNDO)]), "undo that")
     assert again["content"].startswith("Already undone: “")
     assert stops == [] and [w.kind for w in world.writes()] == ["queue", "create", "trash"]

@@ -751,7 +751,7 @@ def test_a_waiting_plan_still_takes_a_cancel_that_doesnt_name_the_job(
     fake = _cancelling(monkeypatch, JobRead(ref="31", status="working", cancel_requested=True))
     gated = steps(ask("music", "delete the album download", destructive=True))
     run_with(ScriptedProvider([plan_turn(gated)]), "delete the album download")
-    reply = run_with(ScriptedProvider([plan_turn(cancel())]), "no, don't")
+    reply = run_with(ScriptedProvider([]), "no, don't")  # code's dismissal (#251)
     assert reply["content"].startswith("Okay, cancelled: I won't ask music")
     assert fake.calls == []
     # Naming the job reaches it even while a plan waits.
@@ -988,3 +988,22 @@ def test_the_app_sends_job_events_to_the_live_channel(client: TestClient) -> Non
     assert turn_events._JOB_SINK is turn_activity.publish_job
     # Tests never start the watcher on their own (``conftest.no_job_watcher``).
     assert app.state.job_watcher is None
+
+
+def test_a_cancel_beside_a_card_never_stops_a_job_it_doesnt_name(
+    run_with: Any, world: World, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#251: with a card waiting the 12B filed "what's due today?" as a cancel,
+    and it stopped the running download. The cancel gets one repair; kept,
+    it reaches a job only by name."""
+    from app.ai import control
+
+    _journal_job(db_session, run_with.conversation, "31", "Library sort", 112, 400)
+    fake = _cancelling(monkeypatch, JobRead(ref="31", status="working", cancel_requested=True))
+    gated = steps(ask("music", "delete the album download", destructive=True))
+    run_with(ScriptedProvider([plan_turn(gated)]), "delete the album download")
+    stubborn = ScriptedProvider([plan_turn(cancel()), plan_turn(cancel())])
+    reply = run_with(stubborn, "what's due today?")
+    assert "with no cancel" in stubborn.requests[1]["messages"][-1]["content"]
+    assert reply["content"] == control.CARD_STAYS
+    assert fake.calls == []

@@ -276,14 +276,33 @@ def test_seeded_brief_counts(world: World) -> None:
     assert world.today - timedelta(days=7) < world.today
 
 
-def test_tasks_another_message_voids_the_question(world: World) -> None:
+def test_tasks_another_message_leaves_the_question_open(world: World) -> None:
+    # PCC#551: only the token answers; the same question asked again replaces it.
     app = TasksApp(world)
     asked = app.handle(1, "delete the Kitchen project")
     assert asked.confirm is not None
     app.handle(1, "what's due today?")
+    again = app.handle(1, "delete the Kitchen project")
+    assert again.confirm is not None and again.confirm.token != asked.confirm.token
     with pytest.raises(DelegateConfirmRefused):
         app.handle(1, "yes", asked.confirm.token)
-    assert world.receipts == [] or all(r.kind != "trash" for r in world.receipts)
+    assert all(r.kind != "trash" for r in world.receipts)
+    app.handle(1, "yes", again.confirm.token)
+    assert [r.kind for r in world.receipts if r.kind == "trash"] == ["trash"]
+
+
+def test_tasks_recheck_a_task_finished_since_it_was_asked_about(world: World) -> None:
+    app = TasksApp(world)
+    asked = app.handle(1, "delete the groceries task")
+    assert asked.confirm is not None
+    app.handle(1, "mark groceries done")
+    with pytest.raises(DelegateConfirmRefused) as refused:
+        app.handle(1, "yes", asked.confirm.token)
+    assert refused.value.kind == "stale"
+    assert refused.value.said == (
+        'task "groceries" was finished since you were asked, so nothing was trashed'
+    )
+    assert all(r.kind != "trash" for r in world.receipts)
 
 
 def test_replies_carry_v1_1_records_like_the_real_apps(world: World) -> None:

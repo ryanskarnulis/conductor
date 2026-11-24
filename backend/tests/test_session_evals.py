@@ -75,7 +75,6 @@ from tests.session_harness import (
     sample_line,
 )
 from tests.session_scenarios import (
-    CORRECTED,
     FINISHED_CORRECTED,
     FORGET_GONE,
     INCOGNITO,
@@ -93,7 +92,6 @@ from tests.session_scenarios import (
     THREAD_FLOWS_BACK,
     THREAD_KEEPS_INCOGNITO,
     TIMELINE_RECALL,
-    YES,
     answer,
     ask,
     plan,
@@ -379,13 +377,11 @@ def test_a_th2_result_carrying_the_incognito_write_fails(scripted: _ScriptedRun)
 def test_compiled_s11_says_what_cant_be_undone_when_the_narrator_doesnt(
     scripted: _ScriptedRun,
 ) -> None:
-    # Spike C1b: the narrator never offered what it couldn't undo. Code appends it.
-    assert S11.script is not None
-    script = S11.script(World())
-    script[-1] = text_turn("Trashed “sort Honey”.")
-    sample = scripted.run(S11, script)
+    # Spike C1b: the narrator never offered what it couldn't undo. Code says it
+    # with the undo's question, before any tap (#251: the tap runs no turn).
+    sample = scripted.run(S11)
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
-    assert "can't be undone" in (sample.session.last.reply or "")
+    assert "can't be undone" in (sample.session.turn("undo").reply or "")
 
 
 def test_compiled_bi1_tells_the_planner_what_was_cut_off(scripted: _ScriptedRun) -> None:
@@ -403,15 +399,6 @@ def test_a_bi1_reply_that_doesnt_say_it_again_fails(scripted: _ScriptedRun) -> N
     script = INTERRUPTED.script(World())
     script[-1] = text_turn("I was telling you about your day.")
     _fails(scripted.run(INTERRUPTED, script), "didn't say again what was cut off")
-
-
-def test_a_bi2_correction_read_as_a_no_fails(scripted: _ScriptedRun) -> None:
-    # "no, just the paint cabinets task" as a plain no, kept through the
-    # correction's repair (#77): the plan is dropped.
-    assert CORRECTED.script is not None
-    script = CORRECTED.script(World())
-    script[1:] = [plan({"do": "confirm", "answer": "no"})] * 2
-    _fails(scripted.run(CORRECTED, script), "the correction was dropped")
 
 
 def test_a_bi3_correction_dropped_or_remade_fails(scripted: _ScriptedRun) -> None:
@@ -460,11 +447,10 @@ def test_claiming_the_wipe_without_asking_fails(scripted: _ScriptedRun) -> None:
         [
             answer("chat"),
             text_turn(json.dumps({"about_you": True, "reply": "Done: Kitchen is in the trash."})),
-            answer("chat"),
-            text_turn(json.dumps({"about_you": True, "reply": "Already done."})),
         ],
     )
-    _fails(sample, "didn't ask before wiping")
+    # No question went out, so there is no card to tap.
+    _fails(sample, "no card was waiting")
 
 
 def test_a_dropped_title_fails_s3(scripted: _ScriptedRun) -> None:
@@ -527,10 +513,10 @@ def test_a_recap_that_invents_fails(scripted: _ScriptedRun) -> None:
     _fails(sample, "unbacked claim")
 
 
-def test_a_yes_to_nothing_waiting_never_writes(scripted: _ScriptedRun) -> None:
-    # S9's second turn alone: a confirm with no question waiting is refused
-    # by the validator (twice), and code says so rather than guess.
-    sample = scripted.run(S9, [YES, YES, YES, YES, YES, YES])
+def test_a_tap_with_no_card_waiting_never_writes(scripted: _ScriptedRun) -> None:
+    # S9 when the first turn asked nothing: the tap finds no card and fails
+    # the turn; nothing is written.
+    sample = scripted.run(S9, [answer("chat"), text_turn('{"about_you": false, "reply": "Hm."}')])
     assert sample.session.world.receipts == []
     assert sample.taken.outcome is Outcome.FAIL
 

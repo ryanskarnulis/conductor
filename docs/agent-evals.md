@@ -256,7 +256,7 @@ later runtime plugs into.
 - **Scripted (CI).** Each scenario's golden script plays the model (plans, then
   the narrator's words; since #75 the compiled runtime only) and must
   pass, so every check is shown to be satisfiable. Deliberately wrong scripts
-  (acting before the yes, a dropped album title, a claimed write that didn't
+  (acting before the tap, a dropped album title, a claimed write that didn't
   happen, an invented recap) must fail for the right reason; an unnamed write
   is now named by code, so its script passes.
 - **Live (opt-in).** `CONDUCTOR_AGENT_EVALS=1` runs the `gate` tier under the
@@ -2524,3 +2524,133 @@ Session evals (full run, 1090 s, infra 0): 85 passed; gate scenario T1 read
 entities for this check to read; rerun alone it was 5/5 and 4/5 on this
 branch and 4/5 on main. No session scenario covers a named group yet: the
 fake tasks agent has no several-task trash.
+
+
+## Questions never block the chat (#251, 2026-11-23)
+
+A question is a card and only a tap approves it. The planner lost its
+`confirm` step. Before the planner is called, code reads the person's words
+against the question the turn right before asked: a bare yes ("tap the
+card"), an option's name (the pick), a dismissal, a correction (the amend).
+Everything else is a new request and the card stays. A plan's steps that
+don't need the answer run at once; the ones that do run when the card is
+tapped, as a turn with no words.
+
+### Taking `confirm` away from the planner: three ways, measured
+
+| variant | what moves | measured |
+|---|---|---|
+| prompt reworded to drop `confirm`, schema without it | the prompt's bytes | `golden` 372/420 (400 before): `refuse-weather` 2/20 and `refuse-lights` 10/20, both 20/20 on main. Run stopped there |
+| prompt and schema as on main, the validator refuses a `confirm` | nothing | six `cards` cases 106, 89 /120, 31 repairs; `card-yes-and-more` 7/20: the repair turns "yes, and add a task to buy milk" into chat and the request is lost |
+| **prompt as on main, `confirm` out of the schema** (shipped) | the grammar | the same six cases 118, 100 /120, 20 repairs; `golden` 400/420 |
+
+The weather misses were plans (`look` or `ask` to tasks or music) under
+`"about": "the outside world"`: the new paragraph said "plan it as if nothing
+waited" a few lines above the direct answers. So the prompt keeps its bytes
+and still describes a `confirm` step it can't write; State's waiting line
+says what to do instead, and the validator refuses one that arrives without
+the grammar (a proposal, a scripted test).
+
+With no `confirm` to write, the 12B files a yes that goes on to say more as
+a `cancel` beside the request ("yes, and add a task to buy milk":
+`cancel | ask:tasks`, 20/20). The planner's cancel never closes a card, so
+that plan gets one repair (`plan.cancels_a_card`): `card-yes-and-more` 0/20
+first try, 18/20 after it. Its two misses ask tasks to trash Kitchen again
+beside the milk: the app asks again, and nothing is approved.
+
+### Cases that left the planner
+
+Code answers these before a plan is compiled, so they are unit tests now
+(`test_compiled_plans.py`, `test_control_steps.py`), not plan cases:
+`s9-yes`, `s9-no`, `yes-nothing-waiting` (a bare yes with nothing waiting is
+small talk, by code), and the corrections of a waiting question
+(`correct-waiting-day`, `correct-over-question`, `correct-app-confirm`:
+`plan.changes_what_waits`). Left to the planner, with `resume` no longer
+offered for a pick-one, `correct-over-question` read 13/20 after its repair.
+`control` is 9 cases (180 samples), was 15. The held-out set lost
+`h-control-go-ahead` for the same reason; it was not run.
+
+The new `cards` group (floor 0.8) holds what the planner still decides with a
+card waiting: that other words are a new request.
+
+| case | words, with a card waiting | score, first try |
+|---|---|---|
+| card-restated-request (the live failure) | "Delete the test tasks." over a pick-one | 20, 20 /20 |
+| card-new-request-same-app | "add a task to water the plants tomorrow" | 20, 20 /20 |
+| card-new-request-other-app | "download the new Caribou album" | 20, 20 /20 |
+| card-read-beside-pick | "what's due today?" over a pick-one | 20, 20 /20 |
+| card-small-talk | "thanks, that's all for now" | 20, 20 /20 |
+| card-yes-and-more | "yes, and add a task to buy milk" | 18, 0 /20 |
+
+### The gate on the final code
+
+Plan-level evals (n=20, gemma-4-12b, 2101 s), score and first try:
+
+| group | floor | this run | before (#248) |
+|---|---|---|---|
+| golden | 0.8 | 400, 400 /420 | 400, 400 |
+| cross | 0.8 | 154, 101 /160 | 154, 108 |
+| ref | 0.85 | 139, 139 /140 | 135, 135 |
+| control | 0.8 | 180, 136 /180 | 300, 211 /300 |
+| cards | 0.8 | 118, 100 /120 | new |
+| memory | 0.8 | 309, 302 /320 | 312, 300 |
+| knowledge | 0.65 | 60, 60 /60 | 60, 60 |
+| hard | 0.5 | 20, 20 /20 | 19, 19 |
+| self | 0.55 | 98, 98 /100 | 99, 97 |
+| mixed | 0.85 | 198, 178 /200 | 198, 178 |
+| long | 0.7 | 160, 151 /160 | 160, 152 |
+| stale | 0.8 | 100, 100 /100 | 100, 100 |
+
+Every group is over its floor. `golden`'s misses are `chess-analysis` (0/20,
+known). `control`'s nine remaining cases are all 20/20. `memory` moved with
+`memory-paraphrase-tune` (12/20 here; 15/20 and `memory` 314 on a run of the
+same request bytes an hour earlier): the prompt is unchanged, and no memory
+case has a card.
+
+Session evals (full run, 920 s, infra 0/12, claims backed 223/225):
+
+| tier | this run | before (#218, #248) |
+|---|---|---|
+| gate | every scenario 5/5 but M3 and T1 4/5 | every scenario 5/5 but S6 and T1 4/5 (T1 2/5 in #248's run) |
+| frontier, as before | S13 0/5; S15p 3/5; BI1, BI2, BI3, S14 and the rest 5/5 | S13 0/5; S14, BI1 and BI2 4/5; the rest 5/5 |
+| frontier, new (Q1–Q6) | Q3 4/5, the other five 5/5 | |
+
+S9, S11 and S14 now approve by a tap (the harness's `Tap` step: the newest
+card's group, as "Approve all" does), and S15p's "Suddenly" is code's pick.
+The six new scenarios are the issue's cases as whole sessions:
+
+| scenario | what it checks |
+|---|---|
+| Q1 | "wipe the kitchen project", then "yes": nothing is approved, code says to tap, the tap wipes it |
+| Q2 | a question about something else leaves the card; its tap still works |
+| Q3 | a new request while music's pick-one waits runs as asked; the card stays; its tap queues the album |
+| Q4 | the task is finished after the question: the old card's tap trashes nothing and says so |
+| Q5 | a step that waited on the pick runs when its card is tapped, an unrelated turn later |
+| Q6 | the same question asked twice is one card; one tap trashes once |
+
+Misses, none on the card path: M3's task got a wrong title ("clean the
+record player to the music sorting project");
+T1 is its known flake; Q3's one miss is the narrator's wording ("The items
+added are…", an unbacked claim); S15p's two are the planner's (two asks to
+music in one plan, queued twice on the pick; and a request music refused
+without asking, so there was nothing to pick), where it was 5/5 before.
+Run alone the same hour, twice each: 9/10 on main (one sample planned two
+asks to music there too), 8/10 here.
+
+Fleet smoke (`tests/test_fleet_smoke.py`, 3 samples each, real music and real
+PCC on project-command-center#552's branch): S2, S3, S9, S15, S15p and BI3
+all 3/3. S9 is the tap end to end: PCC arms the token, the card's tap redeems
+it with no model turn, and Kitchen is in PCC's trash. (Its first run read 0/3
+on the harness alone: the smoke's driver didn't count a tap's receipts.)
+
+**What the first session run found.** On the code before the last change,
+Q5 read 2/5: with a card waiting and a download running, the 12B filed
+"what's due today?" as a `cancel`, and with no question in reach of a cancel
+it went to the job and stopped the download. A cancel beside a card now
+reaches a running job only by name (`control.run`), and gets one repair
+unless the words say stop (`plan.cancels_a_card`). The State line also lost
+its invitation to amend (Q4 4/5: "mark the groceries task as done" was
+amended into the delete): code reads a correction itself
+(`plan.changes_what_waits`), and with a card waiting the planner is no
+longer offered `"about": "the waiting question"`. Q4 and Q5 are 5/5 on the
+final code, and `card-read-beside-pick` went from 16/20 to 20/20.

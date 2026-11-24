@@ -335,22 +335,17 @@ def test_a_look_wont_repeat_an_ask_already_in_the_plan(
     ]
 
 
-def test_a_stand_in_ask_is_not_made_for_a_resumed_plan(
+def test_a_look_beside_a_question_runs_at_once(
     run_with: Any, glances: FakeGlances, db_session: Session
 ) -> None:
-    """After an ask_user the person's words are "the first one", not the request."""
+    """A look needs no answer, so it doesn't wait with the question (#251)."""
     glances.failures["tasks"] = GlanceError("tasks answered 500")
     pause = {"do": "ask_user", "question": "which one?", "options": []}
-    provider = ScriptedProvider(
-        [
-            plan_turn(steps(pause, LOOK_TASKS)),
-            plan_turn({"resume": "what's due today?"}),
-            text_turn("I couldn't look."),
-        ]
-    )
-    run_with(provider, "check my stuff")
-    reply = run_with(provider, "what's due today?")
-    assert [call["tool"] for call in reply["tool_calls"]] == ["look_tasks"]
+    provider = ScriptedProvider([plan_turn(steps(pause, LOOK_TASKS))])
+    reply = run_with(provider, "check my stuff")
+    # The glance failed, and the words are a plain question: the app is asked.
+    assert [call["tool"] for call in reply["tool_calls"]] == ["look_tasks", "ask_tasks"]
+    assert reply["content"].endswith("which one?")
 
 
 def test_independent_looks_run_at_once_and_keep_plan_order(

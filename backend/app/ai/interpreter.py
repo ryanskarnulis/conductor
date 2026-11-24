@@ -8,8 +8,8 @@ it runs, across apps (#72):
 
 - ``ask``: the app's agent, through its ``ask_<app>`` tool. A ``destructive``
   ask to an app that doesn't confirm its own writes pauses first on code's
-  question (the backstop gate); ``confirm`` yes runs it. An app's
-  ``confirm_required`` pauses the plan the same way, on the app's question.
+  question (the backstop gate); a tap on its card runs it. An app's
+  ``confirm_required`` is a card per question, the same way.
   An ask whose words clearly point at a saved fact (#134,
   :func:`app.ai.facts.related`) carries it in its ``facts`` argument; the
   tool sends it after the request, quoted and marked as context.
@@ -27,21 +27,19 @@ it runs, across apps (#72):
 - ``ask(app="memory")`` (#81): conductor's own app, run by code
   (:mod:`app.services.facts`): remember, forget or list what the person
   saved, in their own words. No agent, no model, no budget, no gate.
-- ``ask_user``: the plan pauses on the question; the person's answer resumes
+- ``ask_user``: the plan pauses on the question; the person's pick resumes
   the same plan. Each option is resolved in code to the entity State named
   for it (#120, :mod:`app.ai.options`), so ``{s1}`` is the picked entity's
-  title with its trust; an answer that picks no option goes in as they said it.
+  title with its trust. One with no options waits on their words instead.
 - ``{sN}`` in a step's text: the main title step N's receipt touched, quoted,
   filled in by code when the step runs (:mod:`app.ai.dataflow`, which holds
   the rules for no title, several titles and outside text).
-- ``confirm``: yes or no to whatever is waiting.
 - ``cancel``/``amend``/``undo``: on what's waiting or what just ran, over the
   ledger (:mod:`app.ai.control`, #74), each as a plan of its own; ``cancel``
   and ``amend`` on a running job go to the jobs runtime
   (:mod:`app.ai.job_control`, #76). One inside a longer plan is split off and
   runs first (#75); then the rest runs, unless it waits on a question the
-  control step left or depended on what it acted on (then it is not run,
-  and said).
+  control step left (then it is not run, and said).
 - A step whose receipt carries a job ref detaches: the app accepted the work
   and the reply says so now ("queued 40"); the ledger's job row and the
   watcher (:mod:`app.services.job_watcher`) follow it from there.
@@ -75,6 +73,18 @@ plainly it couldn't put the request together. A model outage is a failed turn
 
 For a slow plan (one that asks an app) code speaks an honest ack as soon as the
 plan is valid: what's about to happen, never what's done.
+
+**Questions never block the chat** (#251). A question is a card, and only a
+tap approves it: there is no ``confirm`` step, and a bare "yes" with a card
+waiting gets code's :data:`TAP_THE_CARD`. Code, never the planner, reads the
+person's words against the question asked in the turn right before: an
+option's name picks it, "never mind" dismisses it, and a correction ("no,
+make it Saturday", ``plans.changes_what_waits``) amends it, so the question
+is asked again on a new card.
+Anything else is a new request and the card stays. Only the steps that need
+the answer wait with it (:func:`plans.waiting_on`); the rest of the plan runs
+at once. A tap resumes the waiting steps with no chat turn
+(:meth:`Interpreter.resume`).
 """
 
 from __future__ import annotations
@@ -105,7 +115,6 @@ from app.ai import (
     turn_events,
 )
 from app.ai import glance as glances
-from app.ai import state_block
 from app.ai.state_block import Entity
 from app.ai import plan as plans
 from app.ai import trace as run_trace
@@ -163,17 +172,21 @@ APP_ANSWER_LEAD = "the person's answer to your question"
 _THINK_OFF = f"{run_record.NOT_RUN_PREFIX}the thinking model is switched off here"
 # The rest of a plan whose control step ran first (#75), when it can't go on.
 _WAITS_ON_QUESTION = f"{run_record.NOT_RUN_PREFIX}the question before it needs your answer first"
-_LEFT_IT = "Okay, I left it."
 _SET_ASIDE = "Okay, I set that plan aside. Nothing changed."
 _CONFIRM_TOOL = "confirm"
+# No words approve anything (#251).
+TAP_THE_CARD = "I can't take a yes in words. Tap the card to approve it."
+# Where a paused body keeps the ids of the steps that wait with its question
+# (#251): the rest of the plan already ran.
+WAITING = "waiting"
+# ... and the question it asked, word for word, for its card.
+QUESTION = "question"
 # Code's answers when no plan can run (#75): never a guessed action.
 UNPLANNED = "I couldn't put that together. Try it in two parts?"
 ONE_CONTROL = "I can only undo, cancel or change one thing at a time. Say them one by one?"
 THINK_OFF = "I can't think that through here: the thinking model is switched off."
 # Code's lead when it files the think itself (#146); the think's own line follows.
 UNPLANNED_THINKS = "I couldn't put that together as steps."
-# What a control step did, as the reason the rest of its plan didn't run.
-_ACTED_ON = {"cancel": "cancelled", "amend": "changed", "undo": "undone"}
 
 
 @dataclass
@@ -212,9 +225,6 @@ class _Run:
     # The candidate the person's answer picked from a v1.2 app's question
     # (#196): the resumed ask carries it, marked ``picked``, as its only ref.
     picked: dict[str, Any] | None = None
-    # The last reply, when the person spoke over it (#77): a yes to a
-    # question in the part they didn't hear confirms nothing (#198).
-    heard: Callable[[], state_block.Heard | None] | None = None
     # The turn's plan, once compiled: what the ledger journals.
     plan: TurnPlan | None = None
     # Where this plan's records start: a control step split off and run first
@@ -222,6 +232,11 @@ class _Run:
     since: int = 0
     # Steps after a think in the plan running now (#75): never run, said.
     dropped: list[plans.Step] = field(default_factory=list)
+    # A card waits somewhere in this window, also an older one (#251).
+    cards_waiting: bool = False
+    # Running the steps a question doesn't hold up (#251): nothing is
+    # narrated until the plan's own reply.
+    holding: int = 0
 
 
 class Interpreter:
@@ -269,7 +284,8 @@ class Interpreter:
         saved_facts: Callable[[], Sequence[str]] | None = None,
         entities: Callable[[], Sequence[Entity] | None] | None = None,
         fact_meaning: Callable[[str, Sequence[str]], str | None] | None = None,
-        heard: Callable[[], state_block.Heard | None] | None = None,
+        cards_waiting: bool = False,
+        resume: Resume | None = None,
     ) -> AgentRunResult:
         """Run one turn. Always returns, except on a failure stop.
 
@@ -289,8 +305,9 @@ class Interpreter:
         app reaches (#81), ``saved_facts`` the person's saved facts, newest
         first, which an app ask whose words point at one carries (#134), and
         ``fact_meaning`` the one a non-read ask means when no words match (#204).
-        ``heard`` is the last reply when the person spoke over it (#77): a yes
-        to a question in the part they didn't hear asks it again (#198).
+        ``cards_waiting``: a card waits in this window, the turn right before
+        or older, so a bare yes gets "tap the card" (#251). ``resume`` is a
+        card's tap instead of words (:meth:`resume`): no plan is compiled.
 
         A failure stop (``provider_error``, ``internal_error``) raises
         :class:`AgentRunFailed` with the partial turn and its plan.
@@ -324,7 +341,7 @@ class Interpreter:
             saved_facts=saved_facts,
             entities=entities,
             fact_meaning=fact_meaning,
-            heard=heard,
+            cards_waiting=cards_waiting,
         )
         started = time.monotonic()
         with (
@@ -333,7 +350,10 @@ class Interpreter:
             use_stop(stop),
         ):
             try:
-                result = self._turn(state, paused, self_facts)
+                if resume is not None:
+                    result = self._resume(state, resume)
+                else:
+                    result = self._turn(state, paused, self_facts)
             except AgentRunFailed as exc:
                 exc.result.run_id, exc.result.plan = run_id, state.plan
                 trace.plan = state.plan.model_dump() if state.plan else None
@@ -347,21 +367,39 @@ class Interpreter:
     def _turn(
         self, state: _Run, paused: PausedPlan | None, self_facts: Callable[[], str] | None
     ) -> AgentRunResult:
-        """Compile the turn, then answer, resume, confirm, control or run it."""
+        """Read the words against what the turn before asked (code's: a yes, a
+        pick, a dismissal, #251); else compile the turn, then answer, resume,
+        control or run it."""
         rt = self._rt
         if _stopped(state.stop):
             state.plan = TurnPlan(status="ran", note="stopped")
             return rt.stop("cancelled", [], [])
         pending = current_delegation_context().pending_confirm
-        # Several gated calls left several questions: a yes answers them all.
-        waiting = current_delegation_context().open_confirms()
-        # Code's question and a think's proposal (#78) both take a yes that
-        # runs a paused plan.
-        gate = paused if paused is not None and paused.reason in ("gate", "proposal") else None
+        # What the turn right before asked (#251): a card (an app's question,
+        # code's gate, a proposal, a pick-one), or an open question only words
+        # can answer. Their words may pick, change or dismiss it; nothing they
+        # say approves it.
+        card = pending is not None or (paused is not None and _on_a_card(paused))
+        opened = paused is not None and not _on_a_card(paused)
+        if plans.bare_yes(state.words, just_asked=card):
+            if card or state.cards_waiting:
+                return self._tap_the_card(state)
+            if not opened:
+                # Nothing waits at all: a yes answers nothing. Small talk, by
+                # code: the planner has no step for a yes (#251, #176).
+                return self._yes_to_nothing(state, self_facts)
+        if paused is not None and paused.reason in ("ask_user", "app_question"):
+            picked = self._picked(state, paused)
+            if picked is not None:
+                return picked
+        if (card or opened) and plans.dismisses(state.words):
+            return self._dismiss(state, paused, pending)
+        if card and plans.changes_what_waits(state.words):
+            return self._correct(state, paused, pending)
         checks = plans.Checks(
             fleet=self._fleet,
-            confirmable=pending is not None or gate is not None,
-            resumable=paused is not None and paused.reason in ("ask_user", "app_question"),
+            asked=card,
+            resumable=opened,
             context=state.context or "",
             # A correction with nothing waiting (#198): an amend, when the
             # ledger has a write the last plan finished.
@@ -386,9 +424,8 @@ class Interpreter:
                 note="; ".join(compiled.problems)[:500] or None,
                 repaired=compiled.repaired,
             )
-            return self._unplanned(state, compiled, waiting=checks.confirmable or checks.resumable)
+            return self._unplanned(state, compiled, waiting=checks.asked or checks.resumable)
         body = plans.dump(plan)
-        confirm_app = (gate.app if gate else None) or (pending.app if pending else None)
         logger.info(
             "plan_compiled", plan=plans.describe(plan), repaired=compiled.repaired, ms=compile_ms
         )
@@ -397,85 +434,234 @@ class Interpreter:
             rt.emit(state.on_activity, Activity(kind="model", ack=ack))
         turn = TurnPlan(body=body, status="ran", ack=ack, repaired=compiled.repaired)
         state.plan = turn
-        if isinstance(plan, plans.Resume) or (
-            isinstance(plan, plans.StepPlan) and isinstance(plan.steps[0], plans.Confirm)
-        ):
+        if isinstance(plan, plans.Resume):
             state.restate = False
         if isinstance(plan, plans.Direct):
             turn.status = "answered"
             return self._answer(state, plan, self_facts)
         if isinstance(plan, plans.Resume):
             assert paused is not None  # the validator only allows a resume while paused
+            turn.ends, turn.ends_as = paused.plan_id, "resumed"
             if paused.reason == "app_question":
                 return self._resume_app_question(state, turn, paused)
-            resumed = plans.load(paused.body)
-            assert isinstance(resumed, plans.StepPlan)
-            turn.body = paused.body
-            steps = resumed.steps[paused.resume_at :]
-            asked = resumed.steps[paused.resume_at - 1 : paused.resume_at]
-            offered = asked[0].options if asked and isinstance(asked[0], plans.AskUser) else []
-            # The person's pick, as the entity State named for it (#120).
-            value, picked = options.chosen(plan.resume, options.stored(paused.body, offered))
-            if offered and picked is None and plans.is_correction(state.words):
-                # "No, Saturday" over "which one?" (#77): it picks none of the
-                # options and says what instead, so it changes the waiting
-                # plan; as {s1} it would name a thing called "Saturday".
-                amend = plans.Amend(id="s1", do="amend", target="pending", change=state.words)
-                turn.body = {"steps": [amend.model_dump()]}
-                return control.run(
-                    self, state, turn, amend, state.view, paused=paused, pending=pending
-                )
-            if picked is not None and steps and plans.changes_too(state.words, value.text):
-                # "No, the bill one on Saturday" (#198): the pick fills {s1}
-                # and the rest of their words change the step it resumes.
-                target = steps[0]
-                if isinstance(target, plans.Ask | plans.Open):
-                    steps = [control.changed(target, state.words), *steps[1:]]
-                    kept = [*resumed.steps[: paused.resume_at], *steps]
-                    turn.body = {**paused.body, "steps": [s.model_dump() for s in kept]}
-            values = {"s1": value}
-            turn_events.resumed(
-                "ask_user",
-                step=asked[0].id if asked else None,
-                answer=value.text,
-                untrusted=value.untrusted,
-                entity=picked.entity if picked is not None else None,
-            )
-            return self._execute(state, turn, steps, paused.resume_at, values)
+            value, _ = options.chosen(plan.resume, [])
+            return self._resume_ask_user(state, turn, paused, value, None)
         assert isinstance(plan, plans.StepPlan)
+        # The planner's cancel never closes a card (#251): it reaches what an
+        # open question left waiting, or a running job.
+        reach = paused if opened else None
         controls = [step for step in plan.steps if step.do in plans.CONTROL_KINDS]
         if controls and len(plan.steps) > 1:
-            return self._split(state, turn, plan, controls, paused=paused, pending=pending)
+            return self._split(
+                state, turn, plan, controls, paused=paused, pending=pending, reach=reach
+            )
         first = plan.steps[0]
-        if isinstance(first, plans.Confirm):
-            if first.answer == "yes" and plans.declines(state.words):
-                # Code's backstop: a refusal is never read as a yes.
-                logger.warning("confirm_yes_on_a_refusal", words=state.words[:80])
-                first = first.model_copy(update={"answer": "no"})
-            if (
-                first.answer == "yes"
-                and (gate is None or gate.reason == "gate")
-                and not control.heard_question(
-                    _heard(state),
-                    waiting[-1].question if waiting and gate is None else None,
-                )
-            ):
-                # The yes answers a question they spoke over (#198).
-                return control.reask(self, state, turn, paused=paused, pending=pending)
-            return self._confirm(
-                state,
-                turn,
-                plan,
-                first,
-                gate=gate,
-                pending_app=confirm_app,
-                undoing=control.undo_waiting(paused, pending),
+        if isinstance(first, plans.Cancel):
+            return control.run(
+                self, state, turn, first, state.view, paused=reach, pending=None, cards=card
             )
         if first.do in plans.CONTROL_KINDS:
             return control.run(self, state, turn, first, state.view, paused=paused, pending=pending)
         return self._execute(state, turn, plan.steps, 0, {})
 
+    # --- code's reading of an answer (#251) --------------------------------------------------
+
+    def _tap_the_card(self, state: _Run) -> AgentRunResult:
+        """A bare yes with a card waiting: nothing is planned and nothing is
+        approved. Code says how to approve it."""
+        state.plan = TurnPlan(status="answered", note="a yes approves nothing: tap the card")
+        state.trace.narration = {"path": "code:tap_the_card", "appended": [], "model_calls": 0}
+        logger.info("yes_approves_nothing")
+        return self.say(state, TAP_THE_CARD)
+
+    def _yes_to_nothing(self, state: _Run, self_facts: Callable[[], str] | None) -> AgentRunResult:
+        """A bare yes with nothing waiting anywhere: the speaker answers it
+        as small talk, with no planner call. Nothing runs."""
+        plan = plans.Direct(answer="chat")
+        state.plan = TurnPlan(
+            body=plans.dump(plan), status="answered", note="a yes with nothing waiting"
+        )
+        logger.info("yes_with_nothing_waiting")
+        return self._answer(state, plan, self_facts)
+
+    def _picked(self, state: _Run, paused: PausedPlan) -> AgentRunResult | None:
+        """The person's words name one of the options the turn right before
+        offered: the same plan resumes with it, matched in code. ``None``
+        when they pick none (then they are a correction or a new request)."""
+        if paused.reason == "app_question":
+            candidates = [c for c in paused.body.get(APP_CANDIDATES) or [] if isinstance(c, dict)]
+            titles = [str(c.get("title") or "") for c in candidates]
+            if options.answers(state.words, titles) is None:
+                return None
+            turn = self._resumed_turn(state, paused)
+            return self._resume_app_question(state, turn, paused)
+        offered = _offered(paused)
+        if not offered:
+            return None
+        stored = options.stored(paused.body, offered)
+        if options.answers(state.words, [option.option for option in stored]) is None:
+            return None
+        value, picked = options.chosen(state.words, stored)
+        turn = self._resumed_turn(state, paused)
+        return self._resume_ask_user(state, turn, paused, value, picked)
+
+    def _resumed_turn(self, state: _Run, paused: PausedPlan) -> TurnPlan:
+        """The plan row of a turn that picks up a waiting plan with no
+        planner call: the waiting row ends as ``resumed``."""
+        turn = TurnPlan(body=paused.body, status="ran", ends=paused.plan_id, ends_as="resumed")
+        state.plan, state.restate = turn, False
+        return turn
+
+    def _dismiss(
+        self, state: _Run, paused: PausedPlan | None, pending: PendingConfirm | None
+    ) -> AgentRunResult:
+        """ "Never mind" to what the turn right before asked: that question
+        and what waited on it are dropped, nothing older. A cancel that code
+        compiled from the words, so a running job they name still takes it."""
+        step = plans.Cancel(id="s1", do="cancel", target="pending")
+        turn = TurnPlan(body={"steps": [step.model_dump()]}, status="ran")
+        state.plan, state.restate = turn, False
+        state.trace.narration = {"path": "code:dismiss", "appended": [], "model_calls": 0}
+        logger.info("question_dismissed", plan=paused.plan_id if paused else None)
+        if paused is not None and paused.reason == "proposal":
+            # A think's proposal (#78) is set aside; nothing of it ran.
+            turn.ends, turn.ends_as = paused.plan_id, "set_aside"
+            turn.note = "set the proposal aside"
+            return self.say(state, _SET_ASIDE)
+        return control.run(self, state, turn, step, state.view, paused=paused, pending=pending)
+
+    def _correct(
+        self, state: _Run, paused: PausedPlan | None, pending: PendingConfirm | None
+    ) -> AgentRunResult:
+        """A spoken correction of what the turn right before asked (#77: "no,
+        Saturday", "no, just the paint cabinets task"): the amend, compiled
+        by code from their own words. The waiting step is asked again with
+        the change, on a new card. (The planner's own amend still reaches
+        here for a change these words don't show.)"""
+        step = plans.Amend(id="s1", do="amend", target="pending", change=state.words)
+        turn = TurnPlan(body={"steps": [step.model_dump()]}, status="ran")
+        state.plan, state.restate = turn, False
+        logger.info("question_corrected", plan=paused.plan_id if paused else None)
+        return control.run(self, state, turn, step, state.view, paused=paused, pending=pending)
+
+    def _resume_ask_user(
+        self,
+        state: _Run,
+        turn: TurnPlan,
+        paused: PausedPlan,
+        value: dataflow.Value,
+        picked: options.Option | None,
+    ) -> AgentRunResult:
+        """The plan an ``ask_user`` paused goes on with the answer as
+        ``{s1}``: the picked option's entity (#120), or their words."""
+        resumed = plans.load(paused.body)
+        assert isinstance(resumed, plans.StepPlan)
+        turn.body = paused.body
+        steps = _waiting_steps(resumed, paused)
+        asked = resumed.steps[paused.resume_at - 1 : paused.resume_at]
+        if picked is not None and steps and plans.changes_too(state.words, value.text):
+            # "No, the bill one on Saturday" (#198): the pick fills {s1}
+            # and the rest of their words change the step it resumes.
+            target = steps[0]
+            if isinstance(target, plans.Ask | plans.Open):
+                changed = control.changed(target, state.words)
+                steps = [changed, *steps[1:]]
+                kept = [changed if s.id == changed.id else s for s in resumed.steps]
+                turn.body = {**paused.body, "steps": [s.model_dump() for s in kept]}
+        turn_events.resumed(
+            "ask_user",
+            step=asked[0].id if asked else None,
+            answer=value.text,
+            untrusted=value.untrusted,
+            entity=picked.entity if picked is not None else None,
+        )
+        return self._execute(state, turn, steps, paused.resume_at, {"s1": value})
+
+    # --- a card's tap (#251) -----------------------------------------------------------------
+
+    def resume(self, tapped: Resume, **turn: Any) -> AgentRunResult:
+        """Pick a waiting plan up from its card, with no chat turn: the steps
+        that waited on the question run now. ``turn`` is :meth:`run`'s
+        keywords; the words are the request that plan came from, for the
+        narrator, and restate nothing."""
+        return self.run(tapped.words, resume=tapped, **turn)
+
+    def _resume(self, state: _Run, tapped: Resume) -> AgentRunResult:
+        paused = tapped.paused
+        state.restate = False
+        if _stopped(state.stop):
+            state.plan = TurnPlan(status="ran", note="stopped")
+            return self._rt.stop("cancelled", [], [])
+        turn = self._resumed_turn(state, paused)
+        turn.ends_as = "accepted"
+        if paused.reason == "proposal":
+            return self._proposal(state, turn, paused)
+        body = plans.load(paused.body)
+        assert isinstance(body, plans.StepPlan)
+        steps = _waiting_steps(body, paused)
+        if paused.reason == "gate":
+            turn_events.resumed("gate", step=steps[0].id if steps else None)
+            if steps and isinstance(steps[0], plans.Undo):
+                return control.undo(
+                    self,
+                    state,
+                    turn,
+                    steps[0],
+                    state.view,
+                    position=paused.resume_at,
+                    gate_app=paused.app,
+                    only=_receipts(paused),
+                )
+            return self._execute(
+                state, turn, steps, paused.resume_at, {}, gate_passed=steps[0].id if steps else None
+            )
+        if paused.reason == "ask_user":
+            stored = options.stored(paused.body, _offered(paused))
+            if tapped.option is None or not 0 <= tapped.option < len(stored):
+                raise ValueError("that card has no such option")
+            option = stored[tapped.option]
+            # Their pick, by its place: the tap said which, word for word.
+            state.words = option.option
+            value, picked = options.chosen(option.option, stored)
+            return self._resume_ask_user(state, turn, paused, value, picked or option)
+        if paused.reason == "app_question":
+            candidates = [c for c in paused.body.get(APP_CANDIDATES) or [] if isinstance(c, dict)]
+            if tapped.option is None or not 0 <= tapped.option < len(candidates):
+                raise ValueError("that card has no such option")
+            state.words = str(candidates[tapped.option].get("title") or "")
+            state.picked = {**candidates[tapped.option], "picked": True}
+            return self._resume_app_question(state, turn, paused, picked=True)
+        # An app's questions, every one answered from its card: what waited
+        # on them runs with what the approved calls touched.
+        turn_events.resumed("app_confirm")
+        undoing = control.undo_step(paused)
+        if undoing is not None:
+            undo_step, position = undoing
+            turn.body = {"steps": [undo_step.model_dump()]}
+            return control.undo(
+                self,
+                state,
+                turn,
+                undo_step,
+                state.view,
+                position=position,
+                handled=tapped.undone,
+                only=_receipts(paused) or [],
+            )
+        values: dict[str, dataflow.Value] = {}
+        asking = body.steps[paused.resume_at - 1 : paused.resume_at]
+        touched = dataflow.from_record(tapped.app_record)
+        if asking and touched is not None:
+            values[asking[0].id] = touched
+        return self._execute(state, turn, steps, paused.resume_at, values)
+
     # --- a card's answer ---------------------------------------------------------------------
+
+    def undo_goes_on(
+        self, paused: PausedPlan, view: Callable[[], Ledgered], handled: Sequence[int]
+    ) -> bool:
+        """Whether a waiting undo has more to ask once its cards are answered."""
+        return control.undo_goes_on(self, control.View(view), paused, handled)
 
     def answer_confirm(self, app: str, *, actor: str = ACTOR) -> ToolCallRecord:
         """The person's yes from one question's card: that question's token
@@ -558,11 +744,13 @@ class Interpreter:
         *,
         paused: PausedPlan | None,
         pending: PendingConfirm | None,
+        reach: PausedPlan | None = None,
     ) -> AgentRunResult:
         """A control step inside a longer plan (#75) runs first, as a plan of
         its own; then the rest runs. The rest is not run, and said, when the
-        control step left a question waiting or the rest depended on what it
-        acted on (a ``{sN}`` on it, or a confirm of what it cancelled)."""
+        control step left a question waiting (a ``{sN}`` on a control step
+        never compiles: ``plans.unrunnable``). ``reach`` is what a cancel may
+        end (an open question's plan, never a card's, #251)."""
         if len(controls) > 1:
             turn.note = "more than one control step"
             state.trace.narration = {"path": "code:control", "appended": [], "model_calls": 0}
@@ -573,7 +761,19 @@ class Interpreter:
         turn.first = first
         turn.body = {"steps": [other.model_dump() for other in rest]}
         logger.info("plan_control_split", control=step.do, rest=len(rest))
-        done = control.run(self, state, first, step, state.view, paused=paused, pending=pending)
+        if isinstance(step, plans.Cancel):
+            done = control.run(
+                self,
+                state,
+                first,
+                step,
+                state.view,
+                paused=reach,
+                pending=None,
+                cards=pending is not None or (paused is not None and reach is None),
+            )
+        else:
+            done = control.run(self, state, first, step, state.view, paused=paused, pending=pending)
         turn.first_steps = len(state.records)
         state.since = len(state.records)
         if done.stop_reason != "completed":
@@ -582,10 +782,6 @@ class Interpreter:
         why: str | None = None
         if first.status == "paused" or narrator.live_confirm(state.records) is not None:
             why = _WAITS_ON_QUESTION
-        elif isinstance(rest[0], plans.Confirm) or any(
-            step.id in plans.REF.findall(plans.step_text(other)) for other in rest
-        ):
-            why = f"{run_record.NOT_RUN_PREFIX}it depended on what was {_ACTED_ON[step.do]}"
         if why is not None:
             self._skip(rest, state, why)
             turn.note = why[:500]
@@ -632,87 +828,12 @@ class Interpreter:
             lines.append("What I can do, through the apps:\n" + "\n".join(apps))
         return "\n\n".join(line for line in lines if line)
 
-    def _confirm(
-        self,
-        state: _Run,
-        turn: TurnPlan,
-        plan: plans.StepPlan,
-        step: plans.Confirm,
-        *,
-        gate: PausedPlan | None,
-        pending_app: str | None,
-        undoing: tuple[plans.Undo, int, tuple[int, ...]] | None = None,
-    ) -> AgentRunResult:
-        rest = plan.steps[1:]
-        if gate is not None and gate.reason == "proposal":
-            return self._proposal(state, turn, gate, step.answer)
-        if gate is not None:
-            # Conductor's own question: a yes runs the paused plan from the gated step.
-            turn.body = gate.body
-            if step.answer == "no":
-                turn.note = "declined at the gate"
-                return self._rt.finish("completed", _LEFT_IT, [], state.messages)
-            paused = plans.load(gate.body)
-            assert isinstance(paused, plans.StepPlan)
-            steps = paused.steps[gate.resume_at :]
-            turn_events.resumed("gate", step=steps[0].id if steps else None)
-            if steps and isinstance(steps[0], plans.Undo):
-                undo, at = steps[0], gate.resume_at
-                return control.undo(
-                    self, state, turn, undo, state.view, position=at, gate_app=gate.app
-                )
-            return self._execute(
-                state, turn, steps, gate.resume_at, {}, gate_passed=steps[0].id if steps else None
-            )
-        if step.answer == "no":
-            # The app's question lapses on its own; nothing is sent.
-            turn.note = "declined the app's question"
-            return self._rt.finish("completed", _LEFT_IT, [], state.messages)
-        turn_events.resumed("app_confirm")
-        turn_events.plan(turn.body, 0)
-        # One yes answers every question still open, each with its own token,
-        # in the order asked; one the app refuses doesn't stop the others.
-        apps = [one.app for one in current_delegation_context().open_confirms()]
-        answered: list[ToolCallRecord] = []
-        for app in apps or [pending_app or ""]:
-            if answered and _stopped(state.stop):
-                break
-            record = self._dispatch(state, _CONFIRM_TOOL, {"app": app})
-            if record is not None:
-                answered.append(record)
-        went_well = len(answered) == max(len(apps), 1) and all(
-            self._went_well(record) for record in answered
-        )
-        if len(answered) > 1 and not went_well:
-            # Which of an undo's receipts each question redeemed isn't known:
-            # none is marked undone unless every one went through.
-            for record in answered:
-                record.undoes = None
-        if undoing is not None and went_well:
-            # The yes was to an undo's question: the rest of that undo goes on.
-            undo_step, position, handled = undoing
-            turn.body = {"steps": [undo_step.model_dump()]}
-            return control.undo(
-                self, state, turn, undo_step, state.view, position=position, handled=handled
-            )
-        if not went_well:
-            return self._finish(state, turn, rest)
-        return self._execute(state, turn, rest, len(answered), {})
-
-    def _proposal(
-        self, state: _Run, turn: TurnPlan, proposal: PausedPlan, answer: str
-    ) -> AgentRunResult:
-        """The person's answer to a think's proposal (#78). Yes runs it as a
-        normal plan: a destructive ask to an app that doesn't confirm still
-        stops at code's gate, and an app still asks its own question. No sets
-        it aside; nothing runs."""
+    def _proposal(self, state: _Run, turn: TurnPlan, proposal: PausedPlan) -> AgentRunResult:
+        """A tap on a think's proposal (#78) runs it as a normal plan: a
+        destructive ask to an app that doesn't confirm still stops at code's
+        gate, and an app still asks its own question."""
         turn.body = proposal.body
-        turn.ends = proposal.plan_id
-        if answer == "no":
-            turn.ends_as = "set_aside"
-            turn.note = "set the proposal aside"
-            return self._rt.finish("completed", _SET_ASIDE, [], state.messages)
-        turn.ends_as = "accepted"
+        turn.ends, turn.ends_as = proposal.plan_id, "accepted"
         accepted = plans.load(proposal.body)
         assert isinstance(accepted, plans.StepPlan)
         ack = plans.ack(accepted)
@@ -738,8 +859,11 @@ class Interpreter:
         """Run ``steps``; ``offset`` is the first one's index in the plan.
 
         The plan ends at a think (#75): the steps after it are kept aside and
-        go on the record as not run when the plan ends."""
-        turn_events.plan(turn.body, offset)
+        go on the record as not run when the plan ends. A step that stops for
+        a question holds up only the steps that need its answer
+        (:meth:`_hold`, #251)."""
+        if not state.holding:
+            turn_events.plan(turn.body, offset)
         cut = next((n for n, step in enumerate(steps) if isinstance(step, plans.Think)), None)
         if cut is not None:
             state.dropped = list(steps[cut + 1 :])
@@ -749,16 +873,20 @@ class Interpreter:
         index = 0
         while index < len(steps):
             step = steps[index]
-            position = offset + index
+            position = _place(turn.body, step, offset + index)
             if _stopped(state.stop):
                 self._skip([*steps[index:], *state.dropped], state, STOPPED_ERROR)
                 turn.note = f"stopped before {step.id}"
                 return self._rt.stop("cancelled", state.records, state.messages)
             if isinstance(step, plans.AskUser):
-                turn.status, turn.pause, turn.resume_at = "paused", "ask_user", position + 1
                 if turn.body is not None:
                     turn.body = options.annotate(turn.body, step.options, state.context or "")
-                return self._ask_user(state, step)
+                stopped = self._hold(state, turn, step, steps[index + 1 :], values)
+                if stopped is not None:
+                    return stopped
+                turn.status, turn.pause, turn.resume_at = "paused", "ask_user", position + 1
+                self._carry(turn, position + 1, values)
+                return self._ask_user(state, step, turn)
             group = _read_group(steps, index, self._reads)
             if len(group) > 1:
                 results = self._dispatch_all(
@@ -785,7 +913,7 @@ class Interpreter:
                     None,
                 )
                 if asked is not None:
-                    return self._app_asked(state, turn, steps, offset + after, asked[0], values)
+                    return self._app_asked(state, turn, steps[after:], asked[0], values)
                 failed = [
                     read
                     for read, got in zip(group, results, strict=True)
@@ -811,10 +939,13 @@ class Interpreter:
                 if step.app == facts.APP:
                     record: ToolCallRecord | None = self._memory_app(state, filled.text)
                 elif step.destructive and not confirms and step.id != gate_passed:
+                    stopped = self._hold(state, turn, step, steps[index + 1 :], values, itself=True)
+                    if stopped is not None:
+                        return stopped
                     turn.status, turn.pause = "paused", "gate"
                     turn.resume_at, turn.pause_app = position, step.app
                     self._carry(turn, position, values)
-                    return self._gate(state, step, filled.text)
+                    return self._gate(state, step, filled.text, turn)
                 else:
                     record = self._dispatch(
                         state,
@@ -822,13 +953,13 @@ class Interpreter:
                         self._ask_arguments(state, step, filled.text, values),
                     )
                 if record is not None and record.app_confirm and record.app_confirm.get("question"):
-                    return self._app_asked(state, turn, steps, position + 1, step, values)
+                    return self._app_asked(state, turn, steps[index + 1 :], step, values)
             elif isinstance(step, plans.Look):
                 record = self._dispatch(state, look_tool_name(step.app), {})
                 if record is not None and not self._went_well(record):
                     record = self._look_fell_back(state, step, record, steps)
                     if record.app_confirm and record.app_confirm.get("question"):
-                        return self._app_asked(state, turn, steps, position + 1, step, values)
+                        return self._app_asked(state, turn, steps[index + 1 :], step, values)
             elif isinstance(step, plans.Think):
                 return self._think(state, turn, step, values)
             elif isinstance(step, plans.Recall):
@@ -839,7 +970,7 @@ class Interpreter:
                 if refusal is not None:
                     return self._refuse(state, turn, steps, index, filled, refusal)
                 record = self._dispatch(state, open_tool_name(step.app), {"intent": filled.text})
-            else:  # confirm and the control steps are handled before a plan runs
+            else:  # the control steps are handled before a plan runs
                 raise AssertionError(f"the interpreter can't run {step.do} here")
             if record is None or not self._went_well(record):
                 turn.note = f"stopped after {step.id}"
@@ -848,7 +979,7 @@ class Interpreter:
             if isinstance(step, plans.Ask) and narrator.app_asks(record) is not None:
                 # The app asked the person (#168): the plan waits on their
                 # answer, which goes back to the same step.
-                return self._app_questioned(state, turn, position, step, values)
+                return self._app_questioned(state, turn, position, step, values, steps[index + 1 :])
             if narrator.app_declined(record):
                 # It turned its part down: what follows would run on a guess.
                 owner = confirmation.record_app(record.tool, record.arguments) or "the app"
@@ -988,25 +1119,84 @@ class Interpreter:
         if value is not None:
             values[step.id] = value
 
+    def _hold(
+        self,
+        state: _Run,
+        turn: TurnPlan,
+        asking: plans.Step,
+        rest: Sequence[plans.Step],
+        values: dict[str, dataflow.Value],
+        *,
+        itself: bool = False,
+    ) -> AgentRunResult | None:
+        """A question never holds up what doesn't need its answer (#251).
+
+        Of the steps after the one that asked, those that use what it will
+        give (a ``{sN}`` on it, or on a step that waits) wait with it, and so
+        does a step that would stop for a question of its own; the rest run
+        now, in order. The plan's body keeps the ids of the waiting steps
+        (``itself``: the asking step runs again when it resumes, as a gated
+        one does). Returns the stopped turn when a Stop cut that short, else
+        ``None`` and the caller pauses the plan."""
+        waiting, free = plans.waiting_on(asking.id, rest, stops=self._would_stop)
+        ids = [asking.id] if itself else []
+        ids += [step.id for step in waiting]
+        if free and not _stopped(state.stop):
+            logger.info(
+                "plan_runs_past_question",
+                asking=asking.id,
+                runs=[step.id for step in free],
+                waits=[step.id for step in waiting],
+            )
+            beside = TurnPlan(body={}, status="ran")
+            state.holding += 1
+            try:
+                self._execute(state, beside, free, 0, values)
+            finally:
+                state.holding -= 1
+            ids += [str(one) for one in (beside.body or {}).get(WAITING) or []]
+            turn.note = beside.note or turn.note
+        if _stopped(state.stop):
+            self._skip(waiting, state, STOPPED_ERROR)
+            turn.note = f"stopped at {asking.id}'s question"
+            return self._rt.stop("cancelled", state.records, state.messages)
+        if turn.body is not None:
+            turn.body = {**turn.body, WAITING: sorted(set(ids), key=_step_number)}
+        return None
+
+    def _would_stop(self, step: plans.Step) -> bool:
+        """Whether a step stops for a question or ends the plan when it runs:
+        a destructive ask to an app that doesn't confirm (code's gate), an
+        ``ask_user`` or a think. Beside an open question it waits instead."""
+        if isinstance(step, plans.AskUser | plans.Think):
+            return True
+        if not isinstance(step, plans.Ask) or not step.destructive or step.app == facts.APP:
+            return False
+        app = self._fleet.get(step.app)
+        return not (app is not None and app.agent is not None and app.agent.confirms)
+
     def _app_asked(
         self,
         state: _Run,
         turn: TurnPlan,
-        steps: Sequence[plans.Step],
-        resume_at: int,
+        rest: Sequence[plans.Step],
         step: plans.Ask | plans.Look,
         values: dict[str, dataflow.Value],
     ) -> AgentRunResult:
-        """An app asked the person to confirm: the plan waits on their answer
-        if anything is left to run after it."""
-        plan_length = len((turn.body or {}).get("steps") or [])
+        """An app asked the person to confirm: each question is a card. The
+        steps that need what the confirmed call will touch wait with it; the
+        rest of the plan runs now (#251)."""
         asking = next((r for r in reversed(state.records) if r.app_confirm), None)
         question = "\n".join(narrator.asked_questions(asking)) if asking else None
         turn_events.paused("app_confirm", question=question or None, app=step.app, step=step.id)
-        if resume_at < plan_length:
+        position = _place(turn.body, step, 0)
+        stopped = self._hold(state, turn, step, rest, values)
+        if stopped is not None:
+            return stopped
+        if (turn.body or {}).get(WAITING):
             turn.status, turn.pause = "paused", "app_confirm"
-            turn.resume_at, turn.pause_app = resume_at, step.app
-            self._carry(turn, resume_at, values)
+            turn.resume_at, turn.pause_app = position + 1, step.app
+            self._carry(turn, position + 1, values)
             state.dropped = []  # still in the paused plan: said when it gets there
         return self._finish(state, turn, [])
 
@@ -1017,12 +1207,14 @@ class Interpreter:
         position: int,
         step: plans.Ask,
         values: dict[str, dataflow.Value],
+        rest: Sequence[plans.Step] = (),
     ) -> AgentRunResult:
         """An app that did nothing asked the person something (#168: music
-        naming the albums to pick from). The plan pauses at that step, the
-        rest unrun and unsaid; the next turn's resume sends the person's
-        answer back to it and goes on (:meth:`_resume_app_question`). The
-        reply is the app's question in its own words (``narrator``)."""
+        naming the albums to pick from). The plan pauses at that step; what
+        needs its answer waits unrun and unsaid, the rest runs now (#251). The
+        person's pick, or their words for an open question, goes back to the
+        step and the plan goes on (:meth:`_resume_app_question`). The reply
+        is the app's question in its own words (``narrator``)."""
         question = narrator.app_asks(state.records[-1])
         typed = (state.records[-1].app_asks or {}).get("needs_input") or {}
         candidates = typed.get("candidates") if isinstance(typed, dict) else None
@@ -1030,7 +1222,11 @@ class Interpreter:
             # What the person picks from goes with the plan (#196): their
             # answer is matched to one by code when it resumes.
             turn.body = {**turn.body, APP_CANDIDATES: list(candidates)}
+        _asks(turn, question)
         turn_events.paused("app_question", question=question, app=step.app, step=step.id)
+        stopped = self._hold(state, turn, step, rest, values, itself=True)
+        if stopped is not None:
+            return stopped
         turn.status, turn.pause = "paused", "app_question"
         turn.resume_at, turn.pause_app = position, step.app
         turn.note = f"{step.id} waits on the person: {step.app} asked"
@@ -1039,7 +1235,7 @@ class Interpreter:
         return self._finish(state, turn, [])
 
     def _resume_app_question(
-        self, state: _Run, turn: TurnPlan, paused: PausedPlan
+        self, state: _Run, turn: TurnPlan, paused: PausedPlan, *, picked: bool = False
     ) -> AgentRunResult:
         """The person answered an app's question (#168): the step that asked
         goes to the app again with their answer, in their own words (trusted),
@@ -1051,7 +1247,11 @@ class Interpreter:
         assert isinstance(asked, plans.Ask)
         answer = dataflow.answer(state.words).text
         candidates = [c for c in paused.body.get(APP_CANDIDATES) or [] if isinstance(c, dict)]
-        chosen = options.pick(state.words, [str(c.get("title") or "") for c in candidates])
+        chosen = (
+            None
+            if picked
+            else options.pick(state.words, [str(c.get("title") or "") for c in candidates])
+        )
         if chosen is not None:
             # The answer names one of the app's candidates (#196): the app gets
             # that ref, with its id and marked as the pick, not a title to reread.
@@ -1061,7 +1261,8 @@ class Interpreter:
         )
         turn.body = {**paused.body, "steps": [step.model_dump() for step in steps]}
         turn_events.resumed("app_question", step=asked.id, answer=answer)
-        return self._execute(state, turn, steps[paused.resume_at :], paused.resume_at, {})
+        resumed = resumed.model_copy(update={"steps": steps})
+        return self._execute(state, turn, _waiting_steps(resumed, paused), paused.resume_at, {})
 
     def _think_unplanned(self, state: _Run, compiled: compiler.Compiled) -> AgentRunResult:
         """A request no round could shape into a plan (#146): the person's own
@@ -1177,6 +1378,9 @@ class Interpreter:
         state.dropped = []
         if _stopped(state.stop):
             return self._rt.stop("cancelled", state.records, state.messages)
+        if state.holding:
+            # Steps run beside a question: the plan's own reply says them.
+            return self._rt.finish("completed", None, state.records, state.messages)
         reply = self._rt.reply(
             state.words, state.records[state.since :], state.trace, state.on_activity
         )
@@ -1366,8 +1570,9 @@ class Interpreter:
 
     # --- questions -------------------------------------------------------------------------
 
-    def _ask_user(self, state: _Run, step: plans.AskUser) -> AgentRunResult:
+    def _ask_user(self, state: _Run, step: plans.AskUser, turn: TurnPlan) -> AgentRunResult:
         question = step.question.strip()
+        _asks(turn, question)
         offered = [option.strip() for option in step.options if option.strip()]
         if offered:
             question = f"{question} ({' / '.join(offered)})"
@@ -1375,8 +1580,9 @@ class Interpreter:
         reply = self._with_record_line(state, question)
         return self._rt.finish("completed", reply, state.records, state.messages)
 
-    def _gate(self, state: _Run, step: plans.Ask, request: str) -> AgentRunResult:
+    def _gate(self, state: _Run, step: plans.Ask, request: str, turn: TurnPlan) -> AgentRunResult:
         question = f'Just to check: should I ask {step.app} to "{request}"?'
+        _asks(turn, question)
         turn_events.paused("gate", question=question, app=step.app, step=step.id)
         reply = self._with_record_line(state, question)
         return self._rt.finish("completed", reply, state.records, state.messages)
@@ -1500,9 +1706,97 @@ def _refusal(
     return None
 
 
+@dataclass(frozen=True)
+class Resume:
+    """A card's tap (#251): the waiting plan it picks up, with no words.
+
+    ``words`` is the request that plan came from (the narrator's context);
+    ``option`` the place of the option tapped on a pick-one. For an app's
+    questions answered from their cards, ``app_record`` is what the approved
+    calls did and ``undone`` the receipts they undid."""
+
+    paused: PausedPlan
+    words: str = ""
+    option: int | None = None
+    app_record: tuple[dict[str, Any], ...] = ()
+    undone: tuple[int, ...] = ()
+
+
+def _offered(paused: PausedPlan) -> list[str]:
+    """The options the ``ask_user`` a plan is paused on offered."""
+    try:
+        body = plans.load(paused.body)
+    except ValueError:
+        return []
+    if not isinstance(body, plans.StepPlan) or paused.reason != "ask_user":
+        return []
+    asked = body.steps[paused.resume_at - 1 : paused.resume_at]
+    if not asked or not isinstance(asked[0], plans.AskUser):
+        return []
+    return [option for option in asked[0].options if option.strip()]
+
+
+def _on_a_card(paused: PausedPlan) -> bool:
+    """Whether a waiting plan's question is a card a tap answers (#251):
+    code's gate, a proposal, an app's confirm, or a pick-one. An open
+    question (an ``ask_user`` with no options, an app's with no candidates)
+    waits on the person's words instead, for one turn."""
+    if paused.reason == "ask_user":
+        return bool(_offered(paused))
+    if paused.reason == "app_question":
+        return bool(paused.body.get(APP_CANDIDATES))
+    return True
+
+
+def on_a_card(paused: PausedPlan) -> bool:
+    """:func:`_on_a_card`, for the page's cards and the state block."""
+    return _on_a_card(paused)
+
+
+def waiting_steps(paused: PausedPlan) -> list[plans.Step]:
+    """The steps a waiting plan still has to run."""
+    body = plans.load(paused.body)
+    return _waiting_steps(body, paused) if isinstance(body, plans.StepPlan) else []
+
+
+def _waiting_steps(plan: plans.StepPlan, paused: PausedPlan) -> list[plans.Step]:
+    """The steps a waiting plan runs when it resumes: those its body lists as
+    waiting, or everything from where it paused (a body from before #251)."""
+    rest = list(plan.steps[paused.resume_at :])
+    ids = paused.body.get(WAITING)
+    if not isinstance(ids, list):
+        return rest
+    return [step for step in rest if step.id in ids]
+
+
+def _asks(turn: TurnPlan, question: str | None) -> None:
+    """Keep a pausing plan's question with it, for its card (#251)."""
+    if turn.body is not None and question:
+        turn.body = {**turn.body, QUESTION: question}
+
+
+def _receipts(paused: PausedPlan) -> list[int] | None:
+    """The receipts a waiting undo chose when it asked, if its body says."""
+    kept = paused.body.get(control.UNDO_RECEIPTS)
+    return [i for i in kept if isinstance(i, int)] if isinstance(kept, list) else None
+
+
+def _place(body: dict[str, Any] | None, step: plans.Step, fallback: int) -> int:
+    """A step's index in the plan's body: what runs may be a part of it."""
+    for index, stored in enumerate((body or {}).get("steps") or []):
+        if isinstance(stored, dict) and stored.get("id") == step.id:
+            return index
+    return fallback
+
+
+def _step_number(step_id: str) -> int:
+    return int(step_id[1:]) if step_id[1:].isdigit() else 0
+
+
 def answering(raws: Sequence[str]) -> bool:
     """Whether any try read the words as an answer or a control (#146): a
-    resume, a confirm, or a cancel, amend or undo. Those fail on what's
+    resume, a confirm (refused: no step approves, #251), or a cancel, amend
+    or undo. Those fail on what's
     waiting, not on how hard the request is, so there is nothing to think
     over; code says it couldn't put that together."""
     for raw in raws:
@@ -1563,17 +1857,6 @@ def _joined(first: str | None, second: str | None, surface: str | None) -> str |
         first = sentences[0] if len(sentences) == 1 else sentences[0] + "."
     parts = [part.strip() for part in (first, second) if part and part.strip()]
     return " ".join(parts) or None
-
-
-def _heard(state: _Run) -> state_block.Heard | None:
-    """The reply the person spoke over, if they did; a failed read is none."""
-    if state.heard is None:
-        return None
-    try:
-        return state.heard()
-    except Exception as exc:  # the report is a refinement, never the turn
-        logger.warning("heard_read_failed", error=str(exc), error_type=type(exc).__name__)
-        return None
 
 
 def _stopped(stop: Stop | None) -> bool:

@@ -72,6 +72,8 @@ FLOORS: dict[str, float] = {
     "cross": 0.8,
     "ref": 0.85,
     "control": 0.8,
+    # A waiting card never owns the next turn (#251).
+    "cards": 0.8,
     "memory": 0.8,
     "knowledge": 0.65,
     "hard": 0.5,
@@ -144,7 +146,7 @@ def _compile(case: Case, fleet: Fleet, prompt: str) -> tuple[compiler.Compiled, 
     state = case.state or empty_state()
     checks = plans.Checks(
         fleet=fleet,
-        confirmable=case.confirmable,
+        asked=case.asked,
         resumable=case.resumable,
         context=state,
         changeable=case.changeable,

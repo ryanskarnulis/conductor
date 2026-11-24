@@ -36,7 +36,6 @@ from tests.scripted_provider import text_turn
 from tests.session_harness import (
     Advance,
     CloseThread,
-    ConfirmIfAsked,
     NewConversation,
     OpenThread,
     Say,
@@ -44,6 +43,7 @@ from tests.session_harness import (
     Search,
     Session,
     Settle,
+    Tap,
     StopAfter,
 )
 
@@ -137,9 +137,6 @@ def look(app: str) -> dict[str, Any]:
 def _ask(app: str, request: str, *, destructive: bool = False) -> Any:
     """A one-step plan asking ``app``."""
     return plan(ask(app, request, destructive=destructive))
-
-
-YES = plan({"do": "confirm", "answer": "yes"})
 
 
 # --- S1 what's due today ----------------------------------------------------------------
@@ -445,10 +442,11 @@ S8 = Scenario(
 
 def _s9(session: Session) -> None:
     ask, yes = session.turn("ask"), session.turn("yes")
-    assert not session.writes(ask), "wrote before the yes"
+    assert not session.writes(ask), "wrote before the tap"
     assert asked(ask.reply), "didn't ask before wiping"
+    assert ask.cards == 1, f"{ask.cards} cards waited after the question, not one"
     trashed = [r for r in session.writes(yes) if r.kind == "trash" and r.title == "Kitchen"]
-    assert trashed, "the yes didn't wipe the kitchen project"
+    assert trashed, "the tap didn't wipe the kitchen project"
     only_writes(session, {("trash", "kitchen")})
     assert re.search(r"trash|deleted|removed|wiped|bin", _lower(yes.reply)), (
         "didn't say where it went"
@@ -457,15 +455,12 @@ def _s9(session: Session) -> None:
 
 S9 = Scenario(
     "S9",
-    "wipe the kitchen project → asks once → 'yes' → done, says what went to the trash",
-    (Say("wipe the kitchen project", label="ask"), Say("yes", label="yes")),
+    "wipe the kitchen project → asks once, on a card → its tap → done, says what went to the trash",
+    (Say("wipe the kitchen project", label="ask"), Tap(label="yes")),
     (_s9,),
     tier="gate",
-    script=lambda w: [
-        _ask("tasks", "delete the Kitchen project", destructive=True),
-        YES,
-        _say("Done: the Kitchen project and its 3 tasks went to the trash."),
-    ],
+    # The tap is code's: the token goes to tasks and the card shows its note.
+    script=lambda w: [_ask("tasks", "delete the Kitchen project", destructive=True)],
 )
 
 
@@ -502,9 +497,9 @@ def _s11(session: Session) -> None:
     assert created, "S3's task was never made"
     assert all(_task_for(session, r).trashed for r in created), "the task wasn't undone"
     assert all(job.state != "cancelled" for job in session.world.jobs.values())
-    reply = _lower(session.last.reply)
+    reply = _lower(session.turn("undo").reply)
     # #185: the download is left running on purpose, so saying it still runs
-    # says why it wasn't undone.
+    # says why it wasn't undone. Said with the question; the tap runs no turn.
     assert re.search(
         r"(download|album|honey)[^.]*(can't|cannot|can not|could not|couldn't|stays|already|"
         r"isn't|won't|no way|not able|still (?:running|downloading|going|queued))"
@@ -517,14 +512,12 @@ def _s11(session: Session) -> None:
 S11 = Scenario(
     "S11",
     "after S3, 'undo that': the task is trashed, and it says the download can't be undone",
-    (Say(_S3_TEXT), Say("undo that", label="undo"), ConfirmIfAsked("yes")),
+    (Say(_S3_TEXT), Say("undo that", label="undo"), Tap(if_asked=True)),
     (_s11,),
-    # The undo is tasks' own question, passed through; the yes is narrated (#74).
+    # The undo is tasks' own question, passed through on a card; its tap is code's (#251).
     script=lambda w: [
         *_s3_script(w),
         plan({"do": "undo", "target": "last"}),
-        YES,
-        _say("Trashed “sort Honey”. The Honey download can't be undone, and it's still running."),
     ],
 )
 
@@ -608,11 +601,11 @@ S14 = Scenario(
     "S14",
     "plan my week around the garage project: a concrete plan, confirmed before writing",
     # A think (#78) answers at once and posts its proposal later: the person
-    # waits for it before saying yes.
+    # waits for it, then taps its card.
     (
         Say("plan my week around the garage project", label="propose"),
         Settle(),
-        Say("yes", label="go"),
+        Tap(label="go"),
     ),
     (_s14,),
     script=lambda w: [
@@ -636,7 +629,6 @@ S14 = Scenario(
                 }
             )
         ),
-        YES,
         _say(
             "Added buy the steel rack (Mon), assemble the shelves (Wed) and sweep the garage "
             "floor (Fri)."
@@ -709,9 +701,9 @@ S15_PICKED = Scenario(
     (_s15_picked,),
     script=lambda w: [
         *(S15.script(w) if S15.script else []),
-        # Music's question paused the plan: "Suddenly" resumes it, the
-        # answer goes back to music and the task waits on its name.
-        text_turn(json.dumps({"about": "the waiting question", "resume": "Suddenly"})),
+        # Music's question paused the plan: "Suddenly" names one of its
+        # albums, so code resumes it (#251, no planner call); the answer
+        # goes back to music and the task waits on its name.
         _say("Queued “Suddenly” by Caribou and added “sort Suddenly” for the weekend."),
     ],
 )
@@ -1084,18 +1076,211 @@ CORRECTED = Scenario(
     (
         Say("wipe the kitchen project", surface="voice", label="ask"),
         Say("no, just the paint cabinets task", surface="voice", cut=0.3, label="fix"),
-        ConfirmIfAsked("yes"),
+        Tap(if_asked=True),
     ),
     (_corrected_not_dropped,),
     # Unmeasured: added with #77, not yet run live (the batch's eval gate runs it).
     tier="frontier",
-    # Tasks asks each time (its own question, passed through); the amend
-    # resends the request with the change, and the yes is narrated.
+    # Tasks asks each time (its own question, passed through); code amends
+    # the request with their words (#251), and the new card's tap is code's.
+    script=lambda w: [_ask("tasks", "delete the Kitchen project", destructive=True)],
+)
+
+
+# --- Questions never block the chat (#251) -----------------------------------------------------
+#
+# A question is a card and only a tap approves it. These read the end state:
+# what was written, and how many cards still wait.
+
+
+def _yes_approves_nothing(session: Session) -> None:
+    ask, yes, tap = session.turn("ask"), session.turn("yes"), session.turn("tap")
+    assert not session.writes(ask) and not session.writes(yes), "a spoken yes wrote something"
+    assert not yes.acted, f"the yes was planned: {yes.acted}"
+    assert "tap" in _lower(yes.reply), "didn't say to tap the card"
+    assert yes.cards == 1, f"{yes.cards} cards waited after the yes, not one"
+    assert any(r.kind == "trash" and r.title == "Kitchen" for r in session.writes(tap)), (
+        "the tap didn't wipe the kitchen project"
+    )
+    only_writes(session, {("trash", "kitchen")})
+
+
+YES_APPROVES_NOTHING = Scenario(
+    "Q1",
+    "'wipe the kitchen project', then 'yes': nothing is approved and code says to tap; the "
+    "card's tap wipes it",
+    (
+        Say("wipe the kitchen project", label="ask"),
+        Say("yes", label="yes"),
+        Tap(label="tap"),
+    ),
+    (_yes_approves_nothing,),
+    # Unmeasured: added with #251, not yet run live (the PR's eval gate runs it).
+    tier="frontier",
+    script=lambda w: [_ask("tasks", "delete the Kitchen project", destructive=True)],
+)
+
+
+def _card_survives_other_turns(session: Session) -> None:
+    other, tap = session.turn("other"), session.turn("tap")
+    assert not session.writes(other), "the unrelated turn wrote something"
+    assert other.cards == 1, f"{other.cards} cards waited after the unrelated turn, not one"
+    due = [task.title for task in session.world.due_today()]
+    assert any(refers_to(other.reply or "", title) for title in due), "didn't answer what's due"
+    assert any(r.kind == "trash" and r.title == "Kitchen" for r in session.writes(tap)), (
+        "the late tap didn't wipe the kitchen project"
+    )
+    only_writes(session, {("trash", "kitchen")})
+
+
+CARD_SURVIVES = Scenario(
+    "Q2",
+    "'wipe the kitchen project', then 'what's due today?': answered, the card stays, and its "
+    "tap still wipes the project",
+    (
+        Say("wipe the kitchen project", label="ask"),
+        Say("what's due today?", label="other"),
+        Tap(label="tap"),
+    ),
+    (_card_survives_other_turns,),
+    tier="frontier",
     script=lambda w: [
         _ask("tasks", "delete the Kitchen project", destructive=True),
-        plan({"do": "amend", "target": "pending", "change": "just the paint cabinets task"}),
-        YES,
-        _say("Trashed “paint cabinets”."),
+        plan(look("tasks")),
+        _say("Groceries and call mom are due today."),
+    ],
+)
+
+
+def _new_request_beside_a_pick_one(session: Session) -> None:
+    which, new, pick = session.turn("which"), session.turn("new"), session.turn("pick")
+    assert not session.writes(which), "wrote though music couldn't say which album"
+    made = [r for r in session.writes(new) if r.kind == "create"]
+    assert [r for r in made if "plants" in r.title.lower()], (
+        "the new request wasn't run as asked (it was read as the answer?)"
+    )
+    assert not [r for r in session.writes(new) if r.kind == "queue"], (
+        "the new request answered the album question"
+    )
+    assert new.cards == 1, f"{new.cards} cards waited after the new request, not one"
+    queued = [r.title for r in session.writes(pick) if r.kind == "queue"]
+    assert queued == ["Swim"], f"the tap queued {queued or 'nothing'}, not Swim"
+
+
+NEW_REQUEST_BESIDE_PICK = Scenario(
+    "Q3",
+    "music asks which album; 'add a task to water the plants tomorrow' runs as a new request, "
+    "the pick-one card stays, and its tap queues that album",
+    (
+        Say("download the new Caribou album"),
+        Say("download their other album", label="which"),
+        Say("add a task to water the plants tomorrow", label="new"),
+        Tap(option=1, label="pick"),
+    ),
+    (_new_request_beside_a_pick_one,),
+    tier="frontier",
+    script=lambda w: [
+        _ask("music", "download the new Caribou album"),
+        _say("Queued “Honey” by Caribou."),
+        _ask("music", "download the other album by Caribou"),
+        _ask("tasks", "add a task to water the plants tomorrow"),
+        _say("Added “water the plants” for tomorrow."),
+        _say("Queued “Swim” by Caribou."),
+    ],
+)
+
+
+def _stale_card_does_nothing(session: Session) -> None:
+    tap = session.turn("tap")
+    groceries = next(t for t in session.world.tasks.values() if t.title == "groceries")
+    assert groceries.done, "groceries was never marked done"
+    assert not groceries.trashed, "a stale card trashed the finished task"
+    assert not session.writes(tap), "the stale tap wrote something"
+    assert re.search(r"finish|done|complet|changed", _lower(tap.reply)), (
+        "didn't say the task was finished since it was asked about"
+    )
+    assert tap.cards == 0, f"{tap.cards} cards still waited after the stale tap"
+    only_writes(session, {("complete", "groceries")})
+
+
+STALE_CARD = Scenario(
+    "Q4",
+    "'delete the groceries task', then 'mark groceries as done', then the old card's tap: the "
+    "app re-checks, says it was finished, and trashes nothing",
+    (
+        Say("delete the groceries task", label="ask"),
+        Say("mark the groceries task as done", label="done"),
+        Tap(label="tap"),
+    ),
+    (_stale_card_does_nothing,),
+    tier="frontier",
+    script=lambda w: [
+        _ask("tasks", "delete the groceries task", destructive=True),
+        _ask("tasks", "mark the groceries task as done"),
+        _say("Marked “groceries” done."),
+    ],
+)
+
+
+def _dependent_runs_on_a_late_tap(session: Session) -> None:
+    same, other, pick = session.turn("same"), session.turn("other"), session.turn("pick")
+    assert not session.writes(same), "wrote before the album was picked"
+    assert not session.writes(other), "the unrelated turn wrote something"
+    assert other.cards == 1, f"{other.cards} cards waited after the unrelated turn, not one"
+    queued = [r.title for r in session.writes(pick) if r.kind == "queue"]
+    assert queued == ["Suddenly"], f"the tap queued {queued or 'nothing'}, not Suddenly"
+    # The step that waited on the album's name ran on the tap, with no chat turn.
+    assert [r for r in session.writes(pick) if r.kind == "create"], (
+        "the task that waited on the album wasn't made when its card was tapped"
+    )
+    _weekend_task_titled(session, "suddenly")
+
+
+DEPENDENT_ON_LATE_TAP = Scenario(
+    "Q5",
+    "'download their other album and add a task to sort it', an unrelated question, then a "
+    "tap on 'Suddenly': the album is queued and the task that waited on its name is made, "
+    "with no chat turn",
+    (
+        Say(_S3_TEXT),
+        Say("download their other album and add a task to sort it this weekend", label="same"),
+        Say("what's due today?", label="other"),
+        Tap(option=0, label="pick"),
+    ),
+    (_dependent_runs_on_a_late_tap,),
+    tier="frontier",
+    script=lambda w: [
+        *(S15.script(w) if S15.script else []),
+        plan(look("tasks")),
+        _say("Groceries and call mom are due today."),
+        _say("Queued “Suddenly” by Caribou and added “sort Suddenly” for the weekend."),
+    ],
+)
+
+
+def _asked_twice_is_one_card(session: Session) -> None:
+    first, again, tap = session.turn("ask"), session.turn("again"), session.turn("tap")
+    assert not session.writes(first) and not session.writes(again), "wrote before the tap"
+    assert again.cards == 1, f"{again.cards} cards waited after asking twice, not one"
+    assert tap.cards == 0, f"{tap.cards} cards still waited after the tap"
+    trashed = [r for r in session.world.receipts if r.kind == "trash"]
+    assert [r.title for r in trashed] == ["groceries"], f"trashed {[r.title for r in trashed]}"
+
+
+ASKED_TWICE = Scenario(
+    "Q6",
+    "'delete the groceries task' twice: the second question replaces the first card, and one "
+    "tap trashes it once",
+    (
+        Say("delete the groceries task", label="ask"),
+        Say("delete the groceries task", label="again"),
+        Tap(label="tap"),
+    ),
+    (_asked_twice_is_one_card,),
+    tier="frontier",
+    script=lambda w: [
+        _ask("tasks", "delete the groceries task", destructive=True),
+        _ask("tasks", "delete the groceries task", destructive=True),
     ],
 )
 
@@ -1165,4 +1350,10 @@ SCENARIOS: tuple[Scenario, ...] = (
     INTERRUPTED,
     CORRECTED,
     FINISHED_CORRECTED,
+    YES_APPROVES_NOTHING,
+    CARD_SURVIVES,
+    NEW_REQUEST_BESIDE_PICK,
+    STALE_CARD,
+    DEPENDENT_ON_LATE_TAP,
+    ASKED_TWICE,
 )

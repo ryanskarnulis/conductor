@@ -5,11 +5,14 @@ waiting or on what just ran, not on an app. Each runs as a plan of its own
 (#75: one inside a longer plan is split off and runs first); the interpreter
 hands it here.
 
-- **cancel** ends the plan waiting on the person: paused on ``ask_user``, on
-  code's own question (the gate), or on an app's ``confirm_required``. The
-  app's token lapses (it is never sent), the waiting plan's ledger row says
-  ``cancelled``, and code says plainly what won't happen. Nothing waiting: it
-  says so.
+- **cancel** ends what the turn right before left waiting: a plan paused on
+  ``ask_user``, on code's own question (the gate), or on an app's
+  ``confirm_required``. The app's token is never sent, the waiting plan's
+  ledger row says ``cancelled``, and code says plainly what won't happen.
+  Nothing waiting: it says so. A card closes this way only when code read
+  the person's words as a dismissal (#251, ``plan.dismisses``); the
+  planner's own cancel reaches an open question or a running job, never a
+  card.
 - **amend** rewrites the waiting step's words with the change and resumes the
   same plan from it. A gated step is asked about again in its new words; an
   app's question lapses and the app gets the changed request (it may ask
@@ -21,7 +24,7 @@ hands it here.
   ones only when the target names them) and, per app, asks the owning app to
   redeem its undo handles: through the app's own confirmation when it has
   ``confirms``, else after code's ask-first pause, as for any destructive
-  ask. A receipt with no undo (``undo_none``), an ``unknown`` receipt, or one
+  ask. Either question is a card, and its tap carries the undo on. A receipt with no undo (``undo_none``), an ``unknown`` receipt, or one
   from an app conductor can't reach is said plainly, never tried. A receipt
   is undone once: the call that redeems it carries its ids
   (``ToolCallRecord.undoes``) and the ledger marks it when the app says it
@@ -46,7 +49,8 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from app.ai import dataflow, job_control, narrator, run_record, state_block, turn_events
+from app.ai import confirmation, dataflow, job_control, narrator, run_record, turn_events
+from app.ai import options
 from app.ai import plan as plans
 from app.ai.confirmation import PendingConfirm
 from app.ai.plan import Ledgered, PausedPlan, TurnPlan, UndoReceipt
@@ -71,11 +75,12 @@ CANT_AMEND_PROPOSAL = (
     "Ask again with the change and I'll think it over."
 )
 CANT_CHANGE_DONE = "I can't tell which thing I just did you mean, so I haven't changed anything."
-ASKING_AGAIN = "You spoke over my question, so here it is again."
-UNHEARD_LEFT = (
-    "You spoke over my question before you could hear it, so I haven't taken that as a yes "
-    "and nothing changed. Ask again and I'll check with you."
-)
+CARD_STAYS = "Nothing is running to cancel. The card still waits: tap Not now to drop it."
+# Where a paused body keeps the ids of the steps waiting with its question
+# (``interpreter.WAITING``).
+_WAITING = "waiting"
+# Where a paused undo's body keeps the receipts it chose.
+UNDO_RECEIPTS = "undo_receipts"
 _UNDO_STOPPED = f"{run_record.NOT_RUN_PREFIX}an earlier part of the undo didn't finish"
 
 # How many things one undo request or note names before it counts the rest.
@@ -117,11 +122,14 @@ def run(
     *,
     paused: PausedPlan | None,
     pending: PendingConfirm | None,
+    cards: bool = False,
 ) -> AgentRunResult:
-    """Run a control plan's one step."""
-    said = _as_said(
-        step, view, words=state.words, waiting=paused is not None or pending is not None
-    )
+    """Run a control plan's one step. ``cards``: a card waits that this
+    step may not close (the planner's cancel, #251)."""
+    # A card the step may not close still waits (#251): a cancel reaches a
+    # running job only when it names it, never by default.
+    waits = paused is not None or pending is not None or cards
+    said = _as_said(step, view, words=state.words, waiting=waits)
     if said is not step:
         # The plan on the ledger is the one code ran: a yes to the app's
         # question resumes an undo from it.
@@ -135,13 +143,12 @@ def run(
             return job_control.cancel(interp, state, turn, cancel_step, captured)
     if isinstance(step, plans.Cancel | plans.Amend):
         running = view.running()
-        waiting = paused is not None or pending is not None
-        if job_control.aims_at_job(step, running, waiting=waiting, words=state.words):
+        if job_control.aims_at_job(step, running, waiting=waits, words=state.words):
             if isinstance(step, plans.Cancel):
                 return job_control.cancel(interp, state, turn, step, running)
             return job_control.amend(interp, state, turn, step, running)
     if isinstance(step, plans.Cancel):
-        return cancel(interp, state, turn, paused=paused, pending=pending)
+        return cancel(interp, state, turn, paused=paused, pending=pending, cards=cards)
     if isinstance(step, plans.Amend):
         return amend(interp, state, turn, step, view, paused=paused, pending=pending)
     assert isinstance(step, plans.Undo)
@@ -208,13 +215,19 @@ def cancel(
     *,
     paused: PausedPlan | None,
     pending: PendingConfirm | None,
+    cards: bool = False,
 ) -> AgentRunResult:
     if paused is None and pending is None:
-        turn.note = "cancel: nothing was waiting"
-        return _say(interp, state, NOTHING_TO_CANCEL)
-    _lapse()
+        turn.note = "cancel: nothing was waiting" + (" but a card, which stays" if cards else "")
+        return _say(interp, state, CARD_STAYS if cards else NOTHING_TO_CANCEL)
+    asked = current_delegation_context().open_confirms()
+    _lapse(confirmation.DISMISSED)
     wont: list[str] = []
-    if pending is not None:
+    if len(asked) > 1:
+        wont.append(
+            f"{pending.app if pending else 'the app'} won't get a yes to any of its {len(asked)} questions"
+        )
+    elif pending is not None:
         wont.append(f'{pending.app} won\'t get a yes to "{_flat(pending.question)}"')
     if paused is not None:
         wont += _waiting(paused)
@@ -235,7 +248,7 @@ def _waiting(paused: PausedPlan) -> list[str]:
     if not isinstance(body, plans.StepPlan):
         return []
     lines: list[str] = []
-    for step in body.steps[paused.resume_at :]:
+    for step in _still_waiting(body, paused):
         if isinstance(step, plans.Ask):
             lines.append(f'I won\'t ask {step.app} to "{_unref(step.request)}"')
         elif isinstance(step, plans.Open):
@@ -245,6 +258,14 @@ def _waiting(paused: PausedPlan) -> list[str]:
     if len(lines) > MAX_NAMED:
         lines = [*lines[:MAX_NAMED], "nor the rest of the plan"]
     return lines
+
+
+def _still_waiting(body: plans.StepPlan, paused: PausedPlan) -> list[plans.Step]:
+    """The steps a waiting plan hasn't run: those its body lists as waiting
+    (#251: the rest ran beside the question), or all from where it paused."""
+    rest = list(body.steps[paused.resume_at :])
+    ids = paused.body.get(_WAITING)
+    return rest if not isinstance(ids, list) else [step for step in rest if step.id in ids]
 
 
 # --- amend -----------------------------------------------------------------------------------
@@ -272,7 +293,7 @@ def amend(
     if paused.reason == "proposal":
         # A think's proposal (#78) runs only as the person saw it: a change
         # sets it aside, never edits it into something they didn't see.
-        _lapse()
+        _lapse(confirmation.AMENDED)
         turn.ends, turn.ends_as = paused.plan_id, "set_aside"
         turn.note = "amend: a proposal can't be edited; set it aside"
         return _say(interp, state, CANT_AMEND_PROPOSAL)
@@ -285,14 +306,16 @@ def amend(
         return _say(interp, state, NOTHING_TO_CHANGE)
     target = steps[at]
     if isinstance(target, plans.Undo):
-        _lapse()
+        _lapse(confirmation.DISMISSED)
         turn.ends, turn.ends_as = paused.plan_id, "cancelled"
         turn.note = "amend: an undo can't be changed; dropped it"
         return _say(interp, state, CANT_AMEND_UNDO)
     assert isinstance(target, plans.Ask | plans.Open)
     steps[at] = changed(target, change)
-    _lapse()
-    turn.body = {"steps": [s.model_dump() for s in steps]}
+    _lapse(confirmation.AMENDED)
+    # The waiting steps and the options' entities go with the amended plan.
+    kept = {key: paused.body[key] for key in (_WAITING, options.KEY) if key in paused.body}
+    turn.body = {**kept, "steps": [s.model_dump() for s in steps]}
     turn.ends, turn.ends_as = paused.plan_id, "amended"
     turn.note = f"amended {target.id}"
     logger.info("plan_amended", plan=paused.plan_id, step=target.id)
@@ -300,8 +323,12 @@ def amend(
         question = steps[paused.resume_at - 1]
         assert isinstance(question, plans.AskUser)
         turn.status, turn.pause, turn.resume_at = "paused", "ask_user", paused.resume_at
-        return interp._ask_user(state, question)
-    return interp._execute(state, turn, steps[at:], at, {})
+        return interp._ask_user(state, question, turn)
+    # The changed step, then what still waited: the rest of the plan already
+    # ran beside the question (#251).
+    amended = plans.StepPlan(steps=steps)
+    later = [step for step in _still_waiting(amended, paused) if step is not steps[at]]
+    return interp._execute(state, turn, [steps[at], *later], at, {})
 
 
 def _amended_at(paused: PausedPlan, steps: Sequence[plans.Step]) -> int | None:
@@ -331,7 +358,7 @@ def _amend_question(
     if pending.request is None or pending.undoes:
         turn.note = "amend: the app's question can't be changed"
         return _say(interp, state, NOTHING_TO_CHANGE)
-    _lapse()
+    _lapse(confirmation.AMENDED)
     request = _with_change(pending.request, change)
     ask = plans.Ask(id="s1", do="ask", app=pending.app, request=request, destructive=False)
     turn.body = {"steps": [ask.model_dump()]}
@@ -421,78 +448,6 @@ def _amend_done(
     return interp._execute(state, turn, [ask], 0, {})
 
 
-# --- a yes to a question the person didn't hear (#198) ---------------------------------------
-
-
-def heard_question(heard: state_block.Heard | None, question: str | None = None) -> bool:
-    """Whether the person heard the question their yes answers. They spoke
-    over the reply (#77), so only when what played reaches the question's
-    end: the app's own words when the reply has them, else the reply's last
-    question mark. The cut is an estimate from playback time, so the last
-    word may be missing. No report, or one that can't say how much played,
-    is as before: heard."""
-    if heard is None or heard.heard_chars is None:
-        return True
-    reply = heard.reply
-    end = 0
-    if question and question.strip():
-        at = reply.rfind(question.strip())
-        end = at + len(question.strip()) if at >= 0 else 0
-    if end <= 0:
-        end = reply.rfind("?") + 1 or len(reply.rstrip())
-    cut = state_block.utf16_index(reply, heard.heard_chars)
-    return len(reply[cut:end].split()) <= 1
-
-
-def reask(
-    interp: Interpreter,
-    state: _Run,
-    turn: TurnPlan,
-    *,
-    paused: PausedPlan | None,
-    pending: PendingConfirm | None,
-) -> AgentRunResult:
-    """A yes to a question that sat in the part of the reply the person
-    spoke over: nothing is confirmed. The same question is asked again:
-    code's gate from the paused plan, an app's by sending it the same request
-    (its old token lapses unsent). When that can't be done, it says so."""
-    turn.note = "a yes to a question they didn't hear: asked again"
-    logger.info("unheard_question_reasked", plan=paused.plan_id if paused else None)
-    steps: list[plans.Step] = []
-    if paused is not None:
-        body = plans.load(paused.body)
-        steps = list(body.steps) if isinstance(body, plans.StepPlan) else []
-    at: int | None = None
-    if paused is not None and paused.reason == "gate" and paused.resume_at < len(steps):
-        at = paused.resume_at
-    elif paused is not None and paused.reason == "app_confirm":
-        at = _amended_at(paused, steps)
-    if paused is not None and at is not None:
-        _lapse()
-        turn.body = paused.body
-        target = steps[at]
-        if isinstance(target, plans.Undo):
-            return _again(undo(interp, state, turn, target, state.view, position=at))
-        return _again(interp._execute(state, turn, steps[at:], at, {}))
-    if paused is None and pending is not None and pending.request and not pending.undoes:
-        _lapse()
-        ask = plans.Ask(
-            id="s1", do="ask", app=pending.app, request=pending.request, destructive=False
-        )
-        turn.body = {"steps": [ask.model_dump()]}
-        return _again(interp._execute(state, turn, [ask], 0, {}))
-    _lapse()
-    turn.note = "a yes to a question they didn't hear: left"
-    return _say(interp, state, UNHEARD_LEFT)
-
-
-def _again(result: AgentRunResult) -> AgentRunResult:
-    """The re-asked question, saying first why it is asked twice."""
-    if result.reply:
-        result.reply = f"{ASKING_AGAIN} {result.reply}"
-    return result
-
-
 # --- undo ------------------------------------------------------------------------------------
 
 
@@ -507,19 +462,25 @@ def undo(
     gate_app: str | None = None,
     handled: Sequence[int] = (),
     words: str = "",
+    only: Sequence[int] | None = None,
 ) -> AgentRunResult:
     """Undo what ``step.target`` names (the last plan, by default).
 
     ``position`` is the step's index in the plan (where a pause resumes),
-    ``gate_app`` the app the person just said yes to at code's gate, and
-    ``handled`` the receipts the yes this turn just redeemed: the undo goes on
-    with what's left. ``words`` are the person's own, when this turn is the
-    undo they asked for.
+    ``gate_app`` the app whose gate card the person just tapped, and
+    ``handled`` the receipts their taps on an app's cards redeemed: the undo
+    goes on with what's left. ``words`` are the person's own, when this turn is the
+    undo they asked for. ``only`` are the receipts the undo chose when it
+    asked (#251): a card tapped later picks the same ones up, whatever ran
+    since, never "the last plan" as it is by then.
     """
     ledgered = view()
     if ledgered is None:
         return _say(interp, state, NO_RECORD)
-    chosen = pick(ledgered, step.target, words)
+    if only is None:
+        chosen = pick(ledgered, step.target, words)
+    else:
+        chosen = [receipt for receipt in ledgered.receipts if receipt.id in only]
     if not chosen and not handled:
         turn.note = "undo: nothing to undo"
         return _say(
@@ -529,6 +490,9 @@ def undo(
     already: list[UndoReceipt] = []
     notes: list[ToolCallRecord] = []
     running = view.running()
+    if turn.body is not None:
+        # What this undo is of, for the card that carries it on (#251).
+        turn.body = {**turn.body, UNDO_RECEIPTS: [receipt.id for receipt in chosen]}
     for receipt in chosen:
         app = interp._fleet.get(receipt.app)
         if receipt.id in handled:
@@ -586,7 +550,7 @@ def undo(
             # resumes this undo here (what's done by then is marked).
             turn.status, turn.pause = "paused", "gate"
             turn.resume_at, turn.pause_app = position, ask.app
-            return interp._gate(state, ask, ask.request)
+            return interp._gate(state, ask, ask.request, turn)
         record = interp._dispatch(state, ask_tool_name(ask.app), {"message": ask.request})
         if record is None:
             break
@@ -607,14 +571,34 @@ def undo(
     return interp._finish(state, turn, [])
 
 
-def undo_waiting(
-    paused: PausedPlan | None, pending: PendingConfirm | None
-) -> tuple[plans.Undo, int, tuple[int, ...]] | None:
-    """The undo an app's waiting question belongs to, if it is one: the undo
-    step, its index, and the receipts the yes redeems."""
-    if paused is None or pending is None or paused.reason != "app_confirm":
-        return None
-    if not pending.undoes or pending.app != paused.app:
+def undo_goes_on(
+    interp: Interpreter, view: View, paused: PausedPlan, handled: Sequence[int]
+) -> bool:
+    """Whether an undo that waited on an app's cards has more to ask once
+    they are answered: a receipt it chose that isn't handled or undone and
+    that its app can still undo."""
+    ledgered = view()
+    if ledgered is None:
+        return False
+    only = paused.body.get(UNDO_RECEIPTS)
+    running = view.running()
+    for receipt in ledgered.receipts:
+        if not isinstance(only, list) or receipt.id not in only:
+            continue
+        if receipt.id in handled or receipt.undone or receipt.outcome == "unknown":
+            continue
+        if _running_ref(receipt, running) or not (receipt.handle or receipt.how):
+            continue
+        app = interp._fleet.get(receipt.app)
+        if app is not None and app.agent is not None:
+            return True
+    return False
+
+
+def undo_step(paused: PausedPlan | None) -> tuple[plans.Undo, int] | None:
+    """The undo a plan waiting on an app's question belongs to, if it is
+    one: the undo step and its index."""
+    if paused is None or paused.reason != "app_confirm":
         return None
     try:
         body = plans.load(paused.body)
@@ -624,7 +608,7 @@ def undo_waiting(
     if not isinstance(body, plans.StepPlan) or not 0 <= index < len(body.steps):
         return None
     step = body.steps[index]
-    return (step, index, pending.undoes) if isinstance(step, plans.Undo) else None
+    return (step, index) if isinstance(step, plans.Undo) else None
 
 
 def pick(ledgered: Ledgered, target: str, words: str = "") -> list[UndoReceipt]:
@@ -744,9 +728,9 @@ def _unrun(app: str, message: str, error: str) -> ToolCallRecord:
 # --- shared ----------------------------------------------------------------------------------
 
 
-def _lapse() -> None:
-    """The app's waiting questions lapse: their tokens are never sent."""
-    current_delegation_context().lapse_confirms()
+def _lapse(why: str) -> None:
+    """The app's waiting questions close: their tokens are never sent."""
+    current_delegation_context().lapse_confirms(why)
 
 
 def _say(interp: Interpreter, state: _Run, reply: str) -> AgentRunResult:

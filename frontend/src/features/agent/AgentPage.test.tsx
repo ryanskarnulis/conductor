@@ -1,9 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { answerConfirmation, cancelTurn, getConversation, getTimeline, getTurnActivity, postMessage } from '../../api/agent'
+import { answerCards, cancelTurn, getCards, getConversation, getTimeline, getTurnActivity, postMessage } from '../../api/agent'
 import { getWorklist } from '../../api/sort'
-import type { AgentMessage, ConversationDetail } from '../../types/agent'
+import type { AgentMessage, ConversationDetail, WaitingCard } from '../../types/agent'
 import { AgentPage } from './AgentPage'
 
 vi.mock('../../api/sort', () => ({
@@ -22,7 +22,8 @@ vi.mock('../../api/agent', () => ({
   // Side threads (#139): none open.
   listThreads: vi.fn(() => Promise.resolve([])),
   cancelTurn: vi.fn(),
-  answerConfirmation: vi.fn(),
+  answerCards: vi.fn(),
+  getCards: vi.fn(),
   getConversation: vi.fn(),
   getTurnActivity: vi.fn(),
   getTimeline: vi.fn(),
@@ -33,10 +34,27 @@ vi.mock('../../api/agent', () => ({
 const mockTimeline = vi.mocked(getTimeline)
 const mockGet = vi.mocked(getConversation)
 const mockPost = vi.mocked(postMessage)
-const mockAnswer = vi.mocked(answerConfirmation)
+const mockAnswer = vi.mocked(answerCards)
+const mockCards = vi.mocked(getCards)
 const mockActivity = vi.mocked(getTurnActivity)
 const mockWorklist = vi.mocked(getWorklist)
 const mockCancel = vi.mocked(cancelTurn)
+
+/** One card under "Waiting on you" (#251), asked five minutes ago. */
+function card(overrides: Partial<WaitingCard>): WaitingCard {
+  return {
+    id: 'confirm:tok',
+    kind: 'app_confirm',
+    question: 'Trash it?',
+    asked_at: new Date(Date.now() - 5 * 60_000 - 1000).toISOString(),
+    group: 2,
+    app: 'tasks',
+    options: [],
+    expires_at: null,
+    latest: true,
+    ...overrides,
+  }
+}
 
 function message(overrides: Partial<AgentMessage>): AgentMessage {
   return {
@@ -97,6 +115,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockTimeline.mockResolvedValue({ ...detail, quiet_gap_seconds: 10_800, incognito_notice: INCOGNITO_NOTICE })
   mockGet.mockResolvedValue(detail)
+  mockCards.mockResolvedValue([])
   mockActivity.mockResolvedValue({
     active: false,
     kind: null,
@@ -303,7 +322,7 @@ describe('AgentPage', () => {
     expect(screen.queryByText(/Asking chess…/)).not.toBeInTheDocument()
   })
 
-  it('shows an app\'s pending question as a confirmation card and answers it with its token, not a turn', async () => {
+  it('shows an app\'s pending question under Waiting on you and answers it with a tap, not a turn', async () => {
     const waiting = message({
       id: 2,
       role: 'assistant',
@@ -321,23 +340,29 @@ describe('AgentPage', () => {
       ],
     })
     mockGet.mockResolvedValue({ ...detail, messages: [message({ content: 'wipe the kitchen project' }), waiting] })
+    mockCards.mockResolvedValue([card({ id: 'confirm:tok', question: 'Trash the Kitchen project and its 12 tasks?' })])
     mockPost.mockReturnValue(new Promise(() => {}))
     renderAt('/c/1')
 
-    const card = await screen.findByRole('group', { name: 'Confirmation' })
-    expect(card).toHaveTextContent('Waiting on you · PCC')
-    expect(card).toHaveTextContent('Trash the Kitchen project and its 12 tasks?')
+    const section = await screen.findByRole('region', { name: 'Waiting on you' })
+    const shown = await within(section).findByRole('group', { name: /^Waiting: / })
+    expect(shown).toHaveTextContent('PCC')
+    expect(shown).toHaveTextContent('Trash the Kitchen project and its 12 tasks?')
+    expect(shown).toHaveTextContent('asked 5 min ago')
+    expect(section).toHaveTextContent('Only a tap approves.')
+    // The question is not drawn a second time in the turn.
+    expect(screen.queryByRole('group', { name: 'Confirmation' })).toBeNull()
     expect(screen.getByRole('list', { name: 'Plan steps' })).toHaveTextContent('waiting on you')
     expect(screen.getAllByRole('status').map((el) => el.textContent)).toContain('Waiting on you')
 
     mockAnswer.mockReturnValue(new Promise(() => {}))
-    fireEvent.click(screen.getByRole('button', { name: 'Yes, do it' }))
-    expect(mockAnswer).toHaveBeenCalledWith(1, 'tok', 'yes')
+    fireEvent.click(within(shown).getByRole('button', { name: 'Approve' }))
+    expect(mockAnswer).toHaveBeenCalledWith(1, ['confirm:tok'], 'yes', { surface: 'desktop' })
     expect(mockPost).not.toHaveBeenCalled()
   })
 
-  describe('several app questions', () => {
-    const later = new Date(Date.now() + 600_000).toISOString()
+  describe('waiting on you (#251)', () => {
+    const later = new Date(Date.now() + 3 * 3600_000).toISOString()
     const armed = ['Test 1', 'Test 2', 'Test 3'].map((title, n) => ({
       app: 'tasks',
       thread_id: 3,
@@ -359,28 +384,46 @@ describe('AgentPage', () => {
       ({ ...detail, messages: [message({ content: 'delete the test tasks' }), message({ id: 2, role: 'assistant', content: armed.map((a) => a.question).join('\n'), stop_reason: 'completed', tool_calls: [asking, ...answers] })] }) as ConversationDetail
     const yes = (token: string, over: object = {}) => ({ tool: 'confirm', arguments: { app: 'tasks' }, result: 'ok', error: null, answers: token, ...over })
     const trashed = { tool: 'trash_task', outcome: 'done', touched: [{ app: 'tasks', kind: 'task', id: '2', title: 'Test 2' }], undo: { handle: 'u2', how: 'restore the task' } }
-    const cards = () => screen.findAllByRole('group', { name: /^Confirmation/ })
+    const three = armed.map((one) => card({ id: `confirm:${one.token}`, question: one.question, expires_at: later }))
+    const cards = async () => within(await screen.findByRole('region', { name: 'Waiting on you' })).findAllByRole('group', { name: /^Waiting: / })
 
-    it('shows one card per question, each with its own Yes and Not now', async () => {
+    it('shows one card per question, each with its age and its own Approve and Not now', async () => {
       mockGet.mockResolvedValue(turn())
+      mockCards.mockResolvedValue(three)
       renderAt('/c/1')
       const shown = await cards()
       expect(shown).toHaveLength(3)
-      shown.forEach((card, n) => {
-        expect(card).toHaveTextContent(armed[n].question)
-        expect(within(card).getByRole('button', { name: 'Yes, do it' })).toBeEnabled()
-        expect(within(card).getByRole('button', { name: 'Not now' })).toBeEnabled()
+      shown.forEach((one, n) => {
+        expect(one).toHaveTextContent(armed[n].question)
+        expect(one).toHaveTextContent('asked 5 min ago')
+        expect(within(one).getByRole('button', { name: 'Approve' })).toBeEnabled()
+        expect(within(one).getByRole('button', { name: 'Not now' })).toBeEnabled()
       })
     })
 
-    it('answers one card with its token; it becomes that call’s receipt and the others stay open', async () => {
+    it('one request’s cards are a group with one Approve all', async () => {
+      mockGet.mockResolvedValue(turn())
+      mockCards.mockResolvedValue([...three, card({ id: 'plan:9', kind: 'gate', app: 'music', group: 8, question: 'Just to check: should I ask music to "delete it"?' })])
+      mockAnswer.mockReturnValue(new Promise(() => {}))
+      renderAt('/c/1')
+      await cards()
+      // The lone card of another request has no group button.
+      const all = screen.getAllByRole('button', { name: /^Approve all/ })
+      expect(all).toHaveLength(1)
+      fireEvent.click(all[0])
+      expect(mockAnswer).toHaveBeenCalledWith(1, ['confirm:tok-1', 'confirm:tok-2', 'confirm:tok-3'], 'yes', { surface: 'desktop' })
+      expect(mockPost).not.toHaveBeenCalled()
+    })
+
+    it('a tapped card leaves the section; its turn shows that call’s receipt and the others stay', async () => {
       mockGet.mockResolvedValueOnce(turn())
       mockGet.mockResolvedValue(turn(yes('tok-2', { app_record: [trashed] })))
-      mockAnswer.mockResolvedValue({ token: 'tok-2', answer: 'yes', outcome: 'done', detail: null, message: message({ id: 2 }) })
+      mockCards.mockImplementation(() => Promise.resolve(mockAnswer.mock.calls.length > 0 ? [three[0], three[2]] : three))
+      mockAnswer.mockResolvedValue({ answers: [{ id: 'confirm:tok-2', answer: 'yes', outcome: 'done', detail: null }], exchanges: [], cards: [three[0], three[2]] })
       renderAt('/c/1')
       const shown = await cards()
-      fireEvent.click(within(shown[1]).getByRole('button', { name: 'Yes, do it' }))
-      expect(mockAnswer).toHaveBeenCalledWith(1, 'tok-2', 'yes')
+      fireEvent.click(within(shown[1]).getByRole('button', { name: 'Approve' }))
+      expect(mockAnswer).toHaveBeenCalledWith(1, ['confirm:tok-2'], 'yes', { surface: 'desktop' })
       expect(mockPost).not.toHaveBeenCalled()
 
       const done = await screen.findByRole('group', { name: 'Confirmation: Done' })
@@ -388,44 +431,56 @@ describe('AgentPage', () => {
       expect(done).toHaveTextContent('Trashed · PCC · “Test 2”')
       expect(done).toHaveTextContent('Say “undo that” to take it back (restore the task).')
       expect(within(done).queryByRole('button')).toBeNull()
-      const open = screen.getAllByRole('group', { name: 'Confirmation' })
-      expect(open).toHaveLength(2)
-      expect(within(open[0]).getByRole('button', { name: 'Yes, do it' })).toBeEnabled()
+      await waitFor(async () => expect(await cards()).toHaveLength(2))
     })
 
     it('Not now closes that card alone, and nothing is sent as a turn', async () => {
       mockGet.mockResolvedValueOnce(turn())
       mockGet.mockResolvedValue(turn(yes('tok-1', { result: null, error: 'not run: declined' })))
-      mockAnswer.mockResolvedValue({ token: 'tok-1', answer: 'no', outcome: 'declined', detail: null, message: message({ id: 2 }) })
+      mockCards.mockImplementation(() => Promise.resolve(mockAnswer.mock.calls.length > 0 ? three.slice(1) : three))
+      mockAnswer.mockResolvedValue({ answers: [{ id: 'confirm:tok-1', answer: 'no', outcome: 'declined', detail: null }], exchanges: [], cards: three.slice(1) })
       renderAt('/c/1')
       fireEvent.click(within((await cards())[0]).getByRole('button', { name: 'Not now' }))
-      expect(mockAnswer).toHaveBeenCalledWith(1, 'tok-1', 'no')
+      expect(mockAnswer).toHaveBeenCalledWith(1, ['confirm:tok-1'], 'no', { surface: 'desktop' })
       expect(await screen.findByRole('group', { name: 'Confirmation: Left as it is' })).toHaveTextContent('Trash the task “Test 1”?')
-      expect(screen.getAllByRole('group', { name: 'Confirmation' })).toHaveLength(2)
+      await waitFor(async () => expect(await cards()).toHaveLength(2))
       expect(mockPost).not.toHaveBeenCalled()
     })
 
-    it('shows the app’s refusal of a token on that card, claiming nothing', async () => {
-      const refusal = 'tasks didn’t take the yes (what it would change has changed since), so nothing was done. Ask tasks again.'
+    it('a stale card says what changed and claims nothing', async () => {
+      const refusal = 'tasks did nothing: task “Test 3” was finished since you were asked, so nothing was trashed.'
       mockGet.mockResolvedValueOnce(turn())
       mockGet.mockResolvedValue(turn(yes('tok-3', { result: null, error: refusal })))
-      mockAnswer.mockResolvedValue({ token: 'tok-3', answer: 'yes', outcome: 'failed', detail: refusal, message: message({ id: 2 }) })
+      mockCards.mockImplementation(() => Promise.resolve(mockAnswer.mock.calls.length > 0 ? three.slice(0, 2) : three))
+      mockAnswer.mockResolvedValue({ answers: [{ id: 'confirm:tok-3', answer: 'yes', outcome: 'failed', detail: refusal }], exchanges: [], cards: three.slice(0, 2) })
       renderAt('/c/1')
-      fireEvent.click(within((await cards())[2]).getByRole('button', { name: 'Yes, do it' }))
+      fireEvent.click(within((await cards())[2]).getByRole('button', { name: 'Approve' }))
       const failed = await screen.findByRole('group', { name: 'Confirmation: Not done' })
-      expect(failed).toHaveTextContent('so nothing was done.')
+      expect(failed).toHaveTextContent('was finished since you were asked')
       expect(failed).not.toHaveTextContent('Trashed')
+      const section = screen.getByRole('region', { name: 'Waiting on you' })
+      expect(within(section).getByText(refusal)).toBeInTheDocument()
     })
 
-    it('shows a card past its expiry as expired, with no buttons', async () => {
-      const past = new Date(Date.now() - 1000).toISOString()
-      const stale = { ...asking, app_confirm: { ...armed[0], expires_at: past }, app_confirms: [{ ...armed[0], expires_at: past }, armed[1]] }
-      mockGet.mockResolvedValue({ ...detail, messages: [message({}), message({ id: 2, role: 'assistant', content: 'q', stop_reason: 'completed', tool_calls: [stale] })] })
+    it('a pick-one card offers its options, and a tap on one resumes the plan as a turn shown live', async () => {
+      const pick = card({ id: 'plan:4', kind: 'pick', app: null, question: 'Which dentist thing?', options: ['Dentist appointment', 'Call the dentist'] })
+      mockGet.mockResolvedValue({ ...detail, messages: [message({ content: 'push the dentist thing' }), message({ id: 2, role: 'assistant', content: 'Which dentist thing?', stop_reason: 'completed' })] })
+      mockCards.mockResolvedValue([pick])
+      mockAnswer.mockReturnValue(new Promise(() => {}))
       renderAt('/c/1')
-      const expired = await screen.findByRole('group', { name: 'Confirmation: Expired' })
-      expect(expired).toHaveTextContent('Trash the task “Test 1”?')
-      expect(within(expired).queryByRole('button')).toBeNull()
-      expect(screen.getAllByRole('group', { name: 'Confirmation' })).toHaveLength(1)
+      const [shown] = await cards()
+      expect(within(shown).queryByRole('button', { name: 'Approve' })).toBeNull()
+      fireEvent.click(within(shown).getByRole('button', { name: 'Call the dentist' }))
+      expect(mockAnswer).toHaveBeenCalledWith(1, ['plan:4'], 'yes', { option: 1, surface: 'desktop' })
+      // The tap is the person's own act: it shows as theirs while the plan runs.
+      expect(await screen.findByText('Tapped “Call the dentist”: Which dentist thing?')).toBeInTheDocument()
+    })
+
+    it('shows nothing when no card waits', async () => {
+      mockGet.mockResolvedValue({ ...detail, messages: [message({})] })
+      renderAt('/c/1')
+      await screen.findByText('hello')
+      expect(screen.queryByRole('region', { name: 'Waiting on you' })).toBeNull()
     })
   })
 
@@ -651,8 +706,6 @@ describe('AgentPage: the live plan view (#89)', () => {
     expect(within(steps).getByText('what step 1 finds')).toBeInTheDocument()
 
     act(() => es.emit('paused', { reason: 'ask_user', question: 'Which dentist task? (Dentist appointment / Book dentist)', app: null, step: 's1' }, 3))
-    // While the turn is still wrapping up, the card is there but not yet tappable.
-    expect(screen.getByRole('button', { name: 'Book dentist' })).toBeDisabled()
 
     const asked: ConversationDetail = {
       ...detail,
@@ -662,6 +715,8 @@ describe('AgentPage: the live plan view (#89)', () => {
       ],
     }
     mockGet.mockResolvedValue(asked)
+    // The pick-one is a card under "Waiting on you" once the turn has ended (#251).
+    mockCards.mockResolvedValue([card({ id: 'plan:4', kind: 'pick', app: null, group: 11, question: 'Which dentist task?', options: ['Dentist appointment', 'Book dentist'] })])
     act(() => es.emit('turn_ended', { stop_reason: 'completed', message_id: 11 }, 4))
     resolveRun(undefined as never)
 
@@ -670,8 +725,11 @@ describe('AgentPage: the live plan view (#89)', () => {
     expect(screen.getByRole('list', { name: 'Plan steps' })).toHaveTextContent('waiting on you')
     expect(screen.getAllByRole('status').map((el) => el.textContent)).toContain('Waiting on you')
 
-    mockPost.mockReturnValue(new Promise(() => {}))
+    mockAnswer.mockReturnValue(new Promise(() => {}))
+    mockPost.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Book dentist' }))
-    expect(mockPost).toHaveBeenLastCalledWith(1, 'Book dentist')
+    // The tap picks the option by its place: no words are sent.
+    expect(mockAnswer).toHaveBeenLastCalledWith(1, ['plan:4'], 'yes', { option: 1, surface: 'desktop' })
+    expect(mockPost).not.toHaveBeenCalled()
   })
 })

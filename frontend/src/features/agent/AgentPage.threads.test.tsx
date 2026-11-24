@@ -17,6 +17,8 @@ vi.mock('../../api/agent', () => ({
   getTimeline: vi.fn(),
   getTurnActivity: vi.fn(),
   listThreads: vi.fn(),
+  // Waiting on you (#251): no card open.
+  getCards: vi.fn(() => Promise.resolve([])),
   postMessage: vi.fn(),
   startThread: vi.fn(),
   turnEventsUrl: (id: number) => `/api/agent/conversations/${id}/events`,
