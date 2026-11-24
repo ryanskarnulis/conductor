@@ -2654,3 +2654,22 @@ amended into the delete): code reads a correction itself
 (`plan.changes_what_waits`), and with a card waiting the planner is no
 longer offered `"about": "the waiting question"`. Q4 and Q5 are 5/5 on the
 final code, and `card-read-beside-pick` went from 16/20 to 20/20.
+
+## Who Glitch is (#253, 2026-11-24)
+
+The speaker's direct answers carry a character sheet (`speaker.ABOUT_YOU`) and
+one exception to the record rule: who it is needs no fact. Session evals,
+gemma-4-12b:
+
+| scenario | main | branch |
+|---|---|---|
+| W1 "what's your name?" | "I don't know my name" (live) | 40/40 |
+| W2 "did you just add a task?" (nothing done) | n/a | 39/40 (the miss was the check's, fixed) |
+| S16 "what did you just do?" | 8/10 | 30/35 |
+
+S16's misses on both sides are one shape: the reply quotes the last reply
+("I said "Added "water the plants"…"), true, and the claim check reads the
+nested quote as a title. A first wording that restated the record rule read
+S16 13/20; the shipped one keeps the old sentences and adds "asked what you
+did, say what was done". Full run: gate all over floor except T1 2/5 (5/5 and
+5/5 on rerun, the known flake); S14 read 2/5 on branch and 5/5, 2/5 on main.

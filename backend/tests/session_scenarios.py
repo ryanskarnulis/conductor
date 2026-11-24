@@ -737,6 +737,48 @@ S16 = Scenario(
 )
 
 
+# --- who Glitch is (#253) -----------------------------------------------------------------------------
+#
+# The record rule covers what conductor did, is doing or can do. Its name is
+# the character sheet's; a question about a write that never happened is still
+# the record's.
+
+
+def _named(session: Session) -> None:
+    turn = session.turn("name")
+    assert not session.writes(turn), "asking its name wrote something"
+    assert "glitch" in _lower(turn.reply), f"didn't say its name: {turn.reply!r}"
+
+
+KNOWS_ITS_NAME = Scenario(
+    "W1",
+    "'what's your name?' is answered: Glitch",
+    (Say("what's your name?", label="name"),),
+    (_named,),
+    tier="frontier",
+    script=lambda w: [answer("self"), _say("Glitch.")],
+)
+
+
+def _claimed_nothing(session: Session) -> None:
+    turn = session.turn("did")
+    assert not session.writes(turn), "the question wrote something"
+    reply = _lower(turn.reply).lstrip()
+    assert not reply.startswith(("yes", "yeah", "yep", "i did.", "i did,", "i added")), (
+        f"claimed a write that never happened: {turn.reply!r}"
+    )
+
+
+CLAIMS_NO_WRITE = Scenario(
+    "W2",
+    "'did you just add a task?' with nothing done claims nothing",
+    (Say("did you just add a task to buy milk?", label="did"),),
+    (_claimed_nothing,),
+    tier="frontier",
+    script=lambda w: [answer("self"), _say("No, I haven't added anything.")],
+)
+
+
 # --- memory you can see (#81) ------------------------------------------------------------------
 #
 # Conductor's own memory app: its writes are world receipts too (the harness
@@ -1356,4 +1398,6 @@ SCENARIOS: tuple[Scenario, ...] = (
     STALE_CARD,
     DEPENDENT_ON_LATE_TAP,
     ASKED_TWICE,
+    KNOWS_ITS_NAME,
+    CLAIMS_NO_WRITE,
 )
