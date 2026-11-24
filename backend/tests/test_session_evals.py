@@ -86,6 +86,7 @@ from tests.session_scenarios import (
     S6,
     S9,
     S11,
+    S14,
     S15,
     S16,
     SCENARIOS,
@@ -550,6 +551,26 @@ def test_a_tap_with_no_card_waiting_never_writes(scripted: _ScriptedRun) -> None
     sample = scripted.run(S9, [answer("chat"), text_turn('{"about_you": false, "reply": "Hm."}')])
     assert sample.session.world.receipts == []
     assert sample.taken.outcome is Outcome.FAIL
+
+
+def test_a_think_the_26b_never_finished_is_infra_not_a_miss(scripted: _ScriptedRun) -> None:
+    # #255: under GPU contention the 26B's call timed out three times; the
+    # honest "couldn't finish" note has no card, and that is not S14's miss.
+    assert S14.script is not None
+    dead = ProviderRequestError("llama-server request failed: timed out")
+    sample = scripted.run(S14, [S14.script(World())[0], dead, dead, dead])
+    assert sample.taken.outcome is Outcome.INFRA, sample.taken
+    assert "couldn't finish thinking over" in (sample.taken.failure or "")
+
+
+def test_a_think_that_answers_with_no_card_names_its_note(scripted: _ScriptedRun) -> None:
+    # A think that ends with no proposal is a miss, and the failure says what
+    # arrived instead of the card.
+    assert S14.script is not None
+    empty = text_turn(json.dumps({"summary": "3 garage tasks, Tue to Thu", "steps": []}))
+    sample = scripted.run(S14, [S14.script(World())[0], empty, empty])
+    _fails(sample, "no card was waiting; the last note: ")
+    assert "3 garage tasks, Tue to Thu" in (sample.taken.failure or "")
 
 
 def test_a_provider_death_is_infra_not_a_miss(scripted: _ScriptedRun) -> None:
