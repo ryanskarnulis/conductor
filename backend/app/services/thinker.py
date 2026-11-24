@@ -227,6 +227,15 @@ class Thinker:
                     found = [f"not a proposal: {exc}"]
                 else:
                     found = think.problems(proposal, self._fleet)
+                    # A plan asked for and none proposed gets the one repair
+                    # too (#255); still none, and the summary is the answer.
+                    if (
+                        not found
+                        and not proposal.steps
+                        and attempt == 0
+                        and think.wants_steps(job.problem, job.asked)
+                    ):
+                        found = [think.NO_STEPS]
                     if not found:
                         return self._propose(job, proposal)
                 logger.warning("think_invalid", ref=job.ref, problems=found, attempt=attempt)

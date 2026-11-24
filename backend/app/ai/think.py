@@ -31,6 +31,7 @@ Pure, apart from the process-wide cancel flags (:func:`request_cancel`).
 from __future__ import annotations
 
 import json
+import re
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
@@ -295,6 +296,25 @@ def problems(proposal: Proposal, fleet: Fleet) -> list[str]:
     if not found:
         found += plans.unrunnable(plan)
     return found
+
+
+# Words that ask for a plan put into the apps, not for advice.
+_WANTS_STEPS = re.compile(
+    r"\b(?:plan|schedule|organi[sz]e|break\s*down|lay\s+out|map\s+out)\b", re.IGNORECASE
+)
+NO_STEPS = (
+    "it has no steps, so nothing in it would reach the apps and there is nothing to approve. "
+    "The person asked for a plan: give the asks that put it into the apps, each task on its "
+    "day (steps is empty only when they asked for advice)"
+)
+
+
+def wants_steps(problem: str | None, asked: str | None) -> bool:
+    """Whether a proposal with no steps misses what was asked (#255): the
+    26B sometimes summarises a schedule ("3 garage tasks, Tue 24 Nov to Thu
+    26 Nov") and proposes none of it, which posts as a plan with no card.
+    Read from the person's words and the problem; advice needs no steps."""
+    return bool(_WANTS_STEPS.search(f"{asked or ''} {problem or ''}"))
 
 
 def repair(raw: str | None, found: Sequence[str]) -> list[dict[str, Any]]:

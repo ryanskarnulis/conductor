@@ -424,7 +424,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   the conversation never waits. The watcher hands it to the thinker:
   gemma-4-26b-a4b, thinking on, `json_schema` on the answer, its own prompt
   and profile. The answer is a **proposal**, validated like any plan (one
-  repair) and tainted: it posts as the job's one note (`think_proposal`, a
+  repair; a plan asked for and answered with no steps gets it too, #255,
+  `think.wants_steps`) and tainted: it posts as the job's one note (`think_proposal`, a
   card) and nothing in it runs without the person's tap. The tap runs it
   as a normal plan (gates and apps' questions still ask); "Not now", a
   spoken no or an amend sets it aside. **It yields the GPU**: no try starts during a

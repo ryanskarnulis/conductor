@@ -94,6 +94,7 @@ from tests.session_scenarios import (
     TIMELINE_RECALL,
     answer,
     ask,
+    chose_wood,
     plan,
 )
 
@@ -324,6 +325,36 @@ def test_a_t1_answer_without_the_recall_fails(scripted: _ScriptedRun) -> None:
     script = TIMELINE_RECALL.script(World())
     script[2:] = [answer("chat"), text_turn('{"about_you": false, "reply": "Wood, I think."}')]
     _fails(scripted.run(TIMELINE_RECALL, script), "wasn't recalled")
+
+
+def test_a_t1_answer_from_the_tasks_note_passes_and_wood_fails(scripted: _ScriptedRun) -> None:
+    # #255: asked of tasks instead of recalled, the note's own "not wood" is
+    # the true decision, not a made-up one; wood as the decision still fails.
+    assert TIMELINE_RECALL.script is not None
+    asks = plan(ask("tasks", "what did we decide about the garage shelves?", read=True))
+    script = TIMELINE_RECALL.script(World())
+    script[2:] = [asks, text_turn("You went with the steel rack, not wood: it holds the paint.")]
+    sample = scripted.run(TIMELINE_RECALL, script)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    script = TIMELINE_RECALL.script(World())
+    script[2:] = [asks, text_turn("You went with wood, not the steel rack.")]
+    _fails(scripted.run(TIMELINE_RECALL, script), "made up a decision")
+
+
+@pytest.mark.parametrize(
+    ("reply", "wood"),
+    [
+        ("Go with the steel rack, not wood — it holds the paint cans.", False),
+        ("You chose the steel rack instead of wood.", False),
+        ("Steel rack rather than the wooden one.", False),
+        ("Steel rack.", False),
+        ("You picked the wooden shelves.", True),
+        ("Wood, not the steel rack.", True),
+        ("Not the steel rack: wood.", True),
+    ],
+)
+def test_chose_wood_reads_what_was_turned_down(reply: str, wood: bool) -> None:
+    assert chose_wood(reply) is wood
 
 
 def test_compiled_t2_keeps_the_incognito_words_out_of_the_next_plan(

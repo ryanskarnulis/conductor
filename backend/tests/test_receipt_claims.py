@@ -41,6 +41,11 @@ CORPUS: list[tuple[str, list[R], list[str]]] = [
         [],
     ),
     ("I've queued Honey — it's on its way.", [ALBUM], []),
+    # A reply quoting an earlier reply that quotes a backed title (#255, S16).
+    ('I said "Added "water the plants" for Wednesday."', [TASK], []),
+    ('I said: "Added "water the plants" for Wednesday, November 25…"', [TASK], []),
+    ('I said "Added "water the plants" for Wednesday…', [TASK], []),
+    ('I said "Queued "Honey" and added "water the plants" for Saturday."', [ALBUM, TASK], []),
     ("Queued Honey and added “water the plants” for Saturday.", [ALBUM, TASK], []),
     ("The Kitchen project went to the trash.", [TRASH], []),
     ("Filed Odessa under house.", [FILED], []),
@@ -50,6 +55,11 @@ CORPUS: list[tuple[str, list[R], list[str]]] = [
     ("Added “water the plants” for tomorrow.", [], ["create"]),
     ("Done — I deleted the kitchen project.", [], ["trash"]),
     ("Queued Honey and added “sort the new album”.", [ALBUM, TASK], ["create"]),
+    # ... and one quoting a title no receipt has stays unbacked.
+    ('I said "Added "feed the cat" for Wednesday."', [TASK], ["create"]),
+    ('I said "Added "feed the cat" for Wednesday…', [TASK], ["create"]),
+    ('I said "Queued "Honey" and added "feed the cat" for Saturday."', [ALBUM, TASK], ["create"]),
+    ('I said "Added "for Wednesday" for Wednesday."', [TASK], ["create"]),
     ("I've stopped the sort.", [FILED], ["cancel"]),
     ("Downloaded the album for you.", [TASK], ["queue"]),
     # hedged: not claims
@@ -109,3 +119,13 @@ def test_tally() -> None:
     tally.add(read_claims("Added “water the plants”. Deleted the kitchen.", [TASK], turn=1))
     assert (tally.backed, tally.claims) == (1, 2)
     assert "create=1/1" in tally.summary() and "trash=0/1" in tally.summary()
+
+
+def test_nested_straight_quotes_read_the_inner_title() -> None:
+    from tests.receipt_claims import _quoted
+
+    assert _quoted('I said "Added "water the plants" for Wednesday."') == ["water the plants"]
+    # Not nested: two titles side by side read as before.
+    assert _quoted('Added "buy milk" and "water the plants".') == ["buy milk", "water the plants"]
+    # A mark that could open or close: the plain reading.
+    assert _quoted('Added "ab"cd" today') == ["ab"]
