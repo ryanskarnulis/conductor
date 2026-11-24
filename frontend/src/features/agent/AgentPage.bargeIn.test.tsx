@@ -25,6 +25,8 @@ vi.mock('../../voice/tts', async () => ({
 vi.mock('../../api/sort', () => ({ getWorklist: vi.fn(), openGroup: vi.fn(), fileSongs: vi.fn() }))
 vi.mock('../../api/agent', () => ({
   listThreads: vi.fn(() => Promise.resolve([])),
+  // Waiting on you (#251): no card open.
+  getCards: vi.fn(() => Promise.resolve([])),
   cancelTurn: vi.fn(),
   getConversation: vi.fn(),
   getTimeline: vi.fn(),

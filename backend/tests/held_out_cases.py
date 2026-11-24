@@ -104,14 +104,8 @@ HELD_OUT: tuple[Case, ...] = (
         state(recent='music:album:61 album "Currents" by Tame Impala (queued Tue, 9 of 13 done)'),
     ),
     # --- control ----------------------------------------------------------------------------
-    Case(
-        "h-control-go-ahead",
-        "go ahead",
-        (one(M("confirm", answer="yes")),),
-        "control",
-        state(waiting=_RECEIPTS_WAITING),
-        _PENDING_P9,
-    ),
+    # "go ahead" with a question waiting (h-control-go-ahead) left the set at
+    # #251: code answers a bare yes and the planner never sees it.
     Case(
         "h-control-amend-pending",
         "wait, only trash the empty tasks in it and keep the project",

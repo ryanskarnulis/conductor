@@ -2,9 +2,10 @@
 
 delegate-api "Confirmation": an app that arms several calls in a turn sends
 ``confirms_required``. Conductor keeps every one on the turn's record, the page
-shows a card each, and ``POST …/confirmations`` answers one card with no model
-call. A spoken yes answers all that are still open; a refusal none. All
-fakes: no live delegate calls.
+shows a card each, and ``POST …/cards`` answers one card, or the group, with
+no model call. No words approve one (#251): a yes gets "tap the card", other
+turns leave the cards open, and "never mind" right after drops the group.
+All fakes: no live delegate calls.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ai import confirmation, narrator, state_block
+from app.ai import confirmation, interpreter, narrator, state_block
 from app.ai.interpreter import Interpreter
 from app.ai.state_block import Now
 from app.api import routes_agent
@@ -47,7 +48,6 @@ ASK = text_turn(
         }
     )
 )
-YES = text_turn(json.dumps({"steps": [{"id": "s1", "do": "confirm", "answer": "yes"}]}))
 DUE = text_turn(
     json.dumps(
         {
@@ -146,9 +146,19 @@ def _start(client: TestClient, effects: list[object], script: list[Any]) -> tupl
 
 def _answer(client: TestClient, conversation: int, token: str, answer: str) -> Any:
     return client.post(
-        f"/api/agent/conversations/{conversation}/confirmations",
-        json={"token": token, "answer": answer},
+        f"/api/agent/conversations/{conversation}/cards",
+        json={"cards": [f"confirm:{token}"], "answer": answer},
     )
+
+
+def _outcome(response: Any) -> dict[str, Any]:
+    (one,) = response.json()["answers"]
+    return dict(one)
+
+
+def _open(client: TestClient, conversation: int) -> list[str]:
+    cards = client.get(f"/api/agent/conversations/{conversation}/cards").json()
+    return [card["id"].removeprefix("confirm:") for card in cards]
 
 
 def _say(client: TestClient, conversation: int, words: str, **extra: Any) -> dict[str, Any]:
@@ -194,7 +204,7 @@ def test_an_app_that_sends_one_question_keeps_one(client: TestClient) -> None:
     assert [one["token"] for one in call["app_confirms"]] == ["tok-1"]
     assert _asking(client, conversation)["content"] == QUESTION
     done = _answer(client, conversation, "tok-1", "yes")
-    assert done.status_code == 200 and done.json()["outcome"] == "done"
+    assert done.status_code == 200 and _outcome(done)["outcome"] == "done"
     assert _sent(fake) == [None, "tok-1"]
 
 
@@ -217,29 +227,37 @@ def test_cards_are_answered_on_their_own_in_any_order(
 ) -> None:
     stale = DelegateConfirmRefused("409", kind="stale")
     conversation, fake = _start(client, [_asked_three(), _trashed(1), stale], [])
+    cards = client.get(f"/api/agent/conversations/{conversation}/cards").json()
+    assert [(c["kind"], c["app"], c["question"]) for c in cards] == [
+        ("app_confirm", "tasks", question) for question in QUESTIONS
+    ]
+    # One request's cards are one group, asked in the turn right before.
+    assert len({c["group"] for c in cards}) == 1 and all(c["latest"] for c in cards)
 
     # The second card first: only its token goes out, and no model runs.
     second = _answer(client, conversation, "tok-b", "yes")
     assert second.status_code == 200, second.text
-    assert second.json()["outcome"] == "done"
+    assert _outcome(second)["outcome"] == "done"
+    assert second.json()["exchanges"] == []
     assert _sent(fake) == [None, "tok-b"]
-    answer = second.json()["message"]["tool_calls"][-1]
+    answer = _asking(client, conversation)["tool_calls"][-1]
     assert (answer["tool"], answer["answers"]) == ("confirm", "tok-b")
     assert answer["app_record"][0]["undo"] == {"handle": "u1", "how": "restore_task"}
 
     # Not now on the first: nothing is sent, and that card alone closes.
     first = _answer(client, conversation, "tok-a", "no")
-    assert first.json()["outcome"] == "declined"
+    assert _outcome(first)["outcome"] == "declined"
     assert _sent(fake) == [None, "tok-b"]
-    declined = first.json()["message"]["tool_calls"][-1]
+    declined = _asking(client, conversation)["tool_calls"][-1]
     assert (declined["answers"], declined["error"]) == ("tok-a", confirmation.DECLINED)
+    assert _open(client, conversation) == ["tok-c"]
 
     # The third: the app refuses the token, and nothing is claimed done.
     third = _answer(client, conversation, "tok-c", "yes")
     assert third.status_code == 200
-    assert third.json()["outcome"] == "failed"
-    assert "has changed since" in third.json()["detail"]
-    assert third.json()["message"]["tool_calls"][-1]["app_record"] is None
+    assert _outcome(third)["outcome"] == "failed"
+    assert "has changed since" in _outcome(third)["detail"]
+    assert _asking(client, conversation)["tool_calls"][-1]["app_record"] is None
 
     # A reload reads the same record: three answers on the turn that asked.
     calls = _asking(client, conversation)["tool_calls"]
@@ -268,67 +286,105 @@ def test_cards_are_answered_on_their_own_in_any_order(
     assert len(fake.log) == 4
 
 
-def test_an_expired_card_is_not_sent(client: TestClient) -> None:
+def test_a_stale_card_does_nothing_and_says_what_changed(client: TestClient) -> None:
+    """The app re-checks on approve (#251): the task was finished since."""
+    said = "task “Test 1” was finished since you were asked, so nothing was trashed"
+    stale = DelegateConfirmRefused("409", kind="stale", said=said)
+    conversation, fake = _start(client, [_asked_three(), stale], [])
+    tapped = _answer(client, conversation, "tok-a", "yes")
+    assert tapped.status_code == 200
+    assert _outcome(tapped) == {
+        "id": "confirm:tok-a",
+        "answer": "yes",
+        "outcome": "failed",
+        "detail": f"tasks did nothing: {said}.",
+    }
+    # Nothing is claimed done, and the card is closed: the others still wait.
+    assert _asking(client, conversation)["tool_calls"][-1]["app_record"] is None
+    assert _open(client, conversation) == ["tok-b", "tok-c"]
+
+
+def test_an_expired_card_is_not_open(client: TestClient) -> None:
     past = datetime.now(UTC) - timedelta(minutes=1)
     conversation, fake = _start(client, [_asked_three(expires=past)], [])
+    assert _open(client, conversation) == []
     refused = _answer(client, conversation, "tok-a", "yes")
-    assert refused.status_code == 409 and "expired" in refused.json()["detail"]
+    assert refused.status_code == 409 and "no longer open" in refused.json()["detail"]
     assert _sent(fake) == [None]
+
+
+def test_a_card_is_open_for_the_tokens_life_whatever_is_said(client: TestClient) -> None:
+    hours = datetime.now(UTC) + timedelta(hours=3)
+    conversation, fake = _start(
+        client,
+        [_asked_three(expires=hours), _due(), _trashed(0)],
+        [DUE, text_turn("Nothing is due.")],
+    )
+    _say(client, conversation, "what's due?")
+    assert _open(client, conversation) == TOKENS
+    assert _outcome(_answer(client, conversation, "tok-a", "yes"))["outcome"] == "done"
+    assert _sent(fake) == [None, None, "tok-a"]
+
+
+# --- approve all ---------------------------------------------------------------------------
+
+
+def test_approve_all_answers_the_groups_cards_in_order(client: TestClient) -> None:
+    expired = DelegateConfirmRefused("409", kind="expired")
+    conversation, fake = _start(client, [_asked_three(), _trashed(0), expired, _trashed(2)], [])
+    response = client.post(
+        f"/api/agent/conversations/{conversation}/cards",
+        json={"cards": [f"confirm:{token}" for token in TOKENS], "answer": "yes"},
+    )
+    assert response.status_code == 200, response.text
+    assert _sent(fake) == [None, "tok-a", "tok-b", "tok-c"]
+    # One the app refuses doesn't stop the others.
+    assert [one["outcome"] for one in response.json()["answers"]] == ["done", "failed", "done"]
+    assert response.json()["cards"] == []
 
 
 # --- a spoken or typed answer ------------------------------------------------------------
 
 
-def test_a_yes_confirms_every_open_question_in_order(client: TestClient) -> None:
-    expired = DelegateConfirmRefused("409", kind="expired")
-    conversation, fake = _start(
-        client,
-        [_asked_three(), _trashed(0), expired, _trashed(2)],
-        [YES, text_turn("Trashed Test 1 and Test 3; Test 2 had expired.")],
-    )
-    reply = _say(client, conversation, "yes")
-    assert _sent(fake) == [None, "tok-a", "tok-b", "tok-c"]
-    calls = reply["tool_calls"]
-    assert [call["answers"] for call in calls] == TOKENS
-    assert [call["error"] is None for call in calls] == [True, False, True]
-    # What was done, per item, from the receipts.
-    assert "Test 1" in reply["content"] and "Test 3" in reply["content"]
+def test_a_yes_approves_none_of_them(client: TestClient) -> None:
+    conversation, fake = _start(client, [_asked_three()], [])  # no planner call is scripted
+    for words in ("yes", "yes to all", "Yes, delete them."):
+        reply = _say(client, conversation, words)
+        assert reply["content"] == interpreter.TAP_THE_CARD
+    assert _sent(fake) == [None]
+    assert _open(client, conversation) == TOKENS
 
 
-def test_a_yes_after_a_card_confirms_only_what_is_still_open(client: TestClient) -> None:
-    conversation, fake = _start(
-        client,
-        [_asked_three(), _trashed(1), _trashed(0), _trashed(2)],
-        [YES, text_turn("Trashed Test 1 and Test 3.")],
-    )
-    assert _answer(client, conversation, "tok-b", "yes").json()["outcome"] == "done"
-    _say(client, conversation, "yes to all")
-    assert _sent(fake) == [None, "tok-b", "tok-a", "tok-c"]
-
-
-def test_a_refusal_declines_them_all(client: TestClient) -> None:
-    # The planner reads "no thanks" as a yes: code's backstop reads the words.
-    conversation, fake = _start(client, [_asked_three()], [YES])
+def test_a_refusal_right_after_dismisses_the_group(client: TestClient) -> None:
+    conversation, fake = _start(client, [_asked_three()], [])  # code reads it: no planner
     reply = _say(client, conversation, "no thanks")
-    assert reply["content"] == "Okay, I left it."
+    assert reply["content"] == ("Okay, cancelled: tasks won't get a yes to any of its 3 questions.")
     assert _sent(fake) == [None]
-    # They have lapsed: a card pressed late answers nothing.
+    # They are closed on the turn that asked them: a card pressed late answers nothing.
+    assert _open(client, conversation) == []
     assert _answer(client, conversation, "tok-a", "yes").status_code == 409
+    closed = _asking(client, conversation)["tool_calls"][1:]
+    assert [(call["answers"], call["error"]) for call in closed] == [
+        (token, confirmation.DISMISSED) for token in TOKENS
+    ]
     assert _sent(fake) == [None]
 
 
-def test_another_request_voids_them(client: TestClient) -> None:
+def test_another_request_leaves_them_open(client: TestClient) -> None:
     conversation, fake = _start(
-        client, [_asked_three(), _due()], [DUE, text_turn("Nothing is due.")]
+        client, [_asked_three(), _due(), _trashed(0)], [DUE, text_turn("Nothing is due.")]
     )
     _say(client, conversation, "what's due?")
     assert _sent(fake) == [None, None]
-    assert _answer(client, conversation, "tok-a", "yes").status_code == 409
+    cards = client.get(f"/api/agent/conversations/{conversation}/cards").json()
+    assert [card["latest"] for card in cards] == [False, False, False]
+    # Out of their words' reach now: "never mind" later is not about them.
     history = [
         {"role": m["role"], "content": m["content"], "tool_calls": m["tool_calls"]}
         for m in client.get(f"/api/agent/conversations/{conversation}").json()["messages"]
     ]
     assert confirmation.open_confirms(history) == []
+    assert _outcome(_answer(client, conversation, "tok-a", "yes"))["outcome"] == "done"
 
 
 # --- what is open, from a turn's stored calls --------------------------------------------
@@ -356,11 +412,11 @@ def test_an_answer_closes_its_own_question_only() -> None:
     assert all(one.several and one.request == "delete the test tasks" for one in still)
 
 
-def test_a_message_without_a_token_voids_the_apps_questions() -> None:
+def test_a_message_without_a_token_leaves_the_apps_questions_open() -> None:
     later = {"tool": "ask_tasks", "arguments": {"message": "what's due"}}
-    assert confirmation.open_in([*_calls(), later]) == []
-    other = {"tool": "ask_music", "arguments": {"message": "status"}}
-    assert len(confirmation.open_in([*_calls(), other])) == 3
+    assert len(confirmation.open_in([*_calls(), later])) == 3
+    closed = confirmation.closing(confirmation.open_in(_calls())[0], confirmation.DISMISSED)
+    assert [one.token for one in confirmation.open_in([*_calls(), closed])] == ["tok-b", "tok-c"]
 
 
 def test_the_state_block_names_every_open_question() -> None:
@@ -368,7 +424,7 @@ def test_the_state_block_names_every_open_question() -> None:
     block = state_block.render(datetime(2026, 11, 6).date(), Now(), [turn])
     assert "tasks asked 3 questions" in block
     assert all(question in block for question in QUESTIONS)
-    assert 'call confirm(app="tasks")' in block
+    assert state_block.ON_CARDS in block and "confirm(" not in block
     assert "tok-a" not in block
 
 
@@ -377,7 +433,7 @@ def test_the_state_block_names_every_open_question() -> None:
 
 def test_spoken_the_shared_words_are_said_once_and_every_item_named() -> None:
     said = narrator.several(QUESTIONS, "voice")
-    assert said == "Trash the task “Test 1”, “Test 2” and “Test 3”? A yes does all 3."
+    assert said == "Trash the task “Test 1”, “Test 2” and “Test 3”? Each waits on its card."
     # Read, they stay word for word, a line each.
     assert narrator.several(QUESTIONS, None) == "\n".join(QUESTIONS)
 
@@ -393,15 +449,19 @@ def test_an_incognito_turns_answered_card_is_not_open_again(client: TestClient) 
     fake = FakeClient([_asked_three(), _trashed(1), _trashed(0), _trashed(2)])
     fleet = _fleet()
     build_delegate_tools(fleet, _factory(fake))
-    provider = ScriptedProvider([ASK, YES, text_turn("Trashed Test 1 and Test 3.")])
+    provider = ScriptedProvider([ASK])
     app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
         provider, fleet, narrate=True
     )
     conversation = int(client.post("/api/agent/conversations", json={}).json()["id"])
     _say(client, conversation, "delete the test tasks", incognito=True)
     done = _answer(client, conversation, "tok-b", "yes")
-    assert done.status_code == 200 and done.json()["outcome"] == "done"
+    assert done.status_code == 200 and _outcome(done)["outcome"] == "done"
     # The stored answer keeps its receipt and none of the app's words.
-    assert done.json()["message"]["tool_calls"][-1]["result"] == "(incognito)"
-    _say(client, conversation, "yes")
+    assert _asking(client, conversation)["tool_calls"][-1]["result"] == "(incognito)"
+    assert _open(client, conversation) == ["tok-a", "tok-c"]
+    client.post(
+        f"/api/agent/conversations/{conversation}/cards",
+        json={"cards": ["confirm:tok-a", "confirm:tok-c"], "answer": "yes"},
+    )
     assert _sent(fake) == [None, "tok-b", "tok-a", "tok-c"]

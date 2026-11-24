@@ -163,12 +163,14 @@ class DelegateConfirmRefused(DelegateError):
 
     ``kind`` is the app's word for why: ``unknown`` (not this thread's, or the
     app restarted), ``expired``, ``used`` or ``stale`` (what it previewed has
-    changed).
+    changed). ``said`` is what a stale one says changed, in the app's words
+    for the person (delegate-api "The app re-checks on redeem").
     """
 
-    def __init__(self, message: str, *, kind: str) -> None:
+    def __init__(self, message: str, *, kind: str, said: str | None = None) -> None:
         super().__init__(message)
         self.kind = kind
+        self.said = said
 
 
 class DelegateRequestRejected(DelegateError):
@@ -569,8 +571,9 @@ class DelegateClient:
         if status == httpx.codes.CONFLICT:
             refusal = _confirm_refusal(response)
             if refusal is not None:
+                kind, said = refusal
                 raise DelegateConfirmRefused(
-                    f"{method} {path} → 409: confirm token {refusal}", kind=refusal
+                    f"{method} {path} → 409: confirm token {kind}", kind=kind, said=said
                 )
         if status >= 400:
             # A client error that isn't 404/429 (e.g. a 422 schema rejection).
@@ -599,14 +602,19 @@ def _failure_body(response: httpx.Response) -> FailureBody | None:
         return None
 
 
-def _confirm_refusal(response: httpx.Response) -> str | None:
-    """A 409's ``confirm`` word, when it is a refused ``Confirm-Token``."""
+def _confirm_refusal(response: httpx.Response) -> tuple[str, str | None] | None:
+    """A 409's ``confirm`` word, when it is a refused ``Confirm-Token``, and
+    for a stale one what the app says changed (bounded)."""
     try:
         body = response.json()
     except ValueError:
         return None
     kind = body.get("confirm") if isinstance(body, dict) else None
-    return kind if isinstance(kind, str) and kind else None
+    if not isinstance(kind, str) or not kind:
+        return None
+    detail = body.get("detail")
+    said = " ".join(detail.split())[:300] if kind == "stale" and isinstance(detail, str) else None
+    return kind, said or None
 
 
 def _parse_retry_after(raw: str | None) -> int | None:

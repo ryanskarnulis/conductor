@@ -6,6 +6,8 @@ import { getConversation, getTimeline } from './api/agent'
 vi.mock('./api/agent', () => ({
   // Side threads (#139): none open.
   listThreads: vi.fn(() => Promise.resolve([])),
+  // Waiting on you (#251): no card open.
+  getCards: vi.fn(() => Promise.resolve([])),
   getConversation: vi.fn(),
   getTimeline: vi.fn(),
   getTurnActivity: vi.fn(),

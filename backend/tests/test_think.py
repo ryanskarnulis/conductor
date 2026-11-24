@@ -38,6 +38,7 @@ from app.services import conversations as conversations_service
 from app.services import ledger
 from app.services.job_watcher import JobWatcher
 from app.services.thinker import Thinker
+from tests import card_taps
 from tests.fake_world import World, client_factory, write_fixture_fleet
 from tests.scripted_provider import ScriptedProvider, text_turn
 
@@ -132,6 +133,16 @@ def run_with(client: TestClient, fleet: Fleet, world: World) -> Generator[Any, N
         assert response.status_code == 200, response.text
         assert provider._turns == [], "the script wasn't fully consumed"
         return dict(response.json()["assistant_message"])
+
+    def tap(provider: ScriptedProvider | None = None, **how: Any) -> dict[str, Any]:
+        """Tap the proposal's card (#251): the only way it runs."""
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+            provider or ScriptedProvider([]), fleet, narrate=True
+        )
+        return card_taps.tap(client, conversation, **how)
+
+    run.tap = tap  # type: ignore[attr-defined]
+    run.cards = lambda: card_taps.cards(client, conversation)  # type: ignore[attr-defined]
 
     def messages() -> list[dict[str, Any]]:
         detail = client.get(f"/api/agent/conversations/{conversation}")
@@ -313,10 +324,11 @@ def test_the_think_from_code_proposes_untried_and_waits_for_a_yes(
     (note,) = _notes(run_with)
     assert note["stop_reason"] == think.PROPOSAL
     assert STUCK in provider.requests[0]["messages"][1]["content"]
-    assert world.writes() == []  # a proposal, tainted: nothing runs without a yes
-    reply = run_with(
-        ScriptedProvider([plan_turn(confirm("yes")), text_turn("Added three garage tasks.")]),
-        "yes",
+    assert world.writes() == []  # a proposal, tainted: nothing runs without a tap
+    (card,) = run_with.cards()
+    assert card["kind"] == "proposal"
+    reply = card_taps.reply_of(
+        run_with.tap(ScriptedProvider([text_turn("Added three garage tasks.")]))
     )
     assert [c["tool"] for c in reply["tool_calls"]] == ["ask_tasks"]
     assert len([r for r in world.receipts if r.kind == "create"]) == 3
@@ -380,11 +392,10 @@ def test_a_dead_model_is_a_502_never_a_think(
 def test_a_yes_with_nothing_waiting_is_not_worth_thinking_over(
     run_with: Any, world: World, db_session: Session
 ) -> None:
-    # The planner read it as an answer to a question that isn't there (the
-    # validator refuses it every round): there is no problem to think over.
-    yes = plan_turn(confirm("yes"))
-    reply = run_with(ScriptedProvider([yes, yes, yes]), "yes")
-    assert reply["content"] == interpreter.UNPLANNED
+    # Code files a bare yes as small talk (#251): the planner never sees it,
+    # and there is no problem to think over.
+    reply = run_with(ScriptedProvider([text_turn('{"about_you": false, "reply": "Okay."}')]), "yes")
+    assert reply["content"] == "Okay."
     db_session.expire_all()
     assert db_session.execute(select(LedgerJob)).first() is None
 
@@ -437,7 +448,7 @@ def test_the_26b_thinks_under_json_schema_and_its_proposal_posts_untried(
     [note] = _notes(run_with)
     assert note["stop_reason"] == think.PROPOSAL
     assert "3 garage tasks" in note["content"] and "buy the steel rack" in note["content"]
-    assert note["content"].endswith("Shall I go ahead?")
+    assert note["content"].endswith("Nothing changes until you tap Approve on its card.")
     # Never a write before the yes.
     assert world.receipts == []
     job = _job(db_session)
@@ -480,11 +491,13 @@ def test_yes_runs_the_proposal_as_a_normal_plan(
     db_session: Session,
 ) -> None:
     _proposed(run_with, session_factory, fleet)
-    reply = run_with(
-        ScriptedProvider(
-            [plan_turn(confirm("yes")), text_turn("Added three garage tasks for Mon, Wed and Fri.")]
-        ),
-        "yes",
+    # A yes in words runs nothing; the card's tap does.
+    assert run_with(ScriptedProvider([]), "yes")["content"] == interpreter.TAP_THE_CARD
+    assert world.receipts == []
+    reply = card_taps.reply_of(
+        run_with.tap(
+            ScriptedProvider([text_turn("Added three garage tasks for Mon, Wed and Fri.")])
+        )
     )
     assert [c["tool"] for c in reply["tool_calls"]] == ["ask_tasks"]
     created = [r for r in world.receipts if r.kind == "create"]
@@ -506,7 +519,7 @@ def test_no_sets_the_proposal_aside_and_nothing_runs(
     db_session: Session,
 ) -> None:
     _proposed(run_with, session_factory, fleet)
-    reply = run_with(ScriptedProvider([plan_turn(confirm("no"))]), "no thanks")
+    reply = run_with(ScriptedProvider([]), "no thanks")  # code reads it: no planner call
     assert "set that plan aside" in reply["content"]
     assert world.receipts == []
     db_session.expire_all()
@@ -517,7 +530,7 @@ def test_no_sets_the_proposal_aside_and_nothing_runs(
 
 
 @pytest.mark.parametrize("words", ["not now", "Not now.", "no thanks", "nope", "never mind"])
-def test_a_refusal_the_planner_read_as_a_yes_still_sets_the_proposal_aside(
+def test_a_refusal_never_reaches_the_planner_and_sets_the_proposal_aside(
     words: str,
     run_with: Any,
     world: World,
@@ -525,10 +538,11 @@ def test_a_refusal_the_planner_read_as_a_yes_still_sets_the_proposal_aside(
     session_factory: sessionmaker[Session],
     db_session: Session,
 ) -> None:
-    """Live 2026-11-20: the card's "Not now" button sends "not now", the 12B
-    compiled a confirm yes, and seven tasks were created."""
+    """Live 2026-11-20: the card's "Not now" button sent "not now", the 12B
+    compiled a confirm yes, and seven tasks were created. Now code reads the
+    refusal and no model can approve anything (#251)."""
     _proposed(run_with, session_factory, fleet)
-    reply = run_with(ScriptedProvider([plan_turn(confirm("yes"))]), words)
+    reply = run_with(ScriptedProvider([]), words)
     assert "set that plan aside" in reply["content"]
     assert world.receipts == []
     db_session.expire_all()
@@ -545,7 +559,25 @@ def test_a_yes_is_not_mistaken_for_a_refusal() -> None:
         assert plans.declines(words), words
 
 
-def test_anything_else_lets_the_proposal_lapse(
+def test_not_now_on_the_proposals_card_sets_it_aside(
+    run_with: Any,
+    world: World,
+    fleet: Fleet,
+    session_factory: sessionmaker[Session],
+    db_session: Session,
+) -> None:
+    _proposed(run_with, session_factory, fleet)
+    tapped = run_with.tap(answer="no")
+    assert [one["outcome"] for one in tapped["answers"]] == ["declined"]
+    assert tapped["exchanges"] == [] and world.receipts == []
+    db_session.expire_all()
+    kept = db_session.execute(
+        select(LedgerPlan).where(LedgerPlan.source == think.KIND)
+    ).scalar_one()
+    assert kept.status == "set_aside"
+
+
+def test_another_turn_leaves_the_proposals_card_waiting(
     run_with: Any,
     world: World,
     fleet: Fleet,
@@ -554,12 +586,13 @@ def test_anything_else_lets_the_proposal_lapse(
 ) -> None:
     _proposed(run_with, session_factory, fleet)
     run_with(ScriptedProvider([plan_turn({"answer": "chat"}), text_turn("Any time!")]), "thanks")
+    # Out of reach of their words now, and still on its card (#251).
     assert ledger.paused_plan(db_session, run_with.conversation) is None
-    # A later yes has nothing to answer: the validator refuses a confirm.
-    checks = plans.Checks(fleet=fleet, confirmable=False)
-    (found,) = plans.problems(plans.StepPlan.model_validate(confirm("yes")), checks)
-    assert found.startswith("confirm with nothing waiting on the person")
+    (card,) = run_with.cards()
+    assert card["kind"] == "proposal" and card["latest"] is False
     assert world.receipts == []
+    run_with.tap(ScriptedProvider([text_turn("Added three garage tasks.")]))
+    assert len([r for r in world.receipts if r.kind == "create"]) == 3
 
 
 def test_an_amend_sets_the_proposal_aside_rather_than_editing_it(
@@ -570,12 +603,7 @@ def test_an_amend_sets_the_proposal_aside_rather_than_editing_it(
     db_session: Session,
 ) -> None:
     _proposed(run_with, session_factory, fleet)
-    reply = run_with(
-        ScriptedProvider(
-            [plan_turn(steps({"do": "amend", "target": "pending", "change": "skip friday"}))]
-        ),
-        "make it skip friday",
-    )
+    reply = run_with(ScriptedProvider([]), "make it skip friday")  # code's amend (#251)
     assert "can't edit a plan I proposed" in reply["content"]
     assert world.receipts == []
 
@@ -588,10 +616,11 @@ def test_a_tainted_proposal_still_stops_at_codes_gate_for_a_destructive_ask(
 ) -> None:
     risky = proposal(ask("music", "delete the Honey download", destructive=True), summary="tidy")
     _proposed(run_with, session_factory, fleet, risky)
-    reply = run_with(ScriptedProvider([plan_turn(confirm("yes"))]), "yes")
+    reply = card_taps.reply_of(run_with.tap())
     # music doesn't confirm its own deletes: code asks again, nothing written.
     assert reply["content"].startswith("Just to check")
     assert world.receipts == []
+    assert [card["kind"] for card in run_with.cards()] == ["gate"]
 
 
 def test_an_invalid_proposal_gets_one_repair(
@@ -927,7 +956,7 @@ def test_a_spoken_proposal_keeps_to_two_sentences() -> None:
     parsed = think.parse(GOOD.content)
     text = think.proposal_text(WEEK, parsed, "voice")
     assert text.count(".") + text.count("?") <= 2
-    assert text.endswith("shall I go ahead?")
+    assert text.endswith("tap its card to go ahead.")
 
 
 def test_outside_text_given_to_the_26b_is_marked() -> None:

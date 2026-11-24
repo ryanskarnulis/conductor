@@ -97,11 +97,40 @@ class ToolCallRead(BaseModel):
     answers: str | None = None
 
 
-class ConfirmAnswerCreate(BaseModel):
-    """The person's answer from one question's card."""
+CardKind = Literal["app_confirm", "gate", "proposal", "pick"]
 
-    token: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+class CardRead(BaseModel):
+    """One open question waiting on the person (#251): an app's confirm,
+    code's gate, a think's proposal or a pick-one. ``group`` is the message
+    that asked it (one request's cards share it); ``latest`` marks the cards
+    the turn right before asked, which words can still pick from, change or
+    dismiss."""
+
+    id: str
+    kind: CardKind
+    question: str
+    asked_at: UTCDateTime
+    group: int | None = None
+    app: str | None = None
+    options: list[str] = Field(default_factory=list)
+    expires_at: str | None = None
+    latest: bool = False
+
+
+class CardAnswerCreate(BaseModel):
+    """The person's tap: one card, or a group's "Approve all". ``option`` is
+    the place of the option tapped on a pick-one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cards: Annotated[
+        list[Annotated[str, StringConstraints(min_length=1, max_length=240)]],
+        Field(min_length=1, max_length=50),
+    ]
     answer: Literal["yes", "no"]
+    option: Annotated[int, Field(ge=0, le=50)] | None = None
+    surface: Literal["desktop", "phone", "voice", "room_speaker"] | None = None
 
 
 class NoteThreadRead(BaseModel):
@@ -127,19 +156,6 @@ class MessageRead(BaseModel):
     incognito: bool = False
     # A side thread's result note (#139): the thread it came from.
     thread: NoteThreadRead | None = None
-
-
-class ConfirmAnswerRead(BaseModel):
-    """What a card's answer did. ``done``: the app ran the call; ``refused``:
-    it ran and said no; ``failed``: it didn't take the yes (its 409, an
-    outage) and nothing is claimed; ``declined``: nothing was sent. The
-    asking turn's message comes back with the answer on its record."""
-
-    token: str
-    answer: Literal["yes", "no"]
-    outcome: Literal["done", "refused", "failed", "declined"]
-    detail: str | None = None
-    message: MessageRead
 
 
 class ConversationDetail(ConversationRead):
@@ -179,6 +195,28 @@ class MessageExchange(BaseModel):
 
     user_message: MessageRead
     assistant_message: MessageRead
+
+
+class CardOutcome(BaseModel):
+    """What one card's answer did. ``done``: the app ran the call;
+    ``refused``: it ran and said no; ``failed``: it didn't take the yes (it
+    re-checked and the thing changed, its token lapsed, an outage) and
+    nothing is claimed, ``detail`` saying why in its words; ``declined``:
+    nothing was sent; ``resumed``: the plan that waited on it ran on."""
+
+    id: str
+    answer: Literal["yes", "no"]
+    outcome: Literal["done", "refused", "failed", "declined", "resumed"]
+    detail: str | None = None
+
+
+class CardAnswerRead(BaseModel):
+    """What a tap did: each card's outcome, the turn each resumed plan ran
+    (none when nothing waited on the card), and the cards still open."""
+
+    answers: list[CardOutcome]
+    exchanges: list[MessageExchange] = Field(default_factory=list)
+    cards: list[CardRead] = Field(default_factory=list)
 
 
 class RunCancelRead(BaseModel):

@@ -42,9 +42,9 @@ describe('pendingConfirm', () => {
     expect(pendingConfirm(messages)).toMatchObject({ app: 'PCC', question: confirm.question })
   })
 
-  it('treats a later call to the same app in that turn as voiding it', () => {
+  it('a later call to the same app in that turn leaves it open (#251)', () => {
     const messages = [msg({ id: 1 }), msg({ id: 2, role: 'assistant', tool_calls: [askTasks({ app_confirm: confirm }), askTasks()] })]
-    expect(pendingConfirm(messages)).toBeNull()
+    expect(pendingConfirm(messages)).toMatchObject({ question: confirm.question })
   })
 
   it('lapses once anything else is said', () => {
@@ -469,21 +469,27 @@ describe('confirmCards', () => {
     expect(confirmCards([asking, yes('tok-1', { app_record: [trashed] })], Date.parse('2026-11-06T19:00:00Z'))[1].state).toBe('done')
   })
 
-  it('drops the cards a later message to the app voided', () => {
-    expect(confirmCards([asking, askTasks()], NOW)).toEqual([])
+  it('keeps the cards open when the app hears another message (#251)', () => {
+    expect(confirmCards([asking, askTasks()], NOW).map((c) => c.state)).toEqual(['open', 'open', 'open'])
   })
 
-  it('puts the cards on the last turn only, and a card’s receipt on the card', () => {
+  it('closes a card code closed without sending its token', () => {
+    const dismissed = yes('tok-0', { result: null, error: 'not run: dismissed' })
+    const amended = yes('tok-2', { result: null, error: 'not run: asked again with a change' })
+    expect(confirmCards([asking, dismissed, amended], NOW).map((c) => c.state)).toEqual(['declined', 'open', 'declined'])
+  })
+
+  it('puts a card’s receipt on the card, on whichever turn asked it', () => {
     const answered = msg({ id: 2, role: 'assistant', tool_calls: [asking, yes('tok-1', { app_record: [trashed] })] })
     const [turn] = buildTurns([msg({ id: 1 }), answered], null, null, null, null, NOW)
     expect(turn.confirms?.map((c) => c.state)).toEqual(['open', 'done', 'open'])
     expect(turn.receipts).toEqual([])
     expect(turn.announce).toBe('Waiting on you: Trash the task “A”? Trash the task “C”?')
     expect(pendingConfirm([msg({ id: 1 }), answered], NOW)?.question).toBe('Trash the task “A”?')
-    // A newer turn folds it: no cards, and the receipt is the turn's own.
+    // A newer turn doesn't close them: a card is answered turns later (#251).
     const [old] = buildTurns([msg({ id: 1 }), answered, msg({ id: 3 }), msg({ id: 4, role: 'assistant', content: 'ok' })], null, null, null, null, NOW)
-    expect(old.confirms).toEqual([])
-    expect(old.receipts).toMatchObject([{ verb: 'Trashed', entity: '“B”' }])
+    expect(old.confirms?.map((c) => c.state)).toEqual(['open', 'done', 'open'])
+    expect(old.confirms?.[1].receipts).toMatchObject([{ verb: 'Trashed', entity: '“B”' }])
   })
 
   it('has nothing waiting once every card is settled or expired', () => {

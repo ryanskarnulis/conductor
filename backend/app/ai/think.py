@@ -337,12 +337,12 @@ def proposal_text(problem: str | None, proposal: Proposal, surface: str | None) 
     if surface in narrator.SPOKEN:
         count = len(proposal.steps)
         asks = "ask" if count == 1 else "asks"
-        return narrator.fit(f"{lead} It's {count} {asks}; shall I go ahead?", surface)
-    lines = [lead, "", "If you say yes, I'll:"]
+        return narrator.fit(f"{lead} It's {count} {asks}; tap its card to go ahead.", surface)
+    lines = [lead, "", "If you approve it, I'll:"]
     for n, step in enumerate(proposal.steps, start=1):
         request = " ".join(step.request.split())
         lines.append(f"{n}. ask {step.app}: “{request}”")
-    lines += ["", "Nothing changes until you say yes. Shall I go ahead?"]
+    lines += ["", "Nothing changes until you tap Approve on its card."]
     return "\n".join(lines)
 
 

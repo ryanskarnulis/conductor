@@ -61,6 +61,9 @@ class TurnRecord:
     stopped: bool = False
     # Sent incognito (#82): its words and reply are never written.
     incognito: bool = False
+    # How many cards waited on the person once this turn ended (#251);
+    # ``None`` when the runtime wasn't asked.
+    cards: int | None = None
 
     @property
     def acted(self) -> list[str]:
@@ -92,6 +95,14 @@ class Driver(Protocol):
         ``incognito`` one keeps none of its words (#82); ``heard`` is the
         voice client's report on the reply the person spoke over (#77)."""
 
+    def tap(self, *, answer: str = "yes", option: int | None = None) -> TurnRecord | None:
+        """The person taps the newest waiting card (#251), or "Approve all"
+        on its group: the only way anything is approved. ``option`` is the
+        place of the option tapped on a pick-one. ``None`` when no card
+        waits. The record's reply is the turn the tap resumed, when steps
+        waited on the card; else what the card then shows (the app's own
+        note for the call it ran, or why it didn't)."""
+
     def search(self, query: str) -> list[dict[str, Any]]:
         """The person's timeline search (#82): the turns it finds."""
 
@@ -116,6 +127,9 @@ class Driver(Protocol):
 
     def supports(self, capability: str) -> bool: ...
 
+
+# What a tap's turn record says the person "said": nothing, they tapped.
+TAP = "(tapped the card)"
 
 # --- steps --------------------------------------------------------------------------
 
@@ -157,12 +171,16 @@ class Search:
 
 
 @dataclass(frozen=True)
-class ConfirmIfAsked:
-    """Answer ``text`` only if the previous turn wrote nothing and asked a
-    question — a confirmation the runtime may or may not ask for."""
+class Tap:
+    """The person taps the newest card's group (#251): "Approve" on each of
+    its cards, "Not now" (``answer="no"``), or an option of a pick-one.
+    ``if_asked``: only when a card waits (a confirmation the runtime may or
+    may not ask for); otherwise a tap with no card fails the turn."""
 
-    text: str = "yes"
     label: str | None = None
+    answer: str = "yes"
+    option: int | None = None
+    if_asked: bool = False
 
 
 @dataclass(frozen=True)
@@ -221,15 +239,7 @@ class ThreadResult:
 
 
 Step = (
-    Say
-    | ConfirmIfAsked
-    | NewConversation
-    | Advance
-    | Settle
-    | StopAfter
-    | Search
-    | OpenThread
-    | CloseThread
+    Say | Tap | NewConversation | Advance | Settle | StopAfter | Search | OpenThread | CloseThread
 )
 
 
@@ -459,11 +469,16 @@ def _run_step(step: Step, driver: Driver, session: Session) -> TurnRecord | None
             )
         )
         return None
-    if isinstance(step, ConfirmIfAsked):
-        last = session.last
-        if session.writes(last) or not (last.reply and "?" in last.reply):
-            return None
-        return _say(driver, session, step.text, step.label, "desktop")
+    if isinstance(step, Tap):
+        world.turn = len(session.turns) + 1
+        record = driver.tap(answer=step.answer, option=step.option)
+        if record is None:
+            if step.if_asked:
+                return None
+            record = TurnRecord(world.turn, TAP, "desktop", 409, detail="no card was waiting")
+        record.label = step.label
+        session.turns.append(record)
+        return record
     if isinstance(step, NewConversation):
         driver.new_conversation()
         return None
@@ -657,6 +672,73 @@ class LoopDriver:
             tools=list(assistant["tool_calls"] or []),
             seconds=seconds,
             incognito=incognito,
+            cards=self._waiting(),
+        )
+
+    def _waiting(self) -> int | None:
+        waiting = self._client.get(f"/api/agent/conversations/{self._conversation}/cards")
+        return len(waiting.json()) if waiting.status_code == 200 else None
+
+    def tap(self, *, answer: str = "yes", option: int | None = None) -> TurnRecord | None:
+        assert self._conversation is not None
+        self._reset()
+        base = f"/api/agent/conversations/{self._conversation}"
+        waiting = self._client.get(f"{base}/cards")
+        assert waiting.status_code == 200, waiting.text
+        cards = list(waiting.json())
+        if not cards:
+            return None
+        # The newest card's group: "Approve all" when it has several.
+        group = [card for card in cards if card["group"] == cards[-1]["group"]]
+        chosen = group if option is None else group[-1:]
+        index = self._holder.world.turn if self._holder.world else 0
+        started = time.monotonic()
+        body: dict[str, Any] = {"cards": [card["id"] for card in chosen], "answer": answer}
+        if option is not None:
+            body["option"] = option
+        response = self._client.post(f"{base}/cards", json=body)
+        seconds = time.monotonic() - started
+        if response.status_code != 200:
+            try:
+                detail = str(response.json().get("detail"))
+            except ValueError:
+                detail = response.text
+            return TurnRecord(
+                index, TAP, "desktop", response.status_code, detail=detail, seconds=seconds
+            )
+        tapped = response.json()
+        tokens = {card["id"].removeprefix("confirm:") for card in chosen}
+        detail = self._client.get(base)
+        messages = detail.json().get("messages", []) if detail.status_code == 200 else []
+        # What each card's own call did, from the turn that asked it.
+        answered = [
+            call
+            for message in messages
+            for call in message.get("tool_calls") or []
+            if call.get("answers") in tokens
+        ]
+        resumed = [exchange["assistant_message"] for exchange in tapped["exchanges"]]
+        for message in resumed:
+            self._seen = max(self._seen, int(message["id"]))
+        said = [message["content"] for message in resumed if message.get("content")]
+        if not said:
+            # No turn ran: what the cards show, in the app's words or code's.
+            said = [call.get("result") or call.get("error") or "" for call in answered]
+            said += [one["detail"] for one in tapped["answers"] if one.get("detail")]
+            said = list(dict.fromkeys(line for line in said if line)) or [
+                "Not now." if answer == "no" else "Done."
+            ]
+        stops = [message["stop_reason"] for message in resumed]
+        return TurnRecord(
+            index,
+            TAP,
+            "desktop",
+            200,
+            reply=" ".join(said),
+            stop_reason=stops[-1] if stops else "completed",
+            tools=[*answered, *(call for m in resumed for call in m.get("tool_calls") or [])],
+            seconds=seconds,
+            cards=len(tapped["cards"]),
         )
 
     def search(self, query: str) -> list[dict[str, Any]]:
@@ -737,7 +819,7 @@ def tally_claims(tally: Tally, samples: Sequence[Sample]) -> None:
 __all__ = [
     "Advance",
     "Check",
-    "ConfirmIfAsked",
+    "Tap",
     "Driver",
     "LoopDriver",
     "NewConversation",

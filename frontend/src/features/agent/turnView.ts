@@ -32,8 +32,8 @@ export type PauseView =
   | { kind: 'question'; question: string; options: string[] }
   | { kind: 'confirm'; appKey: string | null; app: string; question: string; why: string }
 
-/** One app question as its card: open (Yes / Not now), or what came of it.
- * Each is answered on its own, by its token. */
+/** One app question on the turn that asked it: still open (its card is
+ * under "Waiting on you", #251), or what came of it. */
 export interface ConfirmCard {
   token: string
   appKey: string
@@ -138,8 +138,11 @@ export function receiptFrom(entry: AppRecordEntry, app: string): (ReceiptData & 
 
 type StepSource = Pick<ToolCallRecord, 'tool' | 'arguments' | 'error'> & { app_confirm?: unknown; answers?: string | null }
 
-/** A card's "Not now" on the record (backend `confirmation.DECLINED`). */
+/** A card's "Not now" on the record (backend `confirmation.DECLINED`), and
+ * the ways code closes one without sending its token: the person turned it
+ * down in words, or changed what was asked (#251). */
 const DECLINED = 'not run: declined'
+const CLOSED_UNSENT = [DECLINED, 'not run: dismissed', 'not run: asked again with a change']
 
 /** An error text the loop writes for a call it never dispatched (backend
  * `run_record.classify`): that step didn't run, which is not the same as failing. */
@@ -334,11 +337,6 @@ export function lastExchange(messages: AgentMessage[]): AgentMessage | undefined
   return undefined
 }
 
-/** The app a stored call spoke to (backend `confirmation.record_app`). */
-function callApp(call: ToolCallRecord): string | null {
-  return call.tool.startsWith('ask_') ? call.tool.slice(4) : call.tool === 'confirm' ? String(call.arguments.app ?? '') : null
-}
-
 /** Every question a call armed, in call order (rows from before the list
  * hold only the first). */
 function armedBy(call: ToolCallRecord): AppConfirm[] {
@@ -351,19 +349,16 @@ function firstSentence(text: string): string {
 }
 
 /** One assistant turn's app questions as cards — the frontend twin of
- * backend `confirmation.open_in`. A later message to the same app without a
- * token voids that app's questions (no card); a `confirm` that says which one
- * it answered (`answers`) settles that card alone. An unanswered card past
- * its `expires_at` is expired, not answerable. */
+ * backend `confirmation.open_in`. A `confirm` that says which one it
+ * answered (`answers`) settles that card alone; nothing else does (#251:
+ * other messages to the app leave its questions open). An unanswered card
+ * past its `expires_at` is expired, not answerable. */
 export function confirmCards(calls: ToolCallRecord[], now: number = Date.now()): ConfirmCard[] {
-  let cards: { asked: AppConfirm; answer: ToolCallRecord | null }[] = []
+  const cards: { asked: AppConfirm; answer: ToolCallRecord | null }[] = []
   for (const call of calls) {
-    const app = callApp(call)
     if (call.answers) {
       const card = cards.find((c) => c.asked.token === call.answers && c.answer === null)
       if (card) card.answer = call
-    } else if (app !== null) {
-      cards = cards.filter((c) => c.answer !== null || c.asked.app !== app)
     }
     for (const asked of armedBy(call)) cards.push({ asked, answer: null })
   }
@@ -373,7 +368,7 @@ export function confirmCards(calls: ToolCallRecord[], now: number = Date.now()):
       const at = asked.expires_at ? Date.parse(asked.expires_at) : NaN
       return { ...base, state: !Number.isNaN(at) && at <= now ? ('expired' as const) : ('open' as const), receipts: [] }
     }
-    if (answer.error === DECLINED) return { ...base, state: 'declined' as const, receipts: [] }
+    if (answer.error !== null && CLOSED_UNSENT.includes(answer.error)) return { ...base, state: 'declined' as const, receipts: [] }
     if (answer.error) return { ...base, state: 'failed' as const, detail: firstSentence(answer.error), receipts: [] }
     const entries = answer.app_record ?? []
     const receipts = entries.map((entry) => receiptFrom(entry, asked.app)).filter((r): r is NonNullable<typeof r> => r !== null)
@@ -425,9 +420,10 @@ export function buildTurns(
     const kept = held !== null && isLast && reply !== null && !answered && held.paused !== null && held.ended?.message_id === reply.id ? held : null
     const pause = kept ? streamPause(kept) : null
     const steps = kept ? streamSteps(kept) : calls.map((call) => stepFrom(call, isLast && waitingOn !== null))
-    // Its app questions as cards, while it is the last turn. A card shows
-    // its own call's receipt, so that call's chips aren't drawn twice.
-    const confirms = isLast ? confirmCards(calls, now) : []
+    // Its app questions and what came of each: a card can be answered turns
+    // later (#251). An answered one shows its own call's receipt, so that
+    // call's chips aren't drawn twice.
+    const confirms = confirmCards(calls, now)
     const onCards = new Set(confirms.filter((card) => card.state !== 'open' && card.state !== 'expired').map((card) => card.token))
     const open = confirms.filter((card) => card.state === 'open')
     turns.push({

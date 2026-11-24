@@ -83,13 +83,17 @@ class DelegationContext:
     thread_store: ThreadStore
     # Conductor's own audit tag for this run's driver.
     driver: str = LOOP_DRIVER
-    # The question the last turn left waiting (#68), read from the stored turns
-    # before this one, so a yes can only answer a question the person has
-    # seen. A question asked during this run is never here.
+    # The question the turn right before left waiting (#68), read from the
+    # stored turns: what this turn's words may change or dismiss (#251). On a
+    # card's tap, exactly the question tapped. One asked during this run is
+    # never here.
     pending_confirm: PendingConfirm | None = None
     # Every question it left waiting, in the order asked (several gated calls
     # are several questions); ``pending_confirm`` is the first of them.
     pending_confirms: list[PendingConfirm] = field(default_factory=list)
+    # The questions this run closed without sending their tokens, each with
+    # why: the caller puts that on the turn that asked them.
+    lapsed: list[tuple[PendingConfirm, str]] = field(default_factory=list)
     # A compiled plan's parallel reads (#72) run delegate calls from several
     # threads: the thread store is touched one at a time (its DB work is a few
     # short statements; only the network runs at once).
@@ -132,8 +136,9 @@ class DelegationContext:
         self.pending_confirm = left[0] if left else None
         return pending
 
-    def lapse_confirms(self) -> None:
-        """The waiting questions lapse: their tokens are never sent."""
+    def lapse_confirms(self, why: str) -> None:
+        """The waiting questions close: their tokens are never sent."""
+        self.lapsed += [(one, why) for one in self.open_confirms()]
         self.pending_confirms = []
         self.pending_confirm = None
 

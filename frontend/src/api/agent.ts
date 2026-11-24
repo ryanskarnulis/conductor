@@ -2,7 +2,7 @@ import { apiClient, apiUrl } from './client'
 import type { Heard } from '../voice/tts'
 import type {
   AgentMessage,
-  ConfirmAnswer,
+  CardsAnswer,
   ConversationDetail,
   JobCancelResult,
   MessageExchange,
@@ -11,6 +11,7 @@ import type {
   ThreadInfo,
   Timeline,
   TurnActivity,
+  WaitingCard,
 } from '../types/agent'
 
 // Posting a message runs the master loop synchronously: each iteration may
@@ -76,17 +77,30 @@ export async function postMessage(
   return (await res.json()) as MessageExchange
 }
 
-/** Answer one app question from its card. No model runs: yes sends that
- * question's token to its app, no sends nothing; the turn's other questions
- * stay open. A 409 means the question is no longer open. */
-export async function answerConfirmation(conversationId: number, token: string, answer: 'yes' | 'no'): Promise<ConfirmAnswer> {
-  const res = await apiClient(`/api/agent/conversations/${conversationId}/confirmations`, {
+/** What is waiting on the person (#251): every open question of the
+ * conversation's window, oldest first. No model runs. */
+export async function getCards(conversationId: number): Promise<WaitingCard[]> {
+  const res = await apiClient(`/api/agent/conversations/${conversationId}/cards`)
+  return (await res.json()) as WaitingCard[]
+}
+
+/** Answer open questions from their cards: one, or a group's "Approve all".
+ * The only way anything is approved. A plan that waited on a card runs on
+ * as a turn of its own, so this can wait like a send. `option` is the place
+ * of the option tapped on a pick-one. A 409 means none of them is open. */
+export async function answerCards(
+  conversationId: number,
+  cards: string[],
+  answer: 'yes' | 'no',
+  options: { option?: number; surface?: Surface } = {},
+): Promise<CardsAnswer> {
+  const res = await apiClient(`/api/agent/conversations/${conversationId}/cards`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token, answer }),
+    body: JSON.stringify({ cards, answer, ...options }),
     timeoutMs: AGENT_RUN_TIMEOUT_MS,
   })
-  return (await res.json()) as ConfirmAnswer
+  return (await res.json()) as CardsAnswer
 }
 
 export async function getTurnActivity(conversationId: number): Promise<TurnActivity> {

@@ -102,17 +102,40 @@ regenerate. Components live in `src/design/` (`cd-` classes in
 - **Destructive requests: the app that owns the write asks** (#68). An `ask_`
   app with `agent.confirms: true` gets the request straight through; its
   `confirm_required` question goes to the person and the token stays on the
-  turn's record (`app_confirm`, never sent to the model). Only a question from
-  the last turn can take a yes (a `confirm` step, which sends `Confirm-Token`
-  on the asking thread); anything else lapses it. Several gated calls are
-  several questions (`confirms_required` → `app_confirms`, one token each):
-  the page shows a card per question, and a card's button is
-  `POST …/confirmations` (no model): yes redeems that one token, "Not now"
-  sends nothing, and the answer is appended to the asking turn's record and
-  ledger plan (`answers` names the token), so the others stay open. A spoken
-  yes answers every one still open, in order; a refusal none. For an `ask_` app without
-  the flag, code's gate asks first (a `destructive` ask pauses on it). `open_`
-  apps confirm their own resets; "resign the game" is a plain handoff.
+  turn's record (`app_confirm`, never sent to the model). Several gated calls
+  are several questions (`confirms_required` → `app_confirms`, one token
+  each). For an `ask_` app without the flag, code's gate asks first (a
+  `destructive` ask pauses on it). `open_` apps confirm their own resets;
+  "resign the game" is a plain handoff.
+- **Questions never block the chat** (#251, `app/services/cards.py`). Every
+  open question is a card: an app's confirm, code's gate, an undo's
+  question, a think's proposal, a pick-one (`GET …/cards`, the page's
+  "Waiting on you", each with its age). **Only a tap approves**
+  (`POST …/cards`, no model): there is no `confirm` step (the schema
+  doesn't offer it and the validator refuses it; the prompt's bytes still
+  describe it, since rewording them cost the declines), and a bare "yes"
+  with a card waiting gets code's "tap the card" (`plan.bare_yes`), never a
+  plan. A tap sends that card's token (the app re-checks: a thing changed or
+  finished since is said in its words, nothing runs) or picks the waiting
+  plan up; the answer goes on the asking turn's record (`answers` names the
+  token). One request's cards are a group with "Approve all". Other turns
+  leave cards alone; a card lapses with the window (quiet gap) or its
+  token. A new question about the same entity and action replaces the old
+  card. **Words reach only the question asked in the turn right before**,
+  read by code, never the planner: an option's name picks it
+  (`options.answers`), "never mind" dismisses that group
+  (`plan.dismisses`), a correction amends it in their words (#77,
+  `plan.changes_what_waits`) and the question is asked again on a new card. Anything else is a new request and the card
+  stays; the planner's own `cancel` never closes a card (one repair,
+  `plan.cancels_a_card`) and reaches a running job only by name. An open question
+  with nothing to tap (an `ask_user` with no options) waits on words for one
+  turn, as before (`resume`). **Only dependents wait**: steps that use the
+  asking step's `{sN}`, or would stop for a question of their own, wait with
+  the card (`plan.waiting_on`, the paused body's `waiting`); the rest of the
+  plan runs at once. **A tap resumes them with no chat turn**
+  (`Interpreter.resume`): a turn of its own, the tap recorded as the
+  person's note, streamed and narrated like any turn; an undo resumes the
+  receipts it chose when it asked, never "the last plan" as it is by then.
 - **Asks to one app have no cap of their own** (#218): the plan says what
   will run, and its 12-step ceiling is the runaway stop. A part of an ask
   that is another app's manifest example ("sort my music" asked of tasks)
@@ -121,7 +144,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   context.
 - **No chat turns are replayed** (#64). Each turn's one user message opens
   with the state block (`app/ai/state_block.py`: calendar, surface, panel,
-  running jobs, a pending question, recent entities from the apps' records,
+  running jobs, the question the turn right before asked (older cards are
+  not shown), recent entities from the apps' records,
   and matches from earlier conversations, #80) and recall (`app/ai/recall.py`:
   this thread's record, requests and last exchange as data, plus word-matched
   calls from earlier conversations when the registry has no match), then the
@@ -223,19 +247,18 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   words as a confirm, resume or control, `CONDUCTOR_THINK` on), else says it
   couldn't put that together; a model outage is a 502, never a question or
   a think. A control step inside a longer plan runs first as its own plan,
-  then the rest, unless it left a question waiting or the rest depended on
-  it (then not run, and said). Plans have no designed length; 12 steps is a runaway
+  then the rest, unless it left a question waiting (then not run, and said). Plans have no designed length; 12 steps is a runaway
   ceiling. A destructive
   ask to an app without `confirms` pauses on code's question; `ask_user`, an
   app's `confirm_required` and an app's own question (`app_question`, #168:
-  the answer goes back to the step that asked) pause too, and the next turn
-  resumes the same plan. **A named group goes to the app in the person's
+  the answer goes back to the step that asked) pause too, each holding up
+  only the steps that need its answer (#251). **A named group goes to the app in the person's
   words** (#248): State's recent entities resolve pointers ("it", "those"),
   never a group ("the test tasks"), since they hold only what was touched
   lately. A one-ask plan that lists State's titles or numbers the person
   didn't name (two or more, no pointer in the words) gets its request put
   back to their words by code (`plan.in_their_words`); a longer plan gets
-  one repair (`plan.names_for_a_group`). The planner prompt and the ten step kinds stay byte-stable: plan-level
+  one repair (`plan.names_for_a_group`). The planner prompt and the nine step kinds (no `confirm` since #251) stay byte-stable: plan-level
   evals (`tests/test_plan_evals.py`, `CONDUCTOR_PLAN_EVALS=1`) gate any change
   to them, to the compiler, or to a manifest.
 - **`look(app)` reads a glance, never asks an agent** (#73). An app's
@@ -362,12 +385,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   running and the reply says so (code's reason, guaranteed like #163's).
   **Spoken corrections** (#77, `plan.is_correction`: a no, yes or
   "actually", then what instead: "no, Saturday") change what waits or
-  runs: a confirm, cancel, chat or self for one gets one repair to an amend
-  (`plan.corrects`), a confirm beside an amend is refused
-  (`plan.answers_twice`), and a resume that picks none of an `ask_user`'s
-  options is run as the amend; one that picks an option and says more
-  ("no, the bill one on Saturday", `plan.changes_too`) fills `{s1}` and
-  puts their words after the resumed step (#198). With nothing waiting or
+  runs: a cancel, chat or self for one gets one repair to an amend
+  (`plan.corrects`); words that pick an option and say more
+  ("no, the bill one on Saturday", `plan.changes_too`) fill `{s1}` and
+  go after the resumed step (#198). With nothing waiting or
   running, an amend goes to the app that made the last plan's finished
   write, named from its receipt by kind and id (one app, at most three
   things, else nothing changes and code says so), the change in the
@@ -375,8 +396,6 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   one new ask (which names the thing again and loses it), only when the
   ledger has such a write (`Checks.changeable`) and the words take it back
   (a no, "actually" or "wait", never a yes or an okay).
-  A yes to a question in the part of a reply the person spoke over
-  (`control.heard_question`) confirms nothing: code asks it again.
 - **Jobs** (#76): a step whose receipt carries a `job` detaches: the reply
   says it's queued, and the ledger's `ledger_jobs` row tracks it. The watcher
   (`app/services/job_watcher.py`, one thread, started with the app, resumes
@@ -402,10 +421,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   the conversation never waits. The watcher hands it to the thinker:
   gemma-4-26b-a4b, thinking on, `json_schema` on the answer, its own prompt
   and profile. The answer is a **proposal**, validated like any plan (one
-  repair) and tainted: it posts as the job's one note (`think_proposal`, the
-  confirm card) and nothing in it runs without the person's yes. Yes runs it
-  as a normal plan (gates and apps' questions still ask); no, an amend or
-  anything else sets it aside. **It yields the GPU**: no try starts during a
+  repair) and tainted: it posts as the job's one note (`think_proposal`, a
+  card) and nothing in it runs without the person's tap. The tap runs it
+  as a normal plan (gates and apps' questions still ask); "Not now", a
+  spoken no or an amend sets it aside. **It yields the GPU**: no try starts during a
   turn, and one in flight is cut off when a turn starts
   (`app/ai/foreground.py`). The call streams so the cut-off closes it between
   chunks: llama-swap finishes an in-flight request before it swaps, so
@@ -469,6 +488,5 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   queued beside the code-built ack, each step lights on its own event, a
   `{sN}` stays a dashed ref until its receipt names a title (never filled
   from an outside title early), and a step that didn't run is `not run`,
-  never `failed`. A pause shows as a card in the plan; the turn that ended on
-  one keeps its stream (`held`) until the next turn, so the answer visibly
-  resumes the same plan. A strand lights only on a real step event.
+  never `failed`. The turn that ended on a question keeps its stream
+  (`held`) until the next turn; its card is under "Waiting on you". A strand lights only on a real step event.

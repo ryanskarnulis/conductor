@@ -205,8 +205,11 @@ def narrate(
     asking = live_confirm(records)
     if asking is not None:
         return _confirm(records, asking, surface)
-    if app_asks(ran[-1]) is not None:
-        return _app_question(records, ran[-1], surface)
+    # An app's own question is the last thing said, whatever ran beside it
+    # (#251: steps that didn't need its answer went on).
+    asker = next((record for record in reversed(ran) if app_asks(record) is not None), None)
+    if asker is not None:
+        return _app_question(records, asker, surface)
     if all(_is_handoff(record) or record.tool in run_record.READ_TOOLS for record in ran) and any(
         _is_handoff(record) for record in ran
     ):
@@ -215,27 +218,25 @@ def narrate(
 
 
 def live_confirm(records: Sequence[ToolCallRecord]) -> ToolCallRecord | None:
-    """The call whose app is waiting on the person's yes at the end of this run.
+    """The newest call whose app is waiting on the person's tap at the end of
+    this run. Later calls leave a question open (#251), also to its app."""
+    asking = live_confirms(records)
+    return asking[-1] if asking else None
 
-    A later call to the same app voids its question (the app's thread heard
-    another message), as :func:`app.ai.confirmation.pending` reads it.
-    """
-    live: ToolCallRecord | None = None
-    for record in records:
-        app = confirmation.record_app(record.tool, record.arguments)
-        if live is not None and app == confirmation.record_app(live.tool, live.arguments):
-            live = None
-        if record.app_confirm and record.app_confirm.get("question"):
-            live = record
-    return live
+
+def live_confirms(records: Sequence[ToolCallRecord]) -> list[ToolCallRecord]:
+    """Every call of this run whose app is waiting on the person's tap."""
+    return [r for r in records if r.app_confirm and r.app_confirm.get("question")]
 
 
 def _confirm(
     records: Sequence[ToolCallRecord], asking: ToolCallRecord, surface: str | None
 ) -> Narration:
-    questions = asked_questions(asking)
+    # Steps that didn't depend on a question ran beside it (#251), and one of
+    # them may have asked its own: every question of the run is said.
+    questions = [q for record in live_confirms(records) for q in asked_questions(record)]
     question = questions[0] if len(questions) == 1 else several(questions, surface)
-    before = [record for record in records if record is not asking]
+    before = [record for record in records if not record.app_confirm]
     line = _appendix(_facts(before), spoken=surface in SPOKEN)
     reply = f"{line} {question}" if line else question
     return Narration(reply, "confirm")
@@ -256,7 +257,7 @@ def several(questions: Sequence[str], surface: str | None) -> str:
     “C”?"), then what a yes does."""
     if surface not in SPOKEN:
         return "\n".join(questions)
-    return f"{_folded(questions)} A yes does all {len(questions)}."
+    return f"{_folded(questions)} Each waits on its card."
 
 
 def _folded(questions: Sequence[str]) -> str:
@@ -718,7 +719,7 @@ def receipt_steps(records: Sequence[ToolCallRecord]) -> list[dict[str, Any]]:
         if app:
             step["app"] = app
         if record.tool == confirmation.CONFIRM_TOOL:
-            step["asked"] = "the person's yes to the app's question"
+            step["asked"] = "the person's tap on the card of the app's question"
         if record.undoes:
             step["undoing"] = "what the person asked to undo"
         if record.app_confirm:

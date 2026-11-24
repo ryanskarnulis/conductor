@@ -776,9 +776,11 @@ _LIST_MOVE_WORDS = (
 class TasksApp:
     """PCC's shape: read, create, move, complete and trash tasks and projects.
 
-    Trashing is gated as PCC gates it for a delegate (PCC#503): it arms a
-    single-use token and asks; only that thread's next message, carrying the
-    token, runs it. Any other message voids the question.
+    Trashing is gated as PCC gates it for a delegate (PCC#503, #551): it
+    arms a single-use token and asks, and only a message carrying that token
+    runs it. Other messages leave the question open; the same question asked
+    again replaces it; redeeming re-checks the task (finished or trashed
+    since is ``stale``, in words).
     """
 
     name = "tasks"
@@ -786,13 +788,20 @@ class TasksApp:
     def __init__(self, world: World) -> None:
         self.world = world
         self._last_created: dict[int, list[int]] = {}  # thread → task ids it created
-        self._armed: dict[int, tuple[str, Callable[[], AppReply]]] = {}  # thread → (token, run)
+        # thread → token → (question, run, what must still hold)
+        self._armed: dict[
+            int, dict[str, tuple[str, Callable[[], AppReply], Callable[[], str | None]]]
+        ] = {}
+        self._tokens = 0
 
     def handle(self, thread: int, message: str, confirm_token: str | None = None) -> AppReply:
-        armed = self._armed.pop(thread, None)  # the next message settles it
         if confirm_token is not None:
-            if armed is None or armed[0] != confirm_token:
+            armed = self._armed.get(thread, {}).pop(confirm_token, None)
+            if armed is None:
                 raise DelegateConfirmRefused("409: confirm token unknown", kind="unknown")
+            changed = armed[2]()
+            if changed is not None:
+                raise DelegateConfirmRefused("409: confirm token stale", kind="stale", said=changed)
             return armed[1]()
         message, context = split_context(message)
         message = self._changed(message)
@@ -998,9 +1007,20 @@ class TasksApp:
             f'Marked "{task.title}" (#{task.id}) done.', [_tool("complete_task", task_id=task.id)]
         )
 
-    def _gate(self, thread: int, tool: str, question: str, run: Callable[[], AppReply]) -> AppReply:
-        token = f"tok-{thread}-{len(self.world.receipts)}-{tool}"
-        self._armed[thread] = (token, run)
+    def _gate(
+        self,
+        thread: int,
+        tool: str,
+        question: str,
+        run: Callable[[], AppReply],
+        changed: Callable[[], str | None] = lambda: None,
+    ) -> AppReply:
+        self._tokens += 1
+        token = f"tok-{thread}-{self._tokens}-{tool}"
+        open_ = self._armed.setdefault(thread, {})
+        for old in [t for t, (asked, _, _) in open_.items() if asked == question]:
+            del open_[old]  # asked again: the new question replaces it
+        open_[token] = (question, run, changed)
         return AppReply(
             question,
             [ToolCallRead(tool=tool, arguments={}, error="not run: needs confirmation")],
@@ -1022,11 +1042,21 @@ class TasksApp:
         if target is None:
             return AppReply("Which task do you mean? I couldn't tell from that.", asks=True)
         title = self.world.tasks[target].title
+
+        def changed() -> str | None:
+            task = self.world.tasks[target]
+            if task.trashed:
+                return f'task "{title}" is no longer there, so nothing was trashed'
+            if task.done:
+                return f'task "{title}" was finished since you were asked, so nothing was trashed'
+            return None
+
         return self._gate(
             thread,
             "trash_task",
             f'Trash "{title}"?',
             lambda: AppReply(self._trash_task(target), [_tool("delete_task", task_id=target)]),
+            changed,
         )
 
     def _trash_project(self, project: str) -> AppReply:

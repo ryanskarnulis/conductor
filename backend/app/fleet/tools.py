@@ -38,10 +38,10 @@ Contract behaviors live here, not in the client:
 - **Structural confirmation (#68).** An app that answers ``confirm_required``
   armed a gated call instead of running it. The model gets the app's question
   to put to the person, word for word; the token stays on the turn's record
-  (``runtime.delegated_confirm``). Next turn, a yes is ``confirm(app)``, which
-  sends the token back on the same thread, so the app runs exactly that call.
-  Only a question from an earlier turn can be answered: one asked during this
-  run is never on the context (``DelegationContext.pending_confirm``).
+  (``runtime.delegated_confirm``) and the question is a card. A tap on it is
+  ``confirm(app)``, run by code with no model (#251): it sends the token back
+  on the same thread, so the app runs exactly that call. The context holds
+  exactly the question tapped (``DelegationContext.pending_confirm``).
 
 ``list_agents`` is a local tool (no network) reporting the fleet from the
 manifests. Routing hints live in the planner's prompt
@@ -280,11 +280,9 @@ def _make_confirm_tool(fleet: Fleet, client_factory: ClientFactory) -> Callable[
     apps = {app.name: app for app in _confirming_apps(fleet)}
 
     def confirm(app: str) -> str:
-        """Say yes to the question an app asked the person in your LAST reply, and
-        the app does exactly what it asked about. Call it only when the person's
-        newest message says yes to that question; `app` is the app that asked
-        (e.g. "tasks"). If they said no, or anything else, don't call it: the
-        question lapses on its own."""
+        """The person's tap on the card of a question an app asked: the app does
+        exactly what it asked about. Code calls it, never a model; `app` is
+        the app that asked (e.g. "tasks")."""
         target = apps.get(app.strip().lower())
         pending = (
             current_delegation_context().take_pending_confirm(target.name)
@@ -292,10 +290,7 @@ def _make_confirm_tool(fleet: Fleet, client_factory: ClientFactory) -> Callable[
             else None
         )
         if target is None or pending is None:
-            raise ToolError(
-                f"Nothing from {app} is waiting on a yes, so nothing was done. Don't "
-                f"call confirm again this turn: if the person wants it done, ask the app."
-            )
+            raise ToolError(f"Nothing from {app} is waiting on a yes, so nothing was done.")
         return _delegate(target, client_factory, "yes", confirm=pending)
 
     confirm.__name__ = CONFIRM_TOOL
@@ -466,10 +461,8 @@ def _finish(
 def _confirm_reply(app: FleetApp, question: str) -> str:
     """What the model hears when an app armed a call instead of running it."""
     return (
-        f"{app.name} has done nothing yet: it needs the person's yes first. Ask the "
-        f'person its question, word for word, and stop: "{question}" Do NOT call a '
-        f"tool for this again this turn. If their next message says yes, call "
-        f'confirm(app="{app.name}").'
+        f"{app.name} has done nothing yet: it needs the person's yes first, on the "
+        f'card of its question: "{question}"'
     )
 
 
@@ -537,17 +530,17 @@ def _to_tool_error(app: FleetApp, exc: DelegateError) -> ToolError:
         )
     if isinstance(exc, DelegateConfirmRefused):
         if exc.kind == "used":
-            return ToolError(
-                f"{app.name} already used that yes; nothing more was done. Don't confirm "
-                f"again. If the person wants to know, ask {app.name} what it did."
-            )
+            return ToolError(f"{app.name} already used that yes; nothing more was done.")
+        if exc.kind == "stale" and exc.said:
+            # The app re-checked what it would change (#251): its own words.
+            return ToolError(f"{app.name} did nothing: {exc.said}.")
         why = {
             "expired": "it waited too long",
             "stale": "what it would change has changed since",
         }.get(exc.kind, "it no longer has that question open")
         return ToolError(
-            f"{app.name} didn't take the yes ({why}), so nothing was done. Ask "
-            f"{app.name} again with the person's original request, so it asks them afresh."
+            f"{app.name} didn't take the yes ({why}), so nothing was done. Ask again "
+            f"and it will check with you afresh."
         )
     if isinstance(exc, DelegateRequestRejected):
         return ToolError(

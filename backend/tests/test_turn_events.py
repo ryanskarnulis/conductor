@@ -31,6 +31,7 @@ from app.fleet.manifests import AgentSpec, Fleet, FleetApp, discover_fleet
 from app.fleet.tools import build_delegate_tools
 from app.main import app
 from app.tools import registry
+from tests import card_taps
 from tests.fake_world import World, client_factory, write_fixture_fleet
 from tests.scripted_provider import ScriptedProvider, text_turn
 
@@ -412,6 +413,19 @@ def turn(
         assert response.status_code == 200, response.text
         return dict(response.json()["assistant_message"]), follower.events()
 
+    def tap(
+        provider: ScriptedProvider | None = None, **how: Any
+    ) -> tuple[dict[str, Any], list[TurnEvent]]:
+        """Tap a waiting card (#251); the turn it resumes streams like any."""
+        app.dependency_overrides[routes_agent.get_conductor] = lambda: Interpreter(
+            provider or ScriptedProvider([]), fleet, narrate=True
+        )
+        follower = _Follower(conversation)
+        return card_taps.tap(client, conversation, **how), follower.events()
+
+    run.tap = tap  # type: ignore[attr-defined]
+    # A tap that resumes nothing starts no turn: there is no stream to follow.
+    run.tap_alone = lambda **how: card_taps.tap(client, conversation, **how)  # type: ignore[attr-defined]  # type: ignore[attr-defined]
     yield run
 
 
@@ -457,7 +471,7 @@ def test_a_compiled_turn_streams_plan_steps_and_receipts_as_the_ledger_keeps_the
     assert [r["tool"] for r in receipt["receipts"]] == [r.tool for r in step.receipts]
 
 
-def test_a_gated_plan_streams_its_pause_and_a_yes_resumes_from_the_gated_step(
+def test_a_gated_plan_streams_its_pause_and_its_cards_tap_resumes_from_the_gated_step(
     turn: Any,
 ) -> None:
     gated = _plan_turn(_ask("music", "delete the album download", destructive=True))
@@ -468,10 +482,7 @@ def test_a_gated_plan_streams_its_pause_and_a_yes_resumes_from_the_gated_step(
     assert (paused["reason"], paused["app"], paused["step"]) == ("gate", "music", "s1")
     assert paused["question"].startswith("Just to check")
 
-    yes = ScriptedProvider(
-        [_plan_turn({"do": "confirm", "answer": "yes"}), text_turn("Already gone.")]
-    )
-    _, events = turn(yes, "yes")
+    _, events = turn.tap(ScriptedProvider([text_turn("Already gone.")]))
     plan = next(event.data for event in events if event.kind == "plan")
     resumed = [event for event in events if event.kind == "resumed"]
     assert [event.data for event in resumed] == [
@@ -488,7 +499,8 @@ def test_a_gated_plan_streams_its_pause_and_a_yes_resumes_from_the_gated_step(
 def test_an_answer_to_ask_user_resumes_the_same_plan_and_says_what_s1_becomes(
     turn: Any,
 ) -> None:
-    question = {"do": "ask_user", "question": "Which dentist thing?", "options": ["a", "b"]}
+    # An open question (no options to tap): their words answer it, next turn.
+    question = {"do": "ask_user", "question": "Which dentist thing?", "options": []}
     first = _plan_turn(question, _ask("tasks", "push {s1} to friday"))
     _, events = turn(ScriptedProvider([first]), "push the dentist thing to friday")
     kinds = [event.kind for event in events if event.kind != "activity"]
@@ -529,8 +541,8 @@ def test_the_pick_fills_s1_as_the_entity_state_named_and_resumed_carries_it(
     first = _plan_turn(question, _ask("tasks", "push {s1} to friday"))
     turn(ScriptedProvider([first]), "push the dentist thing to friday")
 
-    answer = ScriptedProvider([_plan_turn_resume("the first one"), text_turn("Moved.")])
-    reply, events = turn(answer, "the first one")
+    # Code reads the pick (#251): no planner call.
+    reply, events = turn(ScriptedProvider([text_turn("Moved.")]), "the first one")
     resumed = next(event.data for event in events if event.kind == "resumed")
     assert resumed == {
         "reason": "ask_user",
@@ -553,16 +565,31 @@ def test_the_pick_fills_s1_as_the_entity_state_named_and_resumed_carries_it(
     assert [w.ref for w in moved] == ["task:3"]
 
 
-def test_the_yes_to_an_apps_own_question_resumes_too(turn: Any) -> None:
-    trash = _plan_turn(_ask("tasks", "delete the groceries task", destructive=True))
+def test_a_tap_on_an_apps_card_resumes_what_waited_on_it(turn: Any) -> None:
+    trash = _plan_turn(
+        _ask("tasks", "delete the groceries task", destructive=True),
+        _ask("tasks", "add a task to restock after {s1}"),
+    )
     _, events = turn(ScriptedProvider([trash]), "delete the groceries task")
     assert [e.data["reason"] for e in events if e.kind == "paused"] == ["app_confirm"]
-    yes = ScriptedProvider([_plan_turn({"do": "confirm", "answer": "yes"}), text_turn("Done.")])
-    _, events = turn(yes, "yes")
+    _, events = turn.tap(ScriptedProvider([text_turn("Done.")]))
     resumed = [e.data for e in events if e.kind == "resumed"]
     assert resumed == [
         {"reason": "app_confirm", "step": None, "answer": None, "untrusted": False, "entity": None}
     ]
+    plan = next(event.data for event in events if event.kind == "plan")
+    assert plan["start"] == 1  # the step that waited: s2
+    started = next(event.data for event in events if event.kind == "step_started")
+    assert started["tool"] == "ask_tasks"
+    assert events[-1].kind == "turn_ended"
+
+
+def test_a_tap_with_nothing_waiting_on_it_runs_no_turn(turn: Any) -> None:
+    trash = _plan_turn(_ask("tasks", "delete the groceries task", destructive=True))
+    turn(ScriptedProvider([trash]), "delete the groceries task")
+    tapped = turn.tap_alone()
+    assert [one["outcome"] for one in tapped["answers"]] == ["done"]
+    assert tapped["exchanges"] == []
 
 
 def test_the_turn_ends_on_the_stream_only_after_the_ledger_committed_it(
@@ -688,15 +715,11 @@ def test_an_undo_streams_its_steps_and_receipts_and_waits_on_the_apps_question(
     paused = next(event.data for event in events if event.kind == "paused")
     assert (paused["reason"], paused["app"]) == ("app_confirm", "tasks")
 
-    yes = ScriptedProvider([_plan_turn({"do": "confirm", "answer": "yes"}), text_turn("Done.")])
-    _, events = turn(yes, "yes")
-    landed = [event.data for event in events if event.kind == "receipt"]
-    assert [(r["tool"], r["outcome"]) for r in landed] == [
-        ("confirm", "done"),
-        ("ask_music", "not_run"),
-    ]
-    assert "undone_by_step_id" not in json.dumps(landed)  # ledger internals stay home
-    assert events[-1].kind == "turn_ended"
+    # The tap redeems the undo with no model and, nothing else being left to
+    # ask, no turn (#251).
+    tapped = turn.tap_alone()
+    assert [one["outcome"] for one in tapped["answers"]] == ["done"]
+    assert tapped["exchanges"] == []
 
 
 def test_a_cancelled_pause_ends_the_turn_with_nothing_left_waiting(turn: Any) -> None:

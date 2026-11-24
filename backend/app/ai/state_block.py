@@ -14,8 +14,10 @@ It holds, each line only when there is something to say:
 - the surface and device the person is on (``voice`` → one or two short
   spoken sentences, no markdown) and the app panel they have open;
 - the jobs an app reported as still running, as of their last report;
-- what is waiting on the person: a question the last reply asked, or an
-  app's question that a yes answers with ``confirm`` (#68);
+- what the turn right before left waiting on the person (#251): an app's
+  question or one of conductor's own on a card only a tap answers, or an
+  open question the last reply asked. Older cards still wait on the page and
+  are not shown here;
 - a reply the person spoke over (#77): how much of it they heard, and the
   start of what they didn't, as data;
 - recent entities: what this conversation's calls touched, newest first,
@@ -54,6 +56,17 @@ MAX_QUESTION_CHARS = 300
 # clipped like a title.
 MAX_QUESTIONS = 6
 MAX_MATCHES = 3
+# How a question on a card reads to the planner (#251): nothing it plans
+# answers one. Code has already read a yes, a pick, a dismissal and a
+# correction, so what reaches the planner is a new request.
+ON_A_CARD = (
+    "It waits on a card only their tap answers. Nothing you plan answers it: plan their "
+    "message as a new request."
+)
+ON_CARDS = (
+    "They wait on cards only their tap answers. Nothing you plan answers them: plan their "
+    "message as a new request."
+)
 MAX_SAID_CHARS = 100
 # The matches' share of the block: three lines and their heading.
 MATCHES_MAX_CHARS = 900
@@ -167,6 +180,7 @@ def render(
     matches: Sequence[Match] = (),
     facts: Sequence[Fact] = (),
     heard: Heard | None = None,
+    card: bool = False,
 ) -> str:
     """The block for a turn starting ``today`` on a conversation with
     ``history`` (stored turns, oldest first, as :func:`app.ai.recall.Recall.of`
@@ -176,7 +190,8 @@ def render(
     report from the records. ``matches`` are the entity registry's leads from
     earlier conversations (#80). ``facts`` are the ones the person saved (#81),
     most relevant first. ``heard`` is the last reply when the person spoke
-    over it (#77)."""
+    over it (#77). ``card``: the question the last reply asked sits on a card
+    (code's gate, a pick-one, a proposal), so no words answer it (#251)."""
     lines = [_HEADER, *calendar_lines(today)]
     if now.surface is not None:
         lines.append(_SURFACE_LINES[now.surface])
@@ -191,20 +206,20 @@ def render(
     asked = several[0] if several else None
     question = _waiting(history)
     if asked is not None and len(several) > 1:
-        # Several gated calls, several questions: one yes answers them all.
+        # Several gated calls, several questions, a card each.
         quoted = " ".join(f'"{_clip(one.question)}"' for one in several[:MAX_QUESTIONS])
         more = f" and {len(several) - MAX_QUESTIONS} more" if len(several) > MAX_QUESTIONS else ""
         lines.append(
             f"Waiting on the person: {asked.app} asked {len(several)} questions: {quoted}{more}. "
-            f'If their message says yes to them, call confirm(app="{asked.app}"); '
-            "if not, don't — the questions lapse."
+            + ON_CARDS
         )
     elif asked is not None:
         lines.append(
             f'Waiting on the person: {asked.app} asked "{_clip_question(asked.question)}" '
-            f'If their message says yes to it, call confirm(app="{asked.app}"); '
-            "if not, don't — the question lapses."
+            + ON_A_CARD
         )
+    elif question and card:
+        lines.append(f'Waiting on the person: your last reply asked "{question}" {ON_A_CARD}')
     elif question:
         lines.append(f'Waiting on the person: your last reply asked "{question}"')
     if heard is not None:

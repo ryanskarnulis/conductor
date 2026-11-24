@@ -7,7 +7,8 @@ conversations are gone from the API; recall still reads them. A message may
 be ``incognito``: its words and reply are never written (:mod:`app.ai.incognito`).
 
 ``POST /agent/conversations/{id}/messages`` is the one model-calling endpoint:
-it stores the user turn, binds the delegation context (DB-backed thread store,
+(a card's tap that resumes a waiting plan runs the same way, with no words:
+``POST …/cards``, #251) it stores the user turn, binds the delegation context (DB-backed thread store,
 per-turn budget, audit driver), runs the turn (compiled plan, #75)
 synchronously, then
 stores and returns the assistant turn. While it blocks,
@@ -40,6 +41,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import clock
 from app.ai import (
     confirmation,
+    control,
     foreground,
     incognito,
     job_control,
@@ -49,9 +51,11 @@ from app.ai import (
     turn_context,
     turn_events,
 )
+from app.ai import interpreter as interpreting
+from app.ai.confirmation import PendingConfirm
 from app.ai.plan import RunningJob
-from app.ai.interpreter import Interpreter, conductor_from_settings
-from app.ai.runtime import Activity, AgentRunFailed, ToolCallRecord
+from app.ai.interpreter import Interpreter, Resume, conductor_from_settings
+from app.ai.runtime import Activity, AgentRunFailed, AgentRunResult, ToolCallRecord
 from app.ai.plan import PausedPlan
 from app.ai.providers.llamacpp import provider_from_settings
 from app.ai.state_block import Now
@@ -66,8 +70,10 @@ from app.fleet.manifests import Fleet
 from app.fleet.thread_cleanup import SubagentThreadCleanup
 from app.fleet.thread_store import DbThreadStore
 from app.schemas.conversations import (
-    ConfirmAnswerCreate,
-    ConfirmAnswerRead,
+    CardAnswerCreate,
+    CardAnswerRead,
+    CardOutcome,
+    CardRead,
     ConversationCreate,
     ConversationDetail,
     ConversationRead,
@@ -83,6 +89,7 @@ from app.schemas.conversations import (
     ToolCallRead,
     TurnActivityRead,
 )
+from app.services import cards as cards_service
 from app.services import conversations as conversations_service
 from app.services import fact_meaning
 from app.services import facts as facts_service
@@ -571,34 +578,75 @@ def post_note(
     return _read(note, timeline_service.Tag(data.surface, False))
 
 
-# One card's answer at a time (single worker): each rewrites the asking
-# turn's record, and two at once would drop one.
+# One tap at a time (single worker): each rewrites the asking turn's record,
+# and two at once would drop one.
 _CARD_LOCK = threading.Lock()
 
 
+def _open_cards(db: Session, conversation: Conversation, since: Any) -> list[cards_service.Card]:
+    """The cards open in this window; a failed read is none, never no turn."""
+    try:
+        return cards_service.open_cards(db, conversation, since=since, now=utcnow())
+    except Exception as exc:
+        logger.warning("open_cards_failed", error=str(exc), error_type=type(exc).__name__)
+        return []
+
+
+def _card_read(card: cards_service.Card) -> CardRead:
+    return CardRead(
+        id=card.id,
+        kind=card.kind,
+        question=card.question,
+        asked_at=card.asked_at,
+        group=card.group,
+        app=card.app,
+        options=list(card.options),
+        expires_at=card.expires_at,
+        latest=card.latest,
+    )
+
+
+@router.get("/conversations/{conversation_id}/cards", response_model=list[CardRead])
+def list_cards(conversation_id: int, db: Session = Depends(get_db)) -> list[CardRead]:
+    """What is waiting on the person (#251): every open question of this
+    conversation's window, oldest first. **No model runs.**"""
+    conversation = _get_or_404(db, conversation_id)
+    thread = conversation if threads_service.is_thread(conversation) else None
+    since = None if thread is not None else _window(db, conversation.id)
+    return [_card_read(card) for card in _open_cards(db, conversation, since)]
+
+
 @router.post(
-    "/conversations/{conversation_id}/confirmations",
-    response_model=ConfirmAnswerRead,
+    "/conversations/{conversation_id}/cards",
+    response_model=CardAnswerRead,
     dependencies=[Depends(rate_limit("agent_notes", per_min_attr="fleet_actions_per_min"))],
 )
-def answer_confirmation(
+def answer_cards(
     conversation_id: int,
-    data: ConfirmAnswerCreate,
+    data: CardAnswerCreate,
     db: Session = Depends(get_db),
     conductor: Interpreter = Depends(get_conductor),
     thread_store: ThreadStore = Depends(get_thread_store),
-) -> ConfirmAnswerRead:
-    """Answer one app question from its card. **No model runs.**
+) -> CardAnswerRead:
+    """Answer open questions from their cards (#251): one, or a group's
+    "Approve all". The only way anything is approved; no words are.
 
-    Several gated calls are several questions, each with its own token
-    (delegate-api "Confirmation"). Yes sends that one token to the app, which
-    runs exactly that call; the answer goes on the asking turn's record and
-    the ledger like any confirmed call. Not now sends nothing and closes that
-    card alone. Either way the turn's other questions stay open. A question
-    is open only while its turn is the conversation's last (409 otherwise,
-    and while a turn is running or past its expiry). The app refusing the
-    token (its 409: stale, expired, used, unknown) is a ``failed`` answer on
-    the record: nothing is claimed done.
+    An app's question: yes sends that one token to the app, which re-checks
+    and runs exactly that call (delegate-api "Confirmation"); the answer goes
+    on the asking turn's record and the ledger. Not now sends nothing. The
+    app refusing the token (stale: the thing changed or was finished since;
+    expired, used, unknown) is a ``failed`` answer carrying its words:
+    nothing is claimed done.
+
+    Code's gate, a think's proposal, a pick-one: yes (or the option tapped)
+    picks the waiting plan up. **Steps that waited on a card run when it is
+    tapped, with no chat turn**: once every question a plan waited on is
+    answered, its waiting steps run as a turn of their own, the tap recorded
+    as the person's note (like any act in the UI) and the reply narrated
+    from the receipts. It streams on the live channel like any turn.
+
+    **409** for a card no longer open (answered, replaced, lapsed with the
+    conversation's window) and while a turn is running.
     """
     conversation = _get_or_404(db, conversation_id)
     _writable_or_409(conversation)
@@ -607,54 +655,230 @@ def answer_confirmation(
     with _CARD_LOCK:
         thread = conversation if threads_service.is_thread(conversation) else None
         since = None if thread is not None else _window(db, conversation.id)
-        still_open = confirmation.open_confirms(_stored_turns(db, conversation.id, since))
-        pending = next((one for one in still_open if one.token == data.token), None)
-        asking = conversations_service.last_exchange(db, conversation.id, since=since)
-        if pending is None or asking is None:
+        still_open = {card.id: card for card in _open_cards(db, conversation, since)}
+        chosen = [still_open[one] for one in dict.fromkeys(data.cards) if one in still_open]
+        if not chosen:
             raise HTTPException(status.HTTP_409_CONFLICT, detail="that question is no longer open")
-        if data.answer == "yes" and confirmation.expired(pending.expires_at, utcnow()):
-            raise HTTPException(status.HTTP_409_CONFLICT, detail="that question expired; ask again")
-        hidden = asking.id in conversations_service.incognito_messages(db, conversation.id)
-        with incognito.turn(hidden):
-            if data.answer == "no":
-                record = ToolCallRecord(
-                    tool=confirmation.CONFIRM_TOOL,
-                    arguments={"app": pending.app},
-                    error=confirmation.DECLINED,
-                    answers=pending.token,
+        picks = [card for card in chosen if card.kind == "pick"]
+        if data.answer == "yes" and picks:
+            if len(chosen) != 1 or data.option is None or data.option >= len(picks[0].options):
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="a pick-one card is answered alone, with the option tapped",
                 )
-            else:
-                context = DelegationContext(
-                    master_conversation_id=conversations_service.thread_key(
-                        db, conversation.id, since
-                    ),
-                    thread_store=thread_store,
-                    pending_confirms=[pending],
-                )
-                with use_delegation_context(context):
-                    record = conductor.answer_confirm(pending.app)
-                record.answers = pending.token
-                if pending.several:
-                    record.undoes = None
-            conversations_service.append_call(db, asking, record, hidden=hidden)
-            ledger.answer_step(db, asking.id, record, settled=len(still_open) == 1)
-            db.commit()
-            db.refresh(asking)
-            outcome, detail = _card_outcome(data.answer, record)
-            logger.info(
-                "agent_confirm_card",
-                conversation_id=conversation_id,
-                app=pending.app,
-                answer=data.answer,
-                outcome=outcome,
+        elif data.option is not None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, detail="only a pick-one card takes an option"
             )
-    tags = timeline_service.message_tags(db, [asking.id])
-    return ConfirmAnswerRead(
-        token=pending.token,
-        answer=data.answer,
-        outcome=outcome,
-        detail=detail,
-        message=_read(asking, tags.get(asking.id)),
+        outcomes: list[CardOutcome] = []
+        resumes: list[tuple[Resume, str, bool]] = []
+        asked_in: dict[int, list[cards_service.Card]] = {}
+        for card in chosen:
+            if card.pending is None or card.group is None:
+                continue
+            outcomes.append(
+                _answer_app_card(
+                    db, conversation, since, card, data.answer, conductor, thread_store
+                )
+            )
+            asked_in.setdefault(card.group, []).append(card)
+        db.commit()
+        for message_id, answered in asked_in.items():
+            waited = _settled(db, conversation, since, message_id, conductor)
+            if waited is not None:
+                resumes.append(
+                    (waited, cards_service.tap_note(answered), any(c.incognito for c in answered))
+                )
+        for card in chosen:
+            if card.plan is None:
+                continue
+            paused = card.plan.paused
+            if data.answer == "no":
+                ended = "set_aside" if paused.reason == "proposal" else "cancelled"
+                ledger.end_plan(db, paused.plan_id, ended, "declined from its card")
+                outcomes.append(CardOutcome(id=card.id, answer="no", outcome="declined"))
+                continue
+            option = card.options[data.option] if data.option is not None else None
+            resumes.append(
+                (
+                    Resume(paused=paused, words=card.plan.words, option=data.option),
+                    cards_service.tap_note([card], option),
+                    card.incognito,
+                )
+            )
+            outcomes.append(CardOutcome(id=card.id, answer="yes", outcome="resumed"))
+        db.commit()
+        logger.info(
+            "agent_cards_answered",
+            conversation_id=conversation_id,
+            answer=data.answer,
+            cards=len(chosen),
+            outcomes=[one.outcome for one in outcomes],
+            resumes=len(resumes),
+        )
+        exchanges = [
+            _card_turn(
+                db,
+                conversation,
+                since,
+                thread,
+                conductor,
+                thread_store,
+                resume=resume,
+                note=note,
+                surface=data.surface,
+                hidden=hidden,
+            )
+            for resume, note, hidden in resumes
+        ]
+    return CardAnswerRead(
+        answers=outcomes,
+        exchanges=exchanges,
+        cards=[_card_read(card) for card in _open_cards(db, conversation, since)],
+    )
+
+
+def _answer_app_card(
+    db: Session,
+    conversation: Conversation,
+    since: Any,
+    card: cards_service.Card,
+    answer: str,
+    conductor: Interpreter,
+    thread_store: ThreadStore,
+) -> CardOutcome:
+    """One app question answered from its card: its token sent (yes) or not
+    (no), and the answer put on the turn that asked it. No model runs."""
+    pending = card.pending
+    assert pending is not None and card.group is not None
+    asking = db.get(ConversationMessage, card.group)
+    assert asking is not None
+    with incognito.turn(card.incognito):
+        if answer == "no":
+            record = ToolCallRecord(**confirmation.closing(pending, confirmation.DECLINED))
+        else:
+            context = DelegationContext(
+                master_conversation_id=conversations_service.thread_key(db, conversation.id, since),
+                thread_store=thread_store,
+                pending_confirms=[pending],
+            )
+            with use_delegation_context(context):
+                record = conductor.answer_confirm(pending.app)
+            record.answers = pending.token
+            if pending.several:
+                record.undoes = None
+        conversations_service.append_call(db, asking, record, hidden=card.incognito)
+        ledger.answer_step(db, asking.id, record)
+    outcome, detail = _card_outcome(answer, record)
+    return CardOutcome(id=card.id, answer=answer, outcome=outcome, detail=detail)  # type: ignore[arg-type]
+
+
+def _settled(
+    db: Session, conversation: Conversation, since: Any, message_id: int, conductor: Interpreter
+) -> Resume | None:
+    """The plan that waited on a turn's app questions, once every one of them
+    is answered and something is left for it to do: its waiting steps, with
+    what the approved calls touched. ``None`` while a question is still open,
+    when no plan waited, or when it ends here (every question declined, or
+    nothing left to run): then its ledger row says how."""
+    waited = next(
+        (
+            one
+            for one in ledger.waiting_plans(db, conversation.id, since=since)
+            if one.paused.reason == "app_confirm" and one.message_id == message_id
+        ),
+        None,
+    )
+    asking = db.get(ConversationMessage, message_id)
+    if waited is None or asking is None:
+        return None
+    db.refresh(asking)
+    calls = asking.tool_calls or []
+    now = utcnow()
+    if any(not confirmation.expired(one.expires_at, now) for one in confirmation.open_in(calls)):
+        return None
+    done = [
+        entry
+        for call in calls
+        if call.get("answers") and not call.get("error")
+        for entry in call.get("app_record") or []
+        if entry.get("outcome") == "done"
+    ]
+    undone = tuple(
+        receipt
+        for call in calls
+        if confirmation.asked(call)
+        for receipt in call.get("undoes") or []
+        if isinstance(receipt, int)
+    )
+    paused = waited.paused
+    if not done:
+        ledger.end_plan(
+            db, paused.plan_id, "cancelled", "none of its questions was approved from its card"
+        )
+        return None
+    view = lambda: ledger.control_view(db, conversation.id, since=since)  # noqa: E731
+    try:
+        goes_on = (
+            conductor.undo_goes_on(paused, view, undone)
+            if control.undo_step(paused) is not None
+            else bool(interpreting.waiting_steps(paused))
+        )
+    except ValueError:
+        goes_on = False
+    if not goes_on:
+        ledger.end_plan(
+            db, paused.plan_id, "accepted", "its questions were answered from their cards"
+        )
+        return None
+    return Resume(paused=paused, words=waited.words, app_record=tuple(done), undone=undone)
+
+
+def _card_turn(
+    db: Session,
+    conversation: Conversation,
+    since: Any,
+    thread: Conversation | None,
+    conductor: Interpreter,
+    thread_store: ThreadStore,
+    *,
+    resume: Resume,
+    note: str,
+    surface: str | None,
+    hidden: bool,
+) -> MessageExchange:
+    """A waiting plan picked up from its card (#251): a turn with no words.
+    The tap is the person's own act, so it is their note; the reply is
+    narrated from what the waiting steps did."""
+    with incognito.turn(hidden):
+        user_message = conversations_service.append_user_message(
+            db, conversation, note, hidden=hidden
+        )
+        turn = ledger.open_turn(db, conversation, user_message, surface=surface, hidden=hidden)
+        db.commit()
+        run, assistant_message = _run_turn(
+            db,
+            conversation,
+            since,
+            thread,
+            thread_store,
+            turn=turn,
+            hidden=hidden,
+            surface=surface,
+            pending=[],
+            asking=None,
+            go=lambda common: conductor.resume(resume, **common),
+        )
+    if hidden:
+        return MessageExchange(
+            user_message=_live(user_message, surface=surface, content=note, calls=None),
+            assistant_message=_live(
+                assistant_message, surface=surface, content=run.reply, calls=run.tool_calls
+            ),
+        )
+    tag = timeline_service.Tag(surface, False)
+    return MessageExchange(
+        user_message=_read(user_message, tag), assistant_message=_read(assistant_message, tag)
     )
 
 
@@ -726,6 +950,11 @@ def _post_message(
         # Barge-in (#77): the person spoke over the last reply. Kept on its
         # turn before the opening is built, so this turn's State says it.
         ledger.record_heard(db, conversation.id, data.heard.model_dump(), since=since)
+    # What the turn right before left waiting (#251): the only question the
+    # person's words can pick from, change or dismiss. Older cards still wait.
+    paused = _paused_plan(db, conversation.id, since)
+    asking = conversations_service.last_exchange(db, conversation.id, since=since)
+    cards_waiting = bool(_open_cards(db, conversation, since))
     turn_opening = turn_context.build(
         clock.local_today(),
         Now(surface=data.surface, panel=data.panel),
@@ -746,6 +975,7 @@ def _post_message(
         ),
         # Incognito shows nothing of it (#82).
         heard=None if hidden else lambda: ledger.last_heard(db, conversation.id, since=since),
+        card=lambda: paused is not None and interpreting.on_a_card(paused),
     )
     user_message = conversations_service.append_user_message(
         db, conversation, data.content, hidden=hidden
@@ -755,13 +985,80 @@ def _post_message(
     )
     db.commit()
 
+    def go(common: dict[str, Any]) -> AgentRunResult:
+        return conductor.run(
+            data.content,
+            context=turn_opening,
+            paused=paused,
+            cards_waiting=cards_waiting,
+            self_facts=lambda: "\n\n".join(
+                (
+                    ledger.self_report(db, conversation.id, since=since),
+                    facts_service.self_lines(db),
+                )
+            ),
+            **common,
+        )
+
+    run, assistant_message = _run_turn(
+        db,
+        conversation,
+        since,
+        thread,
+        thread_store,
+        turn=turn,
+        hidden=hidden,
+        surface=data.surface,
+        # Only what the turn right before asked is in reach of their words.
+        pending=confirmation.open_confirms(turns),
+        asking=asking,
+        go=go,
+    )
+    if hidden:
+        # The person reads the reply now; it was never written (#82).
+        return MessageExchange(
+            user_message=_live(
+                user_message, surface=data.surface, content=data.content, calls=None
+            ),
+            assistant_message=_live(
+                assistant_message, surface=data.surface, content=run.reply, calls=run.tool_calls
+            ),
+        )
+    tag = timeline_service.Tag(data.surface, False)
+    return MessageExchange(
+        user_message=_read(user_message, tag),
+        assistant_message=_read(assistant_message, tag),
+    )
+
+
+def _run_turn(
+    db: Session,
+    conversation: Conversation,
+    since: Any,
+    thread: Conversation | None,
+    thread_store: ThreadStore,
+    *,
+    turn: Any,
+    hidden: bool,
+    surface: str | None,
+    pending: list[PendingConfirm],
+    asking: ConversationMessage | None,
+    go: Any,
+) -> tuple[AgentRunResult, ConversationMessage]:
+    """Run one turn (the person's words, or a card's tap) with everything a
+    turn is bound to, then store its assistant message and close its ledger
+    turn. ``go`` gets the keywords every turn shares and runs it. A failed
+    run is stored as a truthful partial turn before the error goes out.
+    ``pending`` are the app questions in reach of this turn's words;
+    ``asking`` the turn that asked them, where one this turn closes without
+    sending its token is put on the record."""
+    conversation_id = conversation.id
     context = DelegationContext(
         # The apps' own threads follow the window: after a quiet gap each app
         # starts a fresh one, as it did for a new conversation (#82).
         master_conversation_id=conversations_service.thread_key(db, conversation.id, since),
         thread_store=thread_store,
-        # Only a question the person saw last turn can take a yes (#68).
-        pending_confirms=confirmation.open_confirms(turns),
+        pending_confirms=list(pending),
     )
 
     def report(activity: Activity) -> None:
@@ -776,6 +1073,47 @@ def _post_message(
     def publish(kind: str, payload: dict[str, Any]) -> None:
         turn_activity.publish(conversation_id, stop, kind, payload)
 
+    def close_lapsed() -> None:
+        # A question this turn dismissed or changed: closed on the turn that
+        # asked it, its token never sent (#251).
+        if asking is None:
+            return
+        asked_hidden = asking.id in conversations_service.incognito_messages(db, conversation.id)
+        for lapsed, why in context.lapsed:
+            conversations_service.append_call(
+                db,
+                asking,
+                ToolCallRecord(**confirmation.closing(lapsed, why)),
+                hidden=asked_hidden,
+            )
+
+    common: dict[str, Any] = {
+        "surface": surface,
+        "on_activity": report,
+        "conversation_id": str(conversation_id),
+        "stop": stop,
+        "control_view": lambda: ledger.control_view(db, conversation.id, since=since),
+        "recall": lambda query: memory_service.recall(db, query),
+        "memory_app": lambda request, words: facts_service.handle(
+            db,
+            request,
+            words,
+            conversation_id=conversation.id,
+            turn_id=turn.id if turn is not None else None,
+            hidden=hidden,
+            since=since,
+        ),
+        # Incognito: no saved fact rides an app's ask (#134's attach).
+        "saved_facts": None if hidden else lambda: facts_service.texts(db),
+        # ... nor one chosen by meaning (#204).
+        "fact_meaning": None if hidden else fact_meaning.nearest,
+        # A v1.2 app's ask carries what this window touched (#202).
+        "entities": lambda: (
+            threads_service.turn_entities(db, thread)
+            if thread is not None
+            else ledger.recent_entities(db, conversation.id, since=since)
+        ),
+    }
     # How the turn ended, once the ledger has it: the stream's last word,
     # sent only after the commit, so nothing says the turn ended before its
     # record exists. An unexpected failure ends it with no stop reason.
@@ -783,46 +1121,7 @@ def _post_message(
     try:
         try:
             with use_delegation_context(context), turn_events.publishing(publish):
-                run = conductor.run(
-                    data.content,
-                    context=turn_opening,
-                    surface=data.surface,
-                    on_activity=report,
-                    conversation_id=str(conversation_id),
-                    stop=stop,
-                    paused=_paused_plan(db, conversation.id, since),
-                    self_facts=lambda: "\n\n".join(
-                        (
-                            ledger.self_report(db, conversation.id, since=since),
-                            facts_service.self_lines(db),
-                        )
-                    ),
-                    control_view=lambda: ledger.control_view(db, conversation.id, since=since),
-                    recall=lambda query: memory_service.recall(db, query),
-                    memory_app=lambda request, words: facts_service.handle(
-                        db,
-                        request,
-                        words,
-                        conversation_id=conversation.id,
-                        turn_id=turn.id if turn is not None else None,
-                        hidden=hidden,
-                        since=since,
-                    ),
-                    # Incognito: no saved fact rides an app's ask (#134's attach).
-                    saved_facts=None if hidden else lambda: facts_service.texts(db),
-                    # ... nor one chosen by meaning (#204).
-                    fact_meaning=None if hidden else fact_meaning.nearest,
-                    # A yes to a question they spoke over asks it again (#198).
-                    heard=None
-                    if hidden
-                    else lambda: ledger.last_heard(db, conversation.id, since=since),
-                    # A v1.2 app's ask carries what this window touched (#202).
-                    entities=lambda: (
-                        threads_service.turn_entities(db, thread)
-                        if thread is not None
-                        else ledger.recent_entities(db, conversation.id, since=since)
-                    ),
-                )
+                run = go(common)
         except AgentRunFailed as exc:
             logger.error(
                 "agent_run_failed",
@@ -840,6 +1139,7 @@ def _post_message(
                 )
             # The ledger keeps the turn either way: its words, how it ended, what ran.
             ledger.close_turn(db, turn, exc.result, failed_message)
+            close_lapsed()
             db.commit()
             ended.update(
                 stop_reason=exc.result.stop_reason,
@@ -851,23 +1151,10 @@ def _post_message(
             db, conversation, run, hidden=hidden
         )
         ledger.close_turn(db, turn, run, assistant_message)
+        close_lapsed()
         db.commit()
         ended.update(stop_reason=run.stop_reason, message_id=assistant_message.id)
     finally:
         foreground.left()
         turn_activity.end(conversation_id, stop, **ended)
-    if hidden:
-        # The person reads the reply now; it was never written (#82).
-        return MessageExchange(
-            user_message=_live(
-                user_message, surface=data.surface, content=data.content, calls=None
-            ),
-            assistant_message=_live(
-                assistant_message, surface=data.surface, content=run.reply, calls=run.tool_calls
-            ),
-        )
-    tag = timeline_service.Tag(data.surface, False)
-    return MessageExchange(
-        user_message=_read(user_message, tag),
-        assistant_message=_read(assistant_message, tag),
-    )
+    return run, assistant_message

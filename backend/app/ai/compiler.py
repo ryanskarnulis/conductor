@@ -9,8 +9,13 @@ again. A plan that is still invalid, or JSON that isn't a plan, is no plan
 
 The prompt is spike D1's v2 (#56: 88% on the 12B, 99.6% valid first try),
 built from the fleet's manifests and byte-identical turn to turn, so the
-server's prompt cache keeps it; what changes per turn rides in the user
-message (the state block and recall, then the person's words). Plans have no
+server's prompt cache keeps it. It still describes a ``confirm`` step, which
+the schema no longer offers and the validator refuses (#251: only a tap
+approves): rewording the prompt to drop it cost the declines ("what's the
+weather?" fell from 20/20 to 2/20, ``docs/agent-evals.md``), so the bytes
+stay and State's waiting line says what to do instead. What changes per turn
+rides in the user message (the state block and recall, then the person's
+words). Plans have no
 designed length; the schema's ceiling stops a runaway.
 """
 
@@ -198,13 +203,9 @@ def user_message(context: str | None, words: str) -> str:
 
 
 def _problems(plan: plans.Plan, words: str, checks: plans.Checks) -> list[str]:
-    """The validator's objections, a recalled answer (#127) and a confirm
-    beside an amend (#77): a plan with any of these doesn't run."""
-    return (
-        plans.problems(plan, checks)
-        + plans.recalled_answer(plan, words, checks.context)
-        + plans.answers_twice(plan)
-    )
+    """The validator's objections and a recalled answer (#127): a plan
+    with either doesn't run."""
+    return plans.problems(plan, checks) + plans.recalled_answer(plan, words, checks.context)
 
 
 def _listed(checks: plans.Checks) -> list[tuple[str, str]]:
@@ -220,7 +221,9 @@ def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Check
     narrow (#160); a new ask, search or think for words that change
     something when State shows nothing they could change (#176); a
     cancel, amend or undo for "forget that" with nothing to act on (#183);
-    a spoken correction ("no, Saturday") filed as a no, a cancel or chat
+    a cancel for words code didn't read as a dismissal, while a card
+    waits (#251);
+    a spoken correction ("no, Saturday") filed as a cancel or chat
     instead of an amend (#77);
     a recall feeding an ask for "their other album" (#168);
     and State's entities listed where the person named a group (#248; a
@@ -235,6 +238,7 @@ def _nudges(plan: plans.Plan, about: str | None, words: str, checks: plans.Check
         + plans.disagrees(about, plan)
         + plans.narrows_job(plan, words, checks.context)
         + plans.points_at_nothing(plan, words, checks)
+        + plans.cancels_a_card(plan, words, checks)
         + plans.corrects(plan, words, checks)
         + plans.forgets_by_control(plan, words, checks)
         + plans.recalls_unnamed(plan, words)

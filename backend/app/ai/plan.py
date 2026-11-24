@@ -7,8 +7,9 @@ turns what the person said into one of three shapes:
   app a parameter (adding an app adds an enum value, never a tool);
 - ``{"answer": "knowledge" | "decline" | "self" | "chat"}``: nothing needs to
   run;
-- ``{"resume": "<their answer>"}``: the person answered the question a paused
-  plan asked (offered only while one is paused on ``ask_user``).
+- ``{"resume": "<their answer>"}``: the person answered an open question a
+  paused plan asked (offered only while one waits on words: an ``ask_user``
+  with no options, or an app's question with no candidates).
 
 Plans have no designed length. :data:`MAX_STEPS` is a ceiling against a
 runaway.
@@ -17,12 +18,15 @@ Code owns what happens next. :func:`problems` is the validator: refs, order,
 targets, policy and budgets; a plan with problems gets a repair.
 :func:`unrunnable` names what the interpreter can't run in a valid plan: a
 ``{sN}`` on a step that gives no name. Every step kind runs (#75): ``ask``/
-``open``/``ask_user``/``confirm`` across apps, with ``{sN}`` data flow
+``open``/``ask_user`` across apps, with ``{sN}`` data flow
 between them (#72), ``look`` (#73: a plain read of an app's glance, offered
 only for apps whose manifest declares one), the control steps ``cancel``/
 ``amend``/``undo`` (#74; on a running job through the jobs runtime, #76),
 ``recall`` over the ledger (#80, :mod:`app.services.memory`), ``think`` (#78:
-a background job whose proposal waits for a yes), and the direct answers.
+a background job whose proposal waits on its card), and the direct answers.
+There is no ``confirm`` step (#251): a question is a card, and only a tap
+approves it. :class:`Confirm` still parses, for rows written before, and the
+validator refuses it.
 :func:`reads_only` says which asks may run in parallel.
 Pure: no I/O.
 """
@@ -31,7 +35,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Collection
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
@@ -115,6 +119,8 @@ class Amend(BaseModel):
 
 
 class Confirm(BaseModel):
+    """Retired (#251): parses for old rows, never offered, never run."""
+
     id: str
     do: Literal["confirm"]
     answer: Literal["yes", "no"]
@@ -201,7 +207,9 @@ def offered_about(checks: Checks) -> tuple[str, ...]:
     waits on the person. Offered always, both drew plans for things that
     weren't there ("undo that" as a running job, "yes" with nothing waiting)."""
     jobs = any(line.startswith(_RUNNING_HEADER) for line in checks.context.splitlines())
-    waiting = _waits(checks)
+    # A card isn't the planner's to answer (#251): with one waiting and no
+    # open question, their message is about something else.
+    waiting = _waits(checks) and not (checks.asked and not checks.resumable)
     return tuple(
         value
         for value in ABOUT
@@ -210,10 +218,11 @@ def offered_about(checks: Checks) -> tuple[str, ...]:
 
 
 def _waits(checks: Checks) -> bool:
-    """Whether something waits on the person: a question a confirm or a
-    resume answers, or the state block's waiting line."""
+    """Whether the turn before asked something that still waits: a card an
+    amend can change, a question a resume answers, or the state block's
+    waiting line."""
     return (
-        checks.confirmable
+        checks.asked
         or checks.resumable
         or any(line.startswith(_WAITING_HEADER) for line in checks.context.splitlines())
     )
@@ -237,7 +246,7 @@ def schema(
 
     Each step kind is an object with every field required and nothing else,
     which is what llama-server's strict grammar needs. ``resumable`` offers the
-    ``resume`` shape, only while a plan is paused on ``ask_user``; ``about``
+    ``resume`` shape, only while a plan waits on the person's words; ``about``
     the values State supports (:func:`offered_about`, #151).
     """
     # ``memory`` (#81) is conductor's own app: always there, run by code.
@@ -279,7 +288,6 @@ def schema(
         step("recall", query=text),
         step("cancel", target=text),
         step("amend", target=text, change=text),
-        step("confirm", answer={"type": "string", "enum": ["yes", "no"]}),
         step("undo", target=text),
         step("think", problem=text, inputs={"type": "array", "items": ids}),
     ]
@@ -328,9 +336,12 @@ class Checks:
     """What the validator needs to know about now."""
 
     fleet: Fleet
-    # Something a confirm step can answer: an app's question or conductor's own.
-    confirmable: bool = False
-    # A plan paused on ask_user, which a resume answers.
+    # The turn right before asked something that still waits on its card
+    # (an app's confirm, code's gate, a pick-one, a proposal): an amend can
+    # change it. Nothing the planner writes approves it (#251).
+    asked: bool = False
+    # A plan paused on an open question (no options to tap), which a resume
+    # answers.
     resumable: bool = False
     # What the planner was shown about now (the state block and recall): an
     # ask_user may only offer options it names, never invented ones.
@@ -340,11 +351,13 @@ class Checks:
     changeable: bool = False
 
 
-# A confirm's repair when nothing waits at all (#176): since #151's `about` the
-# 12B repaired "yes" into a decline; before it, into chat.
-_NO_QUESTION = (
-    ": State shows no question, so a yes or no answers nothing; when that is all they said, "
-    'it is small talk: {"about": "small talk", "answer": "chat"}'
+# A confirm is no step (#251). The schema never offers one; a reply that
+# isn't decoded under it (a proposal, a scripted test) gets this repair.
+_NO_CONFIRM = (
+    "confirm is not a step: only the person's tap on a question's card approves it. When "
+    'their words change what waits, plan one amend (target: "pending"); when a yes or no is '
+    'all they said, it is small talk: {"about": "small talk", "answer": "chat"}; else plan '
+    "what they asked for"
 )
 
 
@@ -402,13 +415,7 @@ def problems(plan: Plan, checks: Checks) -> list[str]:
                     "doesn't name; to find which one they mean, ask the app instead"
                 )
         if isinstance(step, Confirm):
-            if index != 0:
-                found.append("confirm must be the first step")
-            if not checks.confirmable:
-                found.append(
-                    "confirm with nothing waiting on the person"
-                    + ("" if _waits(checks) else _NO_QUESTION)
-                )
+            found.append(_NO_CONFIRM)
         seen.add(step.id)
     return found
 
@@ -724,8 +731,8 @@ _ABOUT_SAYS: dict[str, str] = {
         '{"answer": "decline"}, unless an app below does it'
     ),
     "the waiting question": (
-        "their answer to what is waiting is a confirm, a resume, a cancel or an amend, never "
-        "general knowledge or a decline"
+        "what waits on them is changed with an amend or, when your last reply asked an open "
+        "question, answered with a resume; never general knowledge or a decline"
     ),
     "a running job": (
         "a running job is stopped with cancel or changed with amend (target: its ref), never "
@@ -935,9 +942,8 @@ _NOT_A_CHANGE = re.compile(
 )
 
 
-# Words that turn a waiting question down. The page's "Not now" button sends
-# exactly "not now"; live on 2026-11-20 the 12B compiled that as a yes and a
-# seven-step proposal ran. Only a lead, so "yes, don't wait" is not one.
+# Words that turn a waiting question down. Only a lead, so "yes, don't wait"
+# is not one.
 _DECLINES = re.compile(
     r"^\W*(?:no(?:pe|t\s+(?:now|yet|today|right\s+now))?|nah|never\s*mind|cancel|stop|"
     r"don'?t|do\s+not|later|maybe\s+later|skip(?:\s+it)?|leave\s+it|forget\s+it)\b",
@@ -946,11 +952,72 @@ _DECLINES = re.compile(
 
 
 def declines(words: str) -> bool:
-    """Whether the person's words open by turning something down. A confirm
-    the planner compiled as a yes is read as a no when they do: a refusal is
-    never an approval, whatever the model made of it. Refusing by mistake
-    costs a second ask; approving by mistake runs writes."""
+    """Whether the person's words open by turning something down."""
     return _DECLINES.match(words) is not None
+
+
+# A dismissal (#251): a refusal and nothing else. Every word is one of these,
+# and one of them turns the question down ("actually, cancel that", "no
+# wait, stop", "never mind, thanks"). A word that names anything ("no,
+# Saturday", "cancel the download") makes it a correction or a new request.
+_REFUSES = re.compile(
+    r"\b(?:no|nope|nah|not\s+(?:now|yet|today)|never\s*mind|cancel|stop|don'?t|do\s+not|"
+    r"skip(?:\s+it)?|leave\s+it|forget\s+(?:it|that)|scrap\s+(?:it|that)|drop\s+(?:it|that)|"
+    r"later)\b",
+    re.IGNORECASE,
+)
+_DISMISSAL_WORDS = frozenset(
+    "actually wait oh ok okay hmm um uh well no nope nah not now yet today never mind nevermind "
+    "cancel stop don't dont do skip leave forget scrap drop later maybe it that this them those "
+    "all of the one ones card cards question questions thanks thank you please for just i "
+    "changed my bother right".split()
+)
+
+
+def dismisses(words: str) -> bool:
+    """Whether the words only turn down what was just asked (#251): "never
+    mind", "no, leave it", "actually, cancel that". Code reads this, never a
+    model: it closes the question asked in the turn right before, nothing
+    older. A no that goes on to say what instead ("no, Saturday") is a
+    correction, and anything else is a new request."""
+    said = re.findall(r"[a-z']+", words.lower().replace("’", "'"))
+    if not said or len(said) > 8 or not all(word in _DISMISSAL_WORDS for word in said):
+        return False
+    return _REFUSES.search(" ".join(said)) is not None
+
+
+# A yes: said any time ("yes", "go ahead"), or only as an answer ("ok").
+_YES = r"yes|yeah|yep|yup|aye|confirm(?:ed)?|approve(?:d)?|do\s+it|go\s+ahead|go\s+for\s+it"
+_OKAY = r"ok(?:ay)?|sure|alright|right|correct|fine|please\s+do|sounds\s+good"
+_YES_REST = re.compile(
+    rf"^(?:\W|\b(?:{_YES}|{_OKAY}|please|thanks|thank\s+you|that'?s\s+(?:right|fine)|to|"
+    r"everything|each|every\s+one|"
+    r"(?:(?:do|delete|trash|wipe|remove|run|send|approve|confirm)\s+)?"
+    r"(?:it|that|them|those|both|all(?:\s+of\s+(?:it|them|those))?))\b)*$",
+    re.IGNORECASE,
+)
+_YES_LEAD = re.compile(rf"^\W*(?:{_YES})\b", re.IGNORECASE)
+_OKAY_LEAD = re.compile(rf"^\W*(?:{_OKAY})\b", re.IGNORECASE)
+
+
+def bare_yes(words: str, *, just_asked: bool) -> bool:
+    """Whether the words are a yes and nothing else (#251): "yes", "yeah, do
+    it", "go ahead". No words approve anything, so with a card waiting code
+    answers "tap the card" and nothing is planned. The softer ones ("ok",
+    "sure") count only right after a question: later they are small talk."""
+    lead = _YES_LEAD.match(words) or (_OKAY_LEAD.match(words) if just_asked else None)
+    return lead is not None and _YES_REST.match(words[lead.end() :]) is not None
+
+
+def changes_what_waits(words: str) -> bool:
+    """Whether the words change what was just asked, lead word or not (#251:
+    "no, Saturday", "make it Saturday", "the Garage one instead"). Read by
+    code right after a question went on its card: these amend it, and the
+    question is asked again. A new request names its own thing ("just add
+    milk", "add milk instead of eggs")."""
+    if is_correction(words):
+        return True
+    return _CHANGES.search(words) is not None and _NOT_A_CHANGE.search(words) is None
 
 
 def is_correction(words: str) -> bool:
@@ -978,14 +1045,14 @@ def _redoes(lone: str | None, chat: bool, words: str, checks: Checks) -> bool:
         return False
     if not _TAKES_BACK.match(words):
         return False
-    return chat or lone in ("confirm", "cancel", "ask")
+    return chat or lone in ("cancel", "ask")
 
 
 def corrects(plan: Plan, words: str, checks: Checks) -> list[str]:
-    """A spoken correction (#77) filed as something else: a confirm, a
-    cancel, chat or self while a plan waits on the person (the 12B reads
-    "no, Saturday" as a no and drops the plan), or a cancel or confirm for a
-    running job the words only narrow. The repair asks for one amend of what waits or runs,
+    """A spoken correction (#77) filed as something else: a cancel, chat or
+    self while a question waits on the person (the 12B reads "no, Saturday"
+    as a no and drops the plan), or a cancel for a running job the words
+    only narrow. The repair asks for one amend of what waits or runs,
     which resumes the same plan with the change. With nothing waiting or
     running, a write the last plan finished takes the amend too (#198,
     ``checks.changeable``): code asks the app that made it to change it."""
@@ -1003,21 +1070,45 @@ def corrects(plan: Plan, words: str, checks: Checks) -> list[str]:
     if isinstance(plan, StepPlan) and any(step.do in ("amend", "ask") for step in plan.steps):
         return []
     if _waits(checks):
-        if lone not in ("confirm", "cancel") and not chat:
+        if lone != "cancel" and not chat:
             return []
         return [
             "their words change what is waiting on them, not a yes or no to it: plan exactly "
             'one step, an amend (target: "pending", change: what they want instead, written '
-            "out, no {sN}); no confirm beside it, since the amend resumes the waiting plan "
-            "with the change and it asks again"
+            "out, no {sN}); the amend resumes the waiting plan with the change and it asks again"
         ]
     jobs = running_in(checks.context)
-    if not jobs or lone not in ("cancel", "confirm"):
+    if not jobs or lone != "cancel":
         return []
     ref = f"{jobs[0][0]}:job:{jobs[0][1]}"
     return [
         f"{ref} is still running and their words narrow it rather than stop it or answer a "
-        f'question: amend it (target: "{ref}", change: their words), never a cancel or confirm'
+        f'question: amend it (target: "{ref}", change: their words), never a cancel'
+    ]
+
+
+_SAYS_STOP = re.compile(r"\b(?:stop|cancel|halt|abort|kill|pause)\b", re.IGNORECASE)
+
+
+def cancels_a_card(plan: Plan, words: str, checks: Checks) -> list[str]:
+    """A cancel planned while the turn before left a card waiting (#251).
+    Code reads a dismissal itself (:func:`dismisses`), so these words
+    weren't one: without a ``confirm`` step the 12B writes a cancel for a
+    yes that goes on to say more ("yes, and add milk"), and for a question
+    about something else ("what's due today?", which stopped a running
+    download in a session eval). The planner's cancel never closes a card,
+    so the repair asks for the request alone. Words that say stop while a
+    job runs are a cancel of that job, and pass."""
+    if not checks.asked or not isinstance(plan, StepPlan):
+        return []
+    if not any(isinstance(step, Cancel) for step in plan.steps):
+        return []
+    if running_in(checks.context) and _SAYS_STOP.search(words):
+        return []
+    return [
+        "what waits on the person sits on a card that only their tap answers or drops, so a "
+        "cancel does nothing to it and is never a way to move on: plan only what their "
+        "message asks for, as a new request, with no cancel"
     ]
 
 
@@ -1035,20 +1126,6 @@ def changes_too(words: str, picked: str) -> bool:
         for pattern in (_INSTEAD_DAY, _CHANGES)
         for found in pattern.finditer(rest)
     )
-
-
-def answers_twice(plan: Plan) -> list[str]:
-    """A confirm beside an amend (#77): both answer the one waiting question,
-    a yes or no and a change, so code can't tell which the person meant."""
-    if not isinstance(plan, StepPlan):
-        return []
-    kinds = {step.do for step in plan.steps}
-    if not {"confirm", "amend"} <= kinds:
-        return []
-    return [
-        "a confirm and an amend both answer the waiting question: plan one of them; when "
-        "their words say what they want instead, it is the amend alone"
-    ]
 
 
 _FORGET = re.compile(r"\bforget\b", re.IGNORECASE)
@@ -1346,8 +1423,31 @@ def step_text(step: BaseModel) -> str:
     return " ".join(str(getattr(step, name)) for name in STEP_TEXT_FIELDS if hasattr(step, name))
 
 
-# ``proposal``: a think's proposal (#78), posted as its job's note; a yes runs it.
+# ``proposal``: a think's proposal (#78), posted as its job's note; a tap runs it.
 # ``app_question``: an app that did nothing asked the person something (#168).
+def waiting_on(
+    asking: str, rest: Sequence[Step], *, stops: Callable[[Step], bool]
+) -> tuple[list[Step], list[Step]]:
+    """The steps after a question that wait with it, and those that don't
+    (#251). A step waits when it uses what the asking step will give (a
+    ``{sN}`` on it, a think's input) or what a waiting step will; and when it
+    would stop for a question of its own (``stops``): one question at a time
+    per plan, the next is asked when this one is answered."""
+    blocked = {asking}
+    waiting: list[Step] = []
+    free: list[Step] = []
+    for step in rest:
+        needs = set(REF.findall(step_text(step)))
+        if isinstance(step, Think):
+            needs |= set(step.inputs)
+        if needs & blocked or stops(step):
+            blocked.add(step.id)
+            waiting.append(step)
+        else:
+            free.append(step)
+    return waiting, free
+
+
 PauseReason = Literal["ask_user", "gate", "app_confirm", "app_question", "proposal"]
 # ``invalid``: no plan code could run, even after the repairs; code answered
 # (#75). Old rows may also say ``fell_back`` (the loop took the turn).
@@ -1375,7 +1475,9 @@ class TurnPlan(BaseModel):
     # whether it was ``cancelled`` or ``amended`` (the amended words run on);
     # a think's proposal (#78) is ``accepted`` by a yes or ``set_aside``.
     ends: int | None = None
-    ends_as: Literal["cancelled", "amended", "accepted", "set_aside"] | None = None
+    # A pick or an answer in words ``resumed`` it; a card's tap ``accepted``
+    # it (#251).
+    ends_as: Literal["cancelled", "amended", "accepted", "set_aside", "resumed"] | None = None
     # A control step split off this plan (#75): it ran first, as a plan of its
     # own, and the turn's first ``first_steps`` records are its steps.
     first: TurnPlan | None = None
