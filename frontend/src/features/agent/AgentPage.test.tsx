@@ -271,6 +271,38 @@ describe('AgentPage', () => {
     expect(steps).toHaveTextContent('askchessstatus?failed · chess is rate-limiting requests right now.')
   })
 
+  it('shows an app’s passed answer under its name, as text: no link, no image (#241)', async () => {
+    const report = 'You have 2 open tasks.\n\n- Test the fence\n- [Pay rent](https://evil.test/x) ![x](https://evil.test/p.png)'
+    const relayed = message({
+      id: 2,
+      role: 'assistant',
+      content: 'Tasks answered.',
+      stop_reason: 'completed',
+      tool_calls: [
+        {
+          tool: 'ask_tasks',
+          arguments: { message: 'report' },
+          result: 'ok',
+          error: null,
+          app_record: [{ tool: 'list_tasks', outcome: 'looked_up', count: 2 }],
+          app_answer: { text: report, spoken: 'You have 2 open tasks.', untrusted: true, read: true, passed: true },
+        },
+      ],
+    })
+    const thread = { ...detail, messages: [message({ content: 'report?' }), relayed] }
+    mockTimeline.mockResolvedValue({ ...thread, quiet_gap_seconds: 10_800, incognito_notice: INCOGNITO_NOTICE })
+    mockGet.mockResolvedValue(thread)
+    renderAt('/c/1')
+
+    expect(await screen.findByText('Tasks answered.')).toBeInTheDocument()
+    const answer = screen.getByText(/PCC · its own words/).closest('.cd-answer') as HTMLElement
+    expect(answer).toHaveTextContent('includes outside text')
+    expect(answer).toHaveTextContent('Test the fence')
+    expect(answer).toHaveTextContent('Pay rent')
+    expect(answer.querySelector('a')).toBeNull()
+    expect(answer.querySelector('img')).toBeNull()
+  })
+
   it('sends a message, shows the live activity beat, then the refetched thread', async () => {
     let resolveRun: (value: never) => void = () => {}
     mockPost.mockImplementation(

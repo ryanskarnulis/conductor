@@ -3,6 +3,7 @@ import { answerCards, getConversation, postMessage, postNote, type SendOptions }
 import { ApiError } from '../../api/client'
 import type { CardsAnswer, ConversationDetail, Surface } from '../../types/agent'
 import { handoffFrom, type Handoff } from './handoff'
+import { shownText } from './turnView'
 
 interface UseConversation {
   detail: ConversationDetail | null
@@ -114,12 +115,15 @@ export function useConversation(
       let reply: string | null = null
       try {
         const exchange = options ? await postMessage(conversationId, content, options) : await postMessage(conversationId, content)
-        reply = exchange.assistant_message.content ?? ''
+        // A voice turn says an app's passed answer in its short form (#241).
+        reply = exchange.assistant_message.spoken ?? exchange.assistant_message.content ?? ''
         if (exchange.user_message.incognito) {
           // Incognito (#82): the server wrote "(incognito)". The person reads
-          // the words and the reply in this page only, until it reloads.
+          // the words and the reply in this page only, until it reloads; an
+          // app's answer (#241) isn't stored either, so it rides the reply.
           const { user_message: said, assistant_message: answered } = exchange
-          setLiveWords((prev) => new Map(prev).set(said.id, said.content).set(answered.id, answered.content))
+          const shown = shownText(answered.content, answered.tool_calls)
+          setLiveWords((prev) => new Map(prev).set(said.id, said.content).set(answered.id, shown))
         }
         // Read the handoff off the live turn only. It rides on the persisted
         // trajectory, so history has it too — but replaying history must not

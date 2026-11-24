@@ -5,6 +5,7 @@ import { cancelTurn, getTimeline, type SendOptions } from '../../api/agent'
 import {
   Ack,
   AnsweredCard,
+  AppAnswer,
   Narration,
   PlanSteps,
   Presence,
@@ -74,6 +75,13 @@ const MARKDOWN_COMPONENTS: Components = {
     void node // hast node isn't a DOM prop; strip it before spreading.
     return <a {...props} target="_blank" rel="noopener noreferrer" />
   },
+}
+
+// An app's answer (#241) is the app's text, maybe quoting outside titles:
+// its lists and emphasis render, but nothing in it is a link or an image.
+const ANSWER_COMPONENTS: Components = {
+  a: ({ children }) => <>{children}</>,
+  img: () => null,
 }
 
 const STOP_FALLBACK: Record<Exclude<AgentStopReason, 'completed'>, string> = {
@@ -156,6 +164,11 @@ function TurnView({
           <ReactMarkdown components={MARKDOWN_COMPONENTS}>{turn.reply}</ReactMarkdown>
         </Narration>
       )}
+      {(turn.answers ?? []).map((answer, index) => (
+        <AppAnswer key={index} app={answer.name} outside={answer.untrusted}>
+          <ReactMarkdown components={ANSWER_COMPONENTS}>{answer.text}</ReactMarkdown>
+        </AppAnswer>
+      ))}
       {stop && (
         <p className="agent-stop-note" role="status">
           {stop}

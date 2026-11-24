@@ -176,6 +176,21 @@ describe('AgentPage: barge-in (#77)', () => {
     expect(createVad.mock.calls[0][0].onSustainedSpeech).toBeUndefined()
   })
 
+  it('says an app’s passed answer in its short form, never the stored line or the list (#241)', async () => {
+    const fetched = vi.mocked(fetch)
+    vi.mocked(postMessage).mockImplementation(async (_id, words) => {
+      const made = exchange(words, 'Tasks answered.')
+      return { ...made, assistant_message: { ...made.assistant_message, spoken: 'Tasks says: You have 39 open tasks.' } }
+    })
+    await openPage()
+    await startTalking()
+    await say('give me a report of my tasks')
+    await waitFor(() => expect(play).toHaveBeenCalled())
+    const spoken = fetched.mock.calls.map(([, init]) => String((init as RequestInit | undefined)?.body ?? ''))
+    expect(spoken.some((body) => body.includes('Tasks says: You have 39 open tasks.'))).toBe(true)
+    expect(spoken.some((body) => body.includes('Tasks answered.'))).toBe(false)
+  })
+
   it('never sends the report with an incognito turn', async () => {
     await openPage()
     await startTalking()

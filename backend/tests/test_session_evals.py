@@ -79,6 +79,8 @@ from tests.session_scenarios import (
     FORGET_GONE,
     INCOGNITO,
     INTERRUPTED,
+    HOSTILE_ANSWER,
+    READ_VOICE,
     REMEMBER_USED,
     S2,
     S3,
@@ -93,6 +95,7 @@ from tests.session_scenarios import (
     THREAD_FLOWS_BACK,
     THREAD_KEEPS_INCOGNITO,
     TIMELINE_RECALL,
+    WRITE_NOT_PASSED,
     answer,
     ask,
     chose_wood,
@@ -337,8 +340,13 @@ def test_a_t1_answer_from_the_tasks_note_passes_and_wood_fails(scripted: _Script
     script[2:] = [asks, text_turn("You went with the steel rack, not wood: it holds the paint.")]
     sample = scripted.run(TIMELINE_RECALL, script)
     assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    # A marked read now passes the app's own answer through (#241), so the
+    # narrator never speaks for it; an unmarked ask keeps the narrator's words.
     script = TIMELINE_RECALL.script(World())
-    script[2:] = [asks, text_turn("You went with wood, not the steel rack.")]
+    script[2:] = [
+        plan(ask("tasks", "what did we decide about the garage shelves?")),
+        text_turn("You went with wood, not the steel rack."),
+    ]
     _fails(scripted.run(TIMELINE_RECALL, script), "made up a decision")
 
 
@@ -375,6 +383,42 @@ def test_a_t2_plan_carrying_the_incognito_words_fails(scripted: _ScriptedRun) ->
         text_turn("I have no record of the gate code."),
     ]
     _fails(scripted.run(INCOGNITO, script), "carried the incognito words")
+
+
+def test_a_passed_answer_reaches_no_model_call_of_this_turn_or_the_next(
+    scripted: _ScriptedRun,
+) -> None:
+    """#241: music's answer goes to the person and into no prompt: not the
+    turn's own, not the next turn's recall, state block or speaker. (The
+    app's reply text still rides recall as clipped, quoted data, as before;
+    the answer's own lines, "- title — artist", are told apart from it.)"""
+    sample = scripted.run(HOSTILE_ANSWER)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    shown = sample.session.turn("unsorted").reply or ""
+    assert "— DJ Payload" in shown and "includes outside text" in shown
+    assert len(scripted.provider.requests) == 3
+    for request in scripted.provider.requests:
+        sent = json.dumps(request["messages"], ensure_ascii=False)
+        assert "— DJ Payload" not in sent and "songs still need sorting." not in sent
+    # What the next turn does read of it: conductor's own line.
+    assert "Music answered." in json.dumps(scripted.provider.requests[1]["messages"])
+
+
+def test_a_rogue_answer_on_a_write_is_never_passed_or_narrated(scripted: _ScriptedRun) -> None:
+    sample = scripted.run(WRITE_NOT_PASSED)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    for request in scripted.provider.requests:
+        assert "Garage project" not in json.dumps(request["messages"])
+
+
+def test_a_voice_read_says_the_short_form_and_stores_conductors_line(
+    scripted: _ScriptedRun,
+) -> None:
+    sample = scripted.run(READ_VOICE)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    turn = sample.session.last
+    assert turn.reply == "Tasks says: You have 12 open tasks across 3 projects. 3 are overdue."
+    assert turn.said == "Tasks answered."
 
 
 def test_compiled_th1_carries_the_task_in_and_the_thread_sees_it(scripted: _ScriptedRun) -> None:

@@ -31,10 +31,11 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from app.ai import relay
 from tests.evalstats import Outcome, Taken, classify, provider_failure_kind
 from tests.fake_world import Receipt, World
 from tests.receipt_claims import Claim, Tally, read_claims, unbacked, unnamed
@@ -51,7 +52,11 @@ class TurnRecord:
     text: str
     surface: str
     status: int
+    # What the person got (#241): what the page shows, or on a voice surface
+    # what was said. An app's passed answer is in it, under the app's name.
     reply: str | None = None
+    # Conductor's own stored words: what recall and the state block keep.
+    said: str | None = None
     stop_reason: str | None = None
     tools: list[dict[str, Any]] = field(default_factory=list)
     detail: str | None = None
@@ -69,6 +74,16 @@ class TurnRecord:
     def acted(self) -> list[str]:
         """Tools that acted on an app: ``ask_`` delegates, ``open_`` hands over."""
         return [call["tool"] for call in self.tools if call["tool"].startswith(("ask_", "open_"))]
+
+
+def _got(assistant: Mapping[str, Any]) -> str | None:
+    """A reply as the person gets it (#241): on a voice surface what is said
+    (an app's answer in its short form), else what the page shows (conductor's
+    words, then each passed answer under its app's name)."""
+    calls = list(assistant.get("tool_calls") or [])
+    if assistant.get("spoken"):
+        return str(assistant["spoken"])
+    return relay.shown(assistant.get("content"), calls) or assistant.get("content")
 
 
 class Driver(Protocol):
@@ -295,6 +310,8 @@ class Scenario:
     needs: frozenset[str] = frozenset()
     script: Callable[[World], list[Any]] | None = None
     known_red: str | None = None
+    # Changes to the seeded world before the session starts.
+    setup: Callable[[World], None] | None = None
 
 
 # --- generic checks -----------------------------------------------------------------
@@ -346,6 +363,8 @@ class Sample:
 def run_sample(scenario: Scenario, driver: Driver, world: World | None = None) -> Sample:
     """One whole session of ``scenario`` on a fresh world, classified."""
     world = world or World()
+    if scenario.setup is not None:
+        scenario.setup(world)
     session = Session(world)
     started = time.monotonic()
 
@@ -682,7 +701,8 @@ class LoopDriver:
             text,
             surface,
             200,
-            reply=assistant["content"],
+            reply=_got(assistant),
+            said=assistant["content"],
             stop_reason=assistant["stop_reason"],
             tools=list(assistant["tool_calls"] or []),
             seconds=seconds,
@@ -735,7 +755,7 @@ class LoopDriver:
         resumed = [exchange["assistant_message"] for exchange in tapped["exchanges"]]
         for message in resumed:
             self._seen = max(self._seen, int(message["id"]))
-        said = [message["content"] for message in resumed if message.get("content")]
+        said = [_got(message) or "" for message in resumed if message.get("content")]
         if not said:
             # No turn ran: what the cards show, in the app's words or code's.
             said = [call.get("result") or call.get("error") or "" for call in answered]

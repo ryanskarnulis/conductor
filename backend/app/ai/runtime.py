@@ -31,7 +31,7 @@ from typing import Any, Literal
 import structlog
 from pydantic import BaseModel, ValidationError
 
-from app.ai import confirmation, incognito, narrator, run_record
+from app.ai import confirmation, incognito, narrator, relay, run_record
 from app.ai import trace as run_trace
 from app.ai.plan import TurnPlan
 from app.ai.provider import (
@@ -138,6 +138,12 @@ class ToolCallRecord(BaseModel):
     # when it asked nothing. ``None`` for a v1.1 app, whose asking is read from
     # its words (``narrator.app_asks``).
     app_asks: dict[str, Any] | None = None
+    # For a delegate call, the app's own answer to a read (delegate v1.3,
+    # #241, ``app.ai.relay``): ``{text, spoken, untrusted}``, with ``read``
+    # (the step was a read) and ``passed`` (it went to the person as the
+    # app's words). Persisted and shown; never sent to a model, spliced into
+    # a request or followed.
+    app_answer: dict[str, Any] | None = None
     # Every confirmation that call armed, in call order (several gated calls
     # in one turn are several questions); ``app_confirm`` is the first.
     app_confirms: list[dict[str, Any]] | None = None
@@ -260,6 +266,7 @@ class Runtime:
         delegated_confirm = runtime.delegated_confirm.set(None)
         delegated_confirms = runtime.delegated_confirms.set(None)
         delegated_asks = runtime.delegated_asks.set(None)
+        delegated_answer = runtime.delegated_answer.set(None)
         try:
             outcome = registry.call_tool(call.name, call.arguments, actor=actor)
         except UnknownToolError as exc:
@@ -278,6 +285,7 @@ class Runtime:
             runtime.delegated_confirm.reset(delegated_confirm)
             runtime.delegated_confirms.reset(delegated_confirms)
             runtime.delegated_asks.reset(delegated_asks)
+            runtime.delegated_answer.reset(delegated_answer)
         logger.info("agent_tool_call", tool=call.name, ok=record.error is None, error=record.error)
         return record
 
@@ -337,9 +345,30 @@ class Runtime:
         code-built record reply when the narrator is off. Never raises: a
         narrator that fails falls back to the record inside
         :func:`narrator.narrate`."""
+        # A read's answer in the app's own words goes to the person as that
+        # (#241, ``app.ai.relay``); the narrator speaks for the other steps,
+        # told only that the app answered.
+        answered = relay.mark(records)
+        if answered:
+            ids = {id(record) for record in answered}
+            records = [relay.stand_in(r) if id(r) in ids else r for r in records]
+            if not self._owes_words(records):
+                trace.narration = {
+                    "path": "relayed",
+                    "appended": [],
+                    "model_calls": 0,
+                    "relayed": len(answered),
+                }
+                logger.info("agent_narrated", path="relayed", appended=0, relayed=len(answered))
+                return relay.reply(None, answered)
         if not self.narrate:
-            trace.narration = {"path": "code:record", "appended": [], "model_calls": 0}
-            return narrator.fallback_reply(records, trace.surface)
+            trace.narration = {
+                "path": "code:record",
+                "appended": [],
+                "model_calls": 0,
+                "relayed": len(answered),
+            }
+            return relay.reply(narrator.fallback_reply(records, trace.surface), answered)
         started = time.monotonic()
 
         def chat(messages: list[dict[str, Any]], max_tokens: int) -> ChatResult:
@@ -357,9 +386,30 @@ class Runtime:
             "appended": told.appended,
             "model_calls": told.model_calls,
             "ms": round((time.monotonic() - started) * 1000),
+            "relayed": len(answered),
         }
-        logger.info("agent_narrated", path=told.path, appended=len(told.appended))
-        return told.reply
+        logger.info(
+            "agent_narrated", path=told.path, appended=len(told.appended), relayed=len(answered)
+        )
+        return relay.reply(told.reply, answered)
+
+    @staticmethod
+    def _owes_words(records: Sequence[ToolCallRecord]) -> bool:
+        """Whether anything beside the passed reads is left for conductor to
+        say: a step that ran, or one that didn't and has a reason. A glance
+        that couldn't be read and was replaced by an ask (#73) is not one."""
+        return any(
+            record.result != relay.STAND_IN
+            and not (
+                run_record.is_look(record.tool)
+                and (record.error or "").startswith(run_record.LOOK_FELL_BACK)
+            )
+            and (
+                run_record.classify(record) != "not_run"
+                or narrator.record_line([record], None) != ""
+            )
+            for record in records
+        )
 
     def write_trace(
         self, trace: run_trace.RunTrace, result: AgentRunResult, error: str, started: float
@@ -413,6 +463,8 @@ def _take_app_report(record: ToolCallRecord) -> None:
     several = runtime.delegated_confirms.get()
     record.app_confirms = list(several) if several else None
     record.app_asks = runtime.delegated_asks.get()
+    answer = runtime.delegated_answer.get()
+    record.app_answer = dict(answer) if answer else None
 
 
 def _validation_summary(exc: ValidationError) -> str:

@@ -274,7 +274,7 @@ def test_a_glance_that_cant_be_read_asks_the_same_app_the_persons_words(
     run_with: Any, glances: FakeGlances, db_session: Session
 ) -> None:
     glances.failures["tasks"] = GlanceError("tasks didn't answer in time")
-    provider = ScriptedProvider([plan_turn(steps(LOOK_TASKS)), text_turn("Nothing due today.")])
+    provider = ScriptedProvider([plan_turn(steps(LOOK_TASKS))])
     reply = run_with(provider, "what's due today?")
     assert [call["tool"] for call in reply["tool_calls"]] == ["look_tasks", "ask_tasks"]
     assert reply["tool_calls"][1]["arguments"] == {"message": "what's due today?"}
@@ -283,7 +283,26 @@ def test_a_glance_that_cant_be_read_asks_the_same_app_the_persons_words(
     assert look.error is not None and look.error.startswith(run_record.LOOK_FELL_BACK)
     assert "didn't answer in time" in look.error
     assert (asked.kind, asked.outcome) == ("ask", "done")
-    # The reply is about the ask: the failed read is on the ledger, not in the story.
+    # The reply is about the ask: the failed read is on the ledger, not in the
+    # story. The ask stood in for a read, so the app's own answer passes
+    # (#241) and no narrator is called.
+    assert reply["content"] == "Tasks answered."
+    answer = reply["tool_calls"][1]["app_answer"]
+    assert answer["passed"] and answer["text"].startswith(
+        "You have 2 tasks due today: groceries and call mom."
+    )
+    assert len(provider.requests) == 1
+
+
+def test_a_fallback_ask_with_no_answer_is_still_narrated_without_the_failed_look(
+    run_with: Any, glances: FakeGlances, world: World
+) -> None:
+    for task in world.tasks.values():
+        task.due = None
+    glances.failures["tasks"] = GlanceError("tasks didn't answer in time")
+    provider = ScriptedProvider([plan_turn(steps(LOOK_TASKS)), text_turn("Nothing due today.")])
+    reply = run_with(provider, "what's due today?")
+    assert reply["content"] == "Nothing due today."
     steps_told = _narrator_receipt(provider)["steps"]
     assert [step["app"] for step in steps_told] == ["tasks"]
     assert steps_told[0]["result"] == "answered"

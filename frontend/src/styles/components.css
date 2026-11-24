@@ -29,6 +29,12 @@
 .cd-narration-text > :first-child{margin-top:0}
 .cd-narration-text > :last-child{margin-bottom:0}
 .cd-narration-text a{color:var(--glow)}
+/* An app's own answer to a read (#241): its words, set apart from conductor's */
+.cd-answer{padding:var(--space-4) var(--space-5);border-radius:var(--radius);border:1px solid var(--silk-border);background:var(--surface-soft);font-size:15px;line-height:1.45;color:var(--ink)}
+.cd-answer .cd-label{color:var(--silk)}
+.cd-answer-outside{color:var(--warn)}
+.cd-answer-text ul,.cd-answer-text ol{margin:var(--space-2) 0;padding-left:1.2em}
+.cd-answer-text p{margin:var(--space-3) 0}
 
 /* Status pill: the status as a word, never colour alone */
 .cd-pill{display:inline-block;font-size:11.5px;padding:2px 9px;border-radius:var(--radius-pill);border:1px solid;white-space:nowrap}

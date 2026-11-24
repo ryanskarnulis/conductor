@@ -1,4 +1,4 @@
-"""Fleet smoke (#143): S2, S3, S9, S15, S15p and BI3 through conductor against real PCC and music.
+"""Fleet smoke (#143): S2, S3, S9, S15, S15p, BI3, R1 and R3 through conductor against real PCC and music.
 
 Session evals hold conductor's choices to account over a fake world. This is
 the other half: the same person's side of four scenarios, through the same
@@ -59,6 +59,7 @@ from tests.fleet_harness import (
     FakeMusicBrainz,
     Meter,
     MeteredCall,
+    SEED_TASKS,
     ScratchFleet,
     TurnCost,
     cost_lines,
@@ -80,7 +81,16 @@ from tests.session_harness import (
     WorldHolder,
     run_sample,
 )
-from tests.session_scenarios import FINISHED_CORRECTED, S2, S3, S9, S15, S15_PICKED
+from tests.session_scenarios import (
+    FINISHED_CORRECTED,
+    READ_REPORT,
+    READ_VOICE,
+    S2,
+    S3,
+    S9,
+    S15,
+    S15_PICKED,
+)
 
 _RUNS = int(os.environ.get("CONDUCTOR_FLEET_RUNS", "3"))
 _COST = os.environ.get("CONDUCTOR_FLEET_COST") == "1"
@@ -528,6 +538,50 @@ def bi3_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
     return (end_state,)
 
 
+def _reply_is_pccs_answer(fleet: ScratchFleet, turn: TurnRecord) -> dict[str, Any]:
+    """The turn passed on PCC's own answer (#241), and nothing was written."""
+    assert not fleet.new_tasks(), f"created {[t['title'] for t in fleet.new_tasks()]}"
+    _nothing_trashed(fleet)
+    passed = [
+        call["app_answer"] for call in turn.tools if (call.get("app_answer") or {}).get("passed")
+    ]
+    assert passed, f"no answer was passed on: {turn.reply!r}"
+    assert turn.said and "answered" in turn.said, f"stored reply {turn.said!r}"
+    return dict(passed[0])
+
+
+def r1_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
+    def end_state(session: Session) -> None:
+        turn = session.last
+        answer = _reply_is_pccs_answer(fleet, turn)
+        reply = (turn.reply or "").lower()
+        assert "tasks says" in reply, f"not shown as the app's words: {turn.reply!r}"
+        assert str(len(SEED_TASKS)) in answer["text"], f"no open count: {answer['text']!r}"
+        named = [title for title, _, _ in SEED_TASKS if title in reply]
+        assert len(named) >= len(SEED_TASKS) - 2, f"the report names only {named}"
+        for project in ("Household", "Kitchen", "Garage"):
+            assert project.lower() in reply, f"not grouped by project ({project})"
+        assert "for the record" not in reply, f"counts retold: {turn.reply!r}"
+
+    return (end_state,)
+
+
+def r3_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
+    def end_state(session: Session) -> None:
+        turn = session.last
+        answer = _reply_is_pccs_answer(fleet, turn)
+        said = turn.reply or ""
+        assert said.startswith("Tasks says: "), f"spoken {said!r}"
+        sentences = [s for s in re.split(r"(?<=[.!?])\s+", said) if s]
+        assert len(sentences) <= 2 and len(said) <= 400, f"spoken {said!r}"
+        assert not re.search(r"[*_#`|]|\n", said), f"markup spoken: {said!r}"
+        numbers = {int(n) for n in re.findall(r"\b\d+\b", said)}
+        assert numbers <= {len(SEED_TASKS), 3, 2, 4}, f"a number PCC's data doesn't back: {said!r}"
+        assert len(answer["text"]) > len(said), "the page has no more than the voice said"
+
+    return (end_state,)
+
+
 _SMOKE: dict[str, tuple[Scenario, Callable[[ScratchFleet], tuple[Any, ...]]]] = {
     "S2": (S2, s2_checks),
     "S3": (S3, s3_checks),
@@ -535,6 +589,8 @@ _SMOKE: dict[str, tuple[Scenario, Callable[[ScratchFleet], tuple[Any, ...]]]] = 
     "S15": (S15, s15_checks),
     "S15p": (S15_PICKED, s15p_checks),
     "BI3": (FINISHED_CORRECTED, bi3_checks),
+    "R1": (READ_REPORT, r1_checks),
+    "R3": (READ_VOICE, r3_checks),
 }
 
 

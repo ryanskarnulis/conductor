@@ -53,3 +53,9 @@ delegated_confirms: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
 # None>}``, so a typed app's asking is read from ``needs_input`` alone, never
 # from its wording. Unset (``None``) for a v1.1 app. Same lifetime rule.
 delegated_asks: ContextVar[dict[str, Any] | None] = ContextVar("delegated_asks", default=None)
+
+# A read's answer in the app's own words (delegate v1.3, #241): ``{text,
+# spoken, untrusted}``, cleaned by ``app.ai.relay.take``. Kept on the record
+# for the person's screen or speaker; never on a model's message. Same
+# lifetime rule.
+delegated_answer: ContextVar[dict[str, Any] | None] = ContextVar("delegated_answer", default=None)
