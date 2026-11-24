@@ -3,8 +3,9 @@
 The planner decides what runs; when the plan completes, a narrator call with
 no tools writes the reply from the person's words and a typed receipt of what
 ran (each call's v1.1 ``app_record``: outcome, what it touched by title,
-counts, undo, jobs; refusals). The persona lives here and only here, so the
-planner's prompt stays byte-identical and routing can't move.
+counts, undo, jobs; refusals). The persona (the fleet's Glitch, #256) lives
+here and only here, so the planner's prompt stays byte-identical and routing
+can't move.
 
 Spike R1 (#56) measured why: today's relay kept a saved song's title 0/40,
 the narrator 79/80 on a real-looking title, but it still dropped
@@ -54,6 +55,7 @@ apart from the ``chat`` callable the runtime passes in.
 from __future__ import annotations
 
 import json
+import pathlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -92,12 +94,20 @@ MAX_NAMED = 3
 MAX_TITLE_CHARS = 80
 MAX_NOTE_CHARS = 400
 
-# The persona: brief, a little dry. Here only, never in the planner's prompt.
-PERSONA = (
-    "Brief and a little dry. Plain words; no exclamation marks, no filler "
-    '("Sure!", "Great news", "I hope this helps"), no emoji. At most one '
-    "understated aside, and only when nothing went wrong."
-)
+# The voice (#256): global Glitch, the fleet's shared personality, as PCC's
+# narrator reads it. Here only, never in the planner's prompt. The file is a
+# verbatim copy of ``../agent-standard/personality-global.md`` plus one header
+# line: never edit it in place; re-copy and run ``check-sync.sh``.
+_PERSONALITY_PATH = pathlib.Path(__file__).with_name("personality-global.md")
+
+
+def _load_personality() -> str:
+    """The vendored Glitch text, minus its one leading ``<!-- vendored -->`` line."""
+    lines = _PERSONALITY_PATH.read_text(encoding="utf-8").splitlines()
+    return "\n".join(line for line in lines if not line.startswith("<!-- vendored")).strip()
+
+
+PERSONA = _load_personality()
 
 SYSTEM_PROMPT = f"""\
 You speak for the household's local assistant, right after the person's request \
@@ -127,7 +137,7 @@ Example. Receipt: action "create task", items [{{"kind": "task", "title": "Call 
 the vet"}}], undo "offered: move it to the trash", app_note "due Friday". Reply: \
 Added “Call the vet” for Friday; say undo to trash it.
 
-Voice: {PERSONA}"""
+{PERSONA}"""
 
 _LENGTH = {
     "spoken": ("Your reply is spoken aloud: at most two short sentences, no markdown, no lists."),
@@ -1211,7 +1221,7 @@ Example. Receipt: what "Road trip", status "completed", done 11, total 12, \
 failed_items [{{"title": "Holiday"}}]. Reply: “Road trip” is in: 11 of 12 \
 downloaded; “Holiday” couldn't be found.
 
-Voice: {PERSONA}"""
+{PERSONA}"""
 
 _FAILED_OUTCOMES = frozenset({"refused", "not_run", "failed"})
 _STATUS_CUES: dict[str, tuple[str, ...]] = {

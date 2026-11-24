@@ -55,7 +55,7 @@ Example. Receipt: thread "Sunday playlist", changed [{{"action": "create playlis
 "items": [{{"kind": "playlist", "title": "Slow Sunday"}}]}}], added 12 songs. Reply: \
 Side thread “Sunday playlist”: made the playlist “Slow Sunday” with 12 songs.
 
-Voice: {narrator.PERSONA}"""
+{narrator.PERSONA}"""
 
 
 @dataclass(frozen=True)

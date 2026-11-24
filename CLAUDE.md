@@ -79,8 +79,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   other apps' delegate APIs, and it never grows an `agent:` block of its own.
 - **Vendored Glitch** (`app/ai/personality-global.md`) is a verbatim copy of
   the canonical `../agent-standard/` file plus one header line — never edit in
-  place; re-copy and run `check-sync.sh`. No prompt reads it since #75: the
-  planner has no persona and the narrator's (`narrator.PERSONA`) is the voice.
+  place; re-copy and run `check-sync.sh`. It is the voice (#256,
+  `narrator.PERSONA`) of every reply the model writes: narrated replies, job
+  and thread notes, the speaker's direct answers. The planner has no persona;
+  code's own lines stay plain. `speaker.ABOUT_YOU` must agree with it.
 - **Model knowledge lives in profiles** (agent-standard#32): one TOML per
   model in `app/ai/profiles/`, named for its llama-swap id: sampling, the
   thinking kwarg, each role's cap and temperature (`planner`, `narrator`,
@@ -196,7 +198,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   (untrusted titles by kind and id). No record means unknown: never retry blind.
 - **The planner decides, the narrator speaks** (#65). A completed run's reply
   is a tool-less call on a typed receipt of what ran (`app/ai/narrator.py`);
-  the persona lives only there. Code guarantees the facts (titles, counts,
+  the persona (vendored Glitch, #256) lives only in the speaking prompts, and
+  never overrides a fact. Code guarantees the facts (titles, counts,
   undo, a plan's unrun steps and why, quoted outside text, two sentences on
   voice, and a job's state: queued or started, never done, its query no
   second thing, #188; and a write's dates named with their weekday in the

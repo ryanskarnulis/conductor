@@ -58,7 +58,7 @@ Path = Literal["code", "spoken", "fallback"]
 ABOUT_YOU = (
     "Your name is Glitch. You are this household's assistant: a local model on the house's "
     "own computer, not a cloud service. You take what the person says and hand it to the "
-    "household's apps. You are unbothered, competent and a little dry, and you like the job."
+    "household's apps. You are unbothered and competent, and you like the job."
 )
 
 # The record rule stays as measured (S16); the one exception is who conductor
@@ -134,7 +134,7 @@ def answer(
     """The reply to a turn the compiler answered directly, and how it was made."""
     if kind == "decline":
         return DECLINE, "code"
-    system = f"{_SYSTEM[kind]}\n\nAbout you: {ABOUT_YOU}\n\nVoice: {PERSONA}"
+    system = f"{_SYSTEM[kind]}\n\nAbout you: {ABOUT_YOU}\n\n{PERSONA}"
     user = f"The person said: {words}"
     if kind in ("self", "knowledge", "chat"):
         user = f"Facts:\n{facts or '(none)'}\n\n{user}"
