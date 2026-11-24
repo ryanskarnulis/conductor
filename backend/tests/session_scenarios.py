@@ -995,6 +995,46 @@ WRITE_NOT_PASSED = Scenario(
 )
 
 
+def _write_narrated_read_passed(session: Session) -> None:
+    created = _tasks_created(session)
+    assert len(created) == 1 and "vet" in created[0].title.lower(), (
+        f"created {[r.title for r in created]}"
+    )
+    only_writes(session, {("create", "vet")})
+    turn = session.last
+    reply = _lower(turn.reply)
+    for title in ("groceries", "call mom"):
+        assert title in reply, f"the week's list is missing {title!r}: {turn.reply!r}"
+    assert not re.search(
+        r"(couldn't|could not|didn't|did not|unable to) (check|look|find|get)", reply
+    ), f"says the read wasn't done: {turn.reply!r}"
+    # The write is conductor's to say, from its receipt; the read is the app's.
+    said = _lower(turn.said)
+    assert "vet" in said, f"conductor's own words don't name the write: {turn.said!r}"
+    for call in turn.tools:
+        answer = call.get("app_answer") or {}
+        wrote = any(e.get("outcome") == "done" for e in call.get("app_record") or [])
+        assert not (wrote and answer.get("passed")), "an answer was passed on for a call that wrote"
+    if _passed(turn):
+        _own_words_only(turn, "groceries", "call mom")
+
+
+WRITE_AND_READ = Scenario(
+    "R6",
+    "a write beside a read: the write is narrated from its receipt, the read is the app's answer",
+    (Say("add a task to call the vet tomorrow, and tell me what's due this week"),),
+    (_write_narrated_read_passed,),
+    tier="frontier",
+    script=lambda w: [
+        plan(
+            ask("tasks", "add a task to call the vet tomorrow"),
+            ask("tasks", "what's due this week?", read=True),
+        ),
+        _say("Added “call the vet” for tomorrow; say undo to trash it."),
+    ],
+)
+
+
 # --- memory you can see (#81) ------------------------------------------------------------------
 #
 # Conductor's own memory app: its writes are world receipts too (the harness
@@ -1637,4 +1677,5 @@ SCENARIOS: tuple[Scenario, ...] = (
     READ_VOICE,
     READ_OUTSIDE,
     WRITE_NOT_PASSED,
+    WRITE_AND_READ,
 )
