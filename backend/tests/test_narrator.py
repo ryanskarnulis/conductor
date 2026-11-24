@@ -182,6 +182,23 @@ def test_the_persona_lives_only_in_the_narrator(fleet: _Fleet) -> None:
     assert narrator.PERSONA in narrated[1]["messages"][0]["content"]
 
 
+def test_the_voice_is_the_vendored_personality_word_for_word() -> None:
+    from app.ai import thread_note
+
+    vendored = Path(narrator.__file__).with_name("personality-global.md").read_text("utf-8")
+    header, _, body = vendored.partition("\n")
+    assert header.startswith("<!-- vendored")
+    assert narrator.PERSONA == body.strip()
+    assert narrator.PERSONA.startswith("Your personality: you are Glitch")
+    assert narrator.PERSONA.endswith("always win over the bit.")
+    for prompt in (
+        narrator.SYSTEM_PROMPT,
+        narrator.JOB_SYSTEM_PROMPT,
+        thread_note.SYSTEM_PROMPT,
+    ):
+        assert prompt.endswith(narrator.PERSONA)
+
+
 def test_with_the_narrator_off_the_reply_is_codes_record(fleet: _Fleet) -> None:
     fleet.tasks = ("ok", _task_record("Water the plants"))
     provider = ScriptedProvider([_ask("tasks")])

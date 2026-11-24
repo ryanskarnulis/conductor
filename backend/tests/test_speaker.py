@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from app.ai import speaker
+from app.ai import narrator, speaker
 from app.ai.provider import ChatResult
 
 
@@ -34,3 +34,11 @@ def test_the_record_rule_names_what_it_covers(kind: str) -> None:
     system = _system(kind)
     assert "nswer only from the facts below" in system
     assert "The one exception: a question about who you are" in system
+
+
+@pytest.mark.parametrize("kind", ["self", "chat", "knowledge"])
+def test_every_direct_answer_speaks_as_the_vendored_glitch(kind: str) -> None:
+    system = _system(kind)
+    assert system.endswith(narrator.PERSONA)
+    # The sheet and the personality agree: one name, no second voice.
+    assert "a little dry" not in system
