@@ -295,6 +295,26 @@ def test_voice_says_two_sentences_of_a_lone_answer_and_none_of_the_list() -> Non
     assert "Garden" not in said
 
 
+def test_voice_names_a_short_list_from_the_record_when_the_app_only_counted() -> None:
+    """PCC's narrator opens "you've got two things due this week" (0/5 named
+    them when asked to): no answer to someone who can't see the page."""
+    refs = [
+        {"app": "tasks", "kind": "task", "id": "1", "title": "Pay rent"},
+        {"app": "tasks", "kind": "task", "id": "2", "title": 'Sort "Honey"', "untrusted": True},
+    ]
+    entry = {"tool": "list_tasks", "outcome": "looked_up", "count": 2, "touched": refs}
+    counted = _read(record=[entry], spoken="You've got two things due this week. Easy week.")
+    assert relay.spoken("Tasks answered.", _passed(counted)) == (
+        "Tasks says: You've got two things due this week. That's “Pay rent” and “Sort Honey”."
+    )
+    named = _read(record=[entry], spoken="Pay rent and one more are due.")
+    assert relay.spoken("Tasks answered.", _passed(named)) == (
+        "Tasks says: Pay rent and one more are due."
+    )
+    # A longer list stays a count: the page has it.
+    assert "That's" not in (relay.spoken("Tasks answered.", _passed(_read())) or "")
+
+
 def test_voice_says_one_sentence_of_an_answer_beside_conductors_words() -> None:
     said = relay.spoken("Added “Call the vet”. Tasks answered.", _passed(_write(), _read()))
     assert said == "Added “Call the vet”. Tasks says: You have 39 open tasks across 6 projects."

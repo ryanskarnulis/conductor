@@ -79,6 +79,7 @@ _MARKUP = re.compile(r"[*_#`|>]+")
 _BULLET = re.compile(r"^\s*(?:[-•]|\d+[.)])\s+")
 _LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _URL = re.compile(r"\b(?:https?://|www\.)\S+", re.IGNORECASE)
+_QUOTES = "\"'“”‘’«»"
 
 
 def take(answer: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -198,7 +199,9 @@ def spoken(content: str | None, calls: Sequence[Mapping[str, Any] | ToolCallReco
     Conductor's own words keep their two sentences. Each app is then named
     and its short form said: two sentences when it alone answered, one each
     beside conductor's words or another app's, at most :data:`SPOKEN_APPS`
-    apps; anything left is on the page, and said to be."""
+    apps; anything left is on the page, and said to be. A lone answer about
+    three things or fewer that names none of them gets code's sentence naming
+    them from the record (:func:`_names`), in place of its second sentence."""
     answers = [(app_of(call), answer) for call in calls if (answer := passed(call)) is not None]
     if not answers:
         return None
@@ -208,14 +211,57 @@ def spoken(content: str | None, calls: Sequence[Mapping[str, Any] | ToolCallReco
         own = own[: -len(said)].strip()
     alone = not own and len(answers) == 1
     parts = [own] if own else []
-    for app, answer in answers[:SPOKEN_APPS]:
+    for call in calls:
+        answer = passed(call)
+        if answer is None or len(parts) - bool(own) >= SPOKEN_APPS:
+            continue
+        app = app_of(call)
         short = _sentences(str(answer.get("spoken") or ""))
-        words = " ".join(short[: SPOKEN_SENTENCES if alone else 1])
+        named = _names(call, " ".join(short)) if alone else ""
+        # A short list is said by name, from the record, in place of the
+        # app's second sentence.
+        words = " ".join(short[: 1 if named or not alone else SPOKEN_SENTENCES])
         if words:
             parts.append(f"{app[:1].upper()}{app[1:]} says: {words}")
+        if named:
+            parts.append(named)
     if len(answers) > SPOKEN_APPS:
         parts.append("The rest is on the page.")
     return " ".join(parts) or None
+
+
+# A read that found this few things has them said by name on voice.
+SPOKEN_NAMES = 3
+
+
+def _names(call: Mapping[str, Any] | ToolCallRecord, said: str) -> str:
+    """Code's sentence naming what a small read found, from its record's
+    refs (titles cleaned and quoted, as the narrator's are), when the app's
+    spoken form names none of them: "you've got two things due" is no answer
+    to someone who can't see the page. Empty for a longer list."""
+    entries = (call.get("app_record") if isinstance(call, Mapping) else call.app_record) or []
+    titles: list[str] = []
+    total = 0
+    for entry in entries:
+        refs = [
+            ref
+            for ref in entry.get("touched") or []
+            if ref.get("title") and not str(ref.get("kind", "")).endswith("job")
+        ]
+        total += max(int(entry.get("count") or 0), len(refs))
+        for ref in refs:
+            title = " ".join("".join(" " if c in _QUOTES else c for c in str(ref["title"])).split())
+            title = _CONTROL.sub(" ", title)[:80]
+            if title and title not in titles:
+                titles.append(title)
+    if not titles or total > SPOKEN_NAMES or len(titles) > SPOKEN_NAMES:
+        return ""
+    heard = _folded(said)
+    if any(_folded(title) in heard for title in titles):
+        return ""
+    quoted = [f"“{title}”" for title in titles]
+    listed = quoted[0] if len(quoted) == 1 else ", ".join(quoted[:-1]) + " and " + quoted[-1]
+    return f"That's {listed}."
 
 
 def shown(content: str | None, calls: Sequence[Mapping[str, Any] | ToolCallRecord]) -> str:

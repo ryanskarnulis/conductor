@@ -229,7 +229,8 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   window knows as outside text. Voice says `spoken` (`MessageRead.spoken`):
   "Tasks says: …", two sentences when one app alone answered, one each
   beside conductor's own words or another app's, at most two apps; the
-  whole answer is on the page. An incognito turn stores none of it. A plan
+  whole answer is on the page. A lone answer about three things or fewer
+  that names none gets code's "That's “A” and “B”." from the record. An incognito turn stores none of it. A plan
   that ends on a question, a handoff or a stop passes nothing. Tasks sends
   `answer`; music doesn't yet, so its reads are still narrated.
 - **Delegate v1.2** (#202, decided in #145): only an app whose `agent:`
