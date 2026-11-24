@@ -2634,6 +2634,14 @@ T1 is its known flake; Q3's one miss is the narrator's wording ("The items
 added are…", an unbacked claim); S15p's two are the planner's (two asks to
 music in one plan, queued twice on the pick; and a request music refused
 without asking, so there was nothing to pick), where it was 5/5 before.
+Run alone the same hour, twice each: 9/10 on main (one sample planned two
+asks to music there too), 8/10 here.
+
+Fleet smoke (`tests/test_fleet_smoke.py`, 3 samples each, real music and real
+PCC on project-command-center#552's branch): S2, S3, S9, S15, S15p and BI3
+all 3/3. S9 is the tap end to end: PCC arms the token, the card's tap redeems
+it with no model turn, and Kitchen is in PCC's trash. (Its first run read 0/3
+on the harness alone: the smoke's driver didn't count a tap's receipts.)
 
 **What the first session run found.** On the code before the last change,
 Q5 read 2/5: with a card waiting and a download running, the 12B filed

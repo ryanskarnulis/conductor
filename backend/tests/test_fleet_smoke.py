@@ -330,6 +330,13 @@ class FleetDriver(LoopDriver):
             self._world.receipts.extend(receipts_from(record))
         return record
 
+    def tap(self, *, answer: str = "yes", option: int | None = None) -> TurnRecord | None:
+        # A card's tap (#251): what the app then did is this turn's receipts.
+        record = super().tap(answer=answer, option=option)
+        if record is not None and self._world is not None:
+            self._world.receipts.extend(receipts_from(record))
+        return record
+
 
 def _only(allowed: frozenset[str], what: str) -> Callable[[FleetApp], None]:
     def check(fleet_app: FleetApp) -> None:
@@ -457,11 +464,11 @@ def s3_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
 def s9_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
     def end_state(session: Session) -> None:
         ask, yes = session.turn("ask"), session.turn("yes")
-        assert not session.writes(ask), "wrote before the yes"
+        assert not session.writes(ask), "wrote before the tap"
         assert "?" in (ask.reply or ""), "didn't ask before wiping"
         names = {p["name"] for p in fleet.projects()}
         trashed = {p["name"] for p in fleet.trash()["projects"]}
-        assert "Kitchen" not in names and "Kitchen" in trashed, "the yes didn't wipe Kitchen"
+        assert "Kitchen" not in names and "Kitchen" in trashed, "the tap didn't wipe Kitchen"
         assert {"Household", "Garage"} <= names, f"other projects gone: {names}"
         assert re.search(r"trash|deleted|removed|wiped|bin", (yes.reply or "").lower()), (
             "didn't say where it went"
