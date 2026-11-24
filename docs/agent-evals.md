@@ -2757,8 +2757,10 @@ the steel rack, not wood", and the check failed any reply holding "wood" as
 old check 12/20, new 20/20. The planner prompt is untouched; the split is
 its, and T1 no longer measures recall alone when it asks tasks.
 
-Full run on the final code (4741 s beside two other eval runs, infra 0/12,
-claims backed 229/230): every gate scenario 5/5. Frontier: S13 0/5 (the
-brief, as before), S15 and Q3 4/5 (the album question not asked; "were added
-to the queue", the narrator's wording, as in #251), the rest 5/5, S9, S14 and
-Q1–Q6 among them.
+Full runs, final code. Before the rebase on #258 (4741 s beside two other
+eval runs, infra 0/12, claims backed 229/230): every gate scenario 5/5;
+frontier S13 0/5 (the brief, as before), S15 and Q3 4/5, the rest 5/5. On
+#258's voice (2010 s, infra 0/12, claims backed 237/237): every gate scenario
+5/5 but S6 8/10 (the plan said "the Caribou song" and music asked which);
+frontier S13 0/5, S15 4/5 and S15p 3/5 (the album question not asked, as in
+#251), the rest 5/5: S9, S14, S16, M3, T1 and Q1–Q6 among them.
