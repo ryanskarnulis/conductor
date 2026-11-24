@@ -2673,3 +2673,40 @@ nested quote as a title. A first wording that restated the record rule read
 S16 13/20; the shipped one keeps the old sentences and adds "asked what you
 did, say what was done". Full run: gate all over floor except T1 2/5 (5/5 and
 5/5 on rerun, the known flake); S14 read 2/5 on branch and 5/5, 2/5 on main.
+
+## Glitch's voice (#256, 2026-11-24)
+
+The vendored `personality-global.md` replaces the dry `narrator.PERSONA` in
+every speaking prompt (narrator, job note, thread note, the speaker's direct
+answers). The planner's prompt, the schema and the compiler are untouched, so
+the plan-level evals were not run. The pinned request bytes
+(`tests/test_request_bytes.py`) did not move: they pin a fixed message pair,
+not the prompts.
+
+Session evals, gemma-4-12b, GPU shared with two other eval runs (full run
+4594 s, infra 0/12):
+
+| | main | branch |
+|---|---|---|
+| gate | every scenario 5/5 but M3 and T1 4/5 (#251's run) | every scenario 5/5 but M3 4/5 and T1 15/20 |
+| frontier | S13 0/5; S14 2/5 to 5/5; S15p 3/5; Q3 4/5; the rest 5/5 | S13 0/5; S14 3/5; the rest 5/5 (S15p, Q1–Q6, W1, W2 included) |
+| claims backed | 223/225 | 240/242 |
+| S16 | 8/10 to 30/35 | 5/5, 5/5 alone |
+| T1 alone | 2/5 to 5/5 | 4/5 |
+| M3 alone | 5/5 (same day) | 4/5 |
+| S14 alone | 7/10 (same day; 3 "no card was waiting") | 4/5 (1 "no card was waiting") |
+
+What the voice changed, beyond the words:
+
+- **M3** lost one sample in each run to a true sentence the claim check reads
+  as a download: “I've saved "I sort music on Sundays"” ("saved … music").
+  Main says "I have remembered …" and reads 5/5. The check's, not fixed here.
+- **S14**: two of the eight narrated replies called three date moves "marked
+  as done" (0 of 7 on main the same day). One failed as an unbacked claim; the
+  other listed the titles between "marked" and "done" and the check missed
+  it. Small numbers, but it is a false claim the dry voice didn't make.
+- Titles are still quoted exactly, mostly in straight quotes now. Undo
+  offers, counts, weekdays and not-run reasons held (no new failure mode).
+- Nearly every narrated reply opens with "yo,", "word," or "bet." (233 of the
+  run's 405 replies), and the speaker's small talk stays flat ("Understood.",
+  "I am functioning as intended.") whatever the prompt's layout: #257.
