@@ -51,7 +51,16 @@ CORPUS: list[tuple[str, list[R], list[str]]] = [
     ("Filed Odessa under house.", [FILED], []),
     ("Stopped after filing Odessa.", [STOP, FILED], []),
     ("Moved your dentist appointment to Friday.", [MOVED], []),
+    # A saved fact whose words say "music" is no download (#255, M3).
+    (
+        'I\'ve saved "I sort music on Sundays".',
+        [R("memory", "create", "I sort music on Sundays")],
+        [],
+    ),
+    ("Got it, saved “I sort music on Sundays”.", [], []),
+    ("Saved Honey to your music library.", [ALBUM], []),
     # unbacked
+    ("Saved Honey to your music library.", [], ["queue"]),
     ("Added “water the plants” for tomorrow.", [], ["create"]),
     ("Done — I deleted the kitchen project.", [], ["trash"]),
     ("Queued Honey and added “sort the new album”.", [ALBUM, TASK], ["create"]),

@@ -155,7 +155,9 @@ FAMILIES: tuple[_Family, ...] = (
         "queue",
         _rx(
             r"\b(?:queued|downloaded|downloading|grabbed|fetched|fetching|"
-            r"saved\b[^.]{0,40}\b(?:library|music)|started (?:the |a )?download|"
+            # Not through a quote: 'saved "I sort music on Sundays"' is a
+            # fact kept, its "music" the fact's own word (#255, M3).
+            r"saved\b[^.\"“”‘’]{0,40}\b(?:library|music)|started (?:the |a )?download|"
             r"on (?:its|their) way)\b"
         ),
         frozenset({"queue"}),
