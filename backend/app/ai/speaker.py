@@ -64,7 +64,7 @@ ABOUT_YOU = (
 # The record rule stays as measured (S16); the one exception is who conductor
 # is (#253): its name and nature are the sheet's, and need no record.
 _WHO = (
-    'The one exception: a question about who you are, not about your record (your name, '
+    "The one exception: a question about who you are, not about your record (your name, "
     'what you are, how you are, what you like), you answer from "About you" in one short '
     "sentence, claiming nothing you did or can do."
 )
