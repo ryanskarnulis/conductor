@@ -872,7 +872,7 @@ class TasksApp:
         ]
         if re.search(r"\b(report|summary|overview|rundown)\b", text) or "all my tasks" in text:
             return self._report()
-        if hits:
+        if hits and not re.search(r"\bdue\b", text):
             found, what = hits, "matching"
         elif "overdue" in text or "late" in text:
             found, what = world.overdue(), "overdue"
@@ -895,6 +895,13 @@ class TasksApp:
             lines.append(f"- {task.title} (#{task.id}, {task.project}{due}){notes}")
         count = f"{len(found)} task{'s' if len(found) != 1 else ''}"
         opening = f"You have {count} {what}." if what != "matching" else f"{count} found."
+        if len(found) <= 3:
+            # A short list is said by name, as PCC's narrator is asked to.
+            names = [task.title for task in found]
+            listed_names = (
+                names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+            )
+            opening = f"{opening[:-1]}: {listed_names}."
         listed = [
             f"- {task.title} ({task.project}{f', due {task.due.isoformat()}' if task.due else ''})"
             + (f": {task.notes}" if task.notes else "")

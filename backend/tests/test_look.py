@@ -288,7 +288,9 @@ def test_a_glance_that_cant_be_read_asks_the_same_app_the_persons_words(
     # (#241) and no narrator is called.
     assert reply["content"] == "Tasks answered."
     answer = reply["tool_calls"][1]["app_answer"]
-    assert answer["passed"] and answer["text"].startswith("You have 2 tasks due today.")
+    assert answer["passed"] and answer["text"].startswith(
+        "You have 2 tasks due today: groceries and call mom."
+    )
     assert len(provider.requests) == 1
 
 

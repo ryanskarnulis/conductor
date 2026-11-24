@@ -520,7 +520,8 @@ def test_two_reads_at_once_each_pass_and_voice_says_one_sentence_of_each(turn: A
     )
     assert message["content"] == "Tasks and music answered."
     assert message["spoken"] == (
-        "Tasks says: You have 3 tasks overdue. Music says: 5 songs still need sorting."
+        "Tasks says: You have 3 tasks overdue: renew passport, pay water bill and return library "
+        "books. Music says: 5 songs still need sorting."
     )
     assert [bool(call["app_answer"]["passed"]) for call in message["tool_calls"]] == [True, True]
     assert message["tool_calls"][1]["app_answer"]["untrusted"] is True
