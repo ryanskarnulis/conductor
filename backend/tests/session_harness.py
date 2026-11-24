@@ -113,6 +113,9 @@ class Driver(Protocol):
         """Assistant messages that arrived since the last turn without one
         being asked for (a job reporting back, S4)."""
 
+    def notes(self) -> list[str]:
+        """The same messages as they stand now: nothing is settled first."""
+
     def settle(self) -> None:
         """Background work gets its turn now: running jobs are read and a
         ``think`` runs to its end (#78)."""
@@ -130,6 +133,8 @@ class Driver(Protocol):
 
 # What a tap's turn record says the person "said": nothing, they tapped.
 TAP = "(tapped the card)"
+# How a think's note opens when its tries ran out (``think.gave_up_text``).
+GAVE_UP = "I couldn't finish thinking over"
 
 # --- steps --------------------------------------------------------------------------
 
@@ -475,7 +480,17 @@ def _run_step(step: Step, driver: Driver, session: Session) -> TurnRecord | None
         if record is None:
             if step.if_asked:
                 return None
-            record = TurnRecord(world.turn, TAP, "desktop", 409, detail="no card was waiting")
+            # What arrived instead of a card says why (#255: a think that
+            # answered with no steps, or couldn't finish, posts a plain note).
+            notes = driver.notes()
+            said = f"; the last note: {notes[-1][:300]!r}" if notes else ""
+            # A think the 26B never got to finish (cut off or timed out behind
+            # other work on the GPU, three tries) is the infrastructure's, as
+            # a turn's dead provider is: retried, never scored.
+            status = 504 if notes and GAVE_UP in notes[-1] else 409
+            record = TurnRecord(
+                world.turn, TAP, "desktop", status, detail=f"no card was waiting{said}"
+            )
         record.label = step.label
         session.turns.append(record)
         return record
@@ -779,6 +794,12 @@ class LoopDriver:
     def unprompted(self) -> list[str]:
         assert self._conversation is not None
         self._settle()
+        return self.notes()
+
+    def notes(self) -> list[str]:
+        """What was posted unasked since the last turn, as it stands now
+        (nothing is settled first)."""
+        assert self._conversation is not None
         detail = self._client.get(f"/api/agent/conversations/{self._conversation}")
         if detail.status_code != 200:
             return []

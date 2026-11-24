@@ -661,7 +661,8 @@ def test_an_answer_with_no_steps_is_a_plain_note(
     session_factory: sessionmaker[Session],
     db_session: Session,
 ) -> None:
-    _detach(run_with, think_step("should I paint or stain the shelves?"))
+    advice = "should I paint or stain the shelves?"
+    _detach(run_with, think_step(advice), words=advice)
     answer = proposal(summary="Stain them: it holds up better to paint cans")
     watcher, _, _ = _thinker(session_factory, fleet, answer)
     assert watcher.sweep(force=True) == 1
@@ -669,6 +670,46 @@ def test_an_answer_with_no_steps_is_a_plain_note(
     assert note["stop_reason"] == narrator.JOB_NOTE
     assert "Stain them" in note["content"]
     assert ledger.paused_plan(db_session, run_with.conversation) is None
+
+
+def test_a_plan_asked_for_and_summarised_with_no_steps_gets_the_repair(
+    run_with: Any,
+    fleet: Fleet,
+    session_factory: sessionmaker[Session],
+    db_session: Session,
+) -> None:
+    # #255 (S14): "3 garage tasks, Tue to Thu" with no steps posted as a plan
+    # with no card. A plan was asked for, so the 26B is asked for its steps.
+    _detach(run_with)
+    empty = proposal(summary="3 garage tasks, Tue 24 Nov to Thu 26 Nov")
+    watcher, _, provider = _thinker(session_factory, fleet, empty, GOOD)
+    assert watcher.sweep(force=True) == 1
+    assert "it has no steps" in provider.requests[1]["messages"][-1]["content"]
+    assert _notes(run_with)[0]["stop_reason"] == think.PROPOSAL
+    assert [card["kind"] for card in run_with.cards()] == ["proposal"]
+
+
+def test_no_steps_again_after_the_repair_is_the_answer(
+    run_with: Any,
+    fleet: Fleet,
+    session_factory: sessionmaker[Session],
+    db_session: Session,
+) -> None:
+    _detach(run_with)
+    empty = proposal(summary="Nothing to schedule: the garage has no open tasks")
+    watcher, _, provider = _thinker(session_factory, fleet, empty, empty)
+    assert watcher.sweep(force=True) == 1
+    assert provider._turns == []
+    [note] = _notes(run_with)
+    assert note["stop_reason"] == narrator.JOB_NOTE
+    assert "Nothing to schedule" in note["content"]
+    assert run_with.cards() == []
+
+
+def test_only_words_that_ask_for_a_plan_want_steps() -> None:
+    assert think.wants_steps("plan my week around the garage project", WEEK)
+    assert think.wants_steps("a day-by-day schedule for the garage tasks", "sort out my week")
+    assert not think.wants_steps("should I paint or stain the shelves?", "paint or stain?")
 
 
 def test_a_proposal_is_the_newest_question_over_one_left_waiting(

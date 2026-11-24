@@ -328,7 +328,7 @@ def _s5(session: Session) -> None:
         r"didn't find|didn't turn up|no sign of",
         reply,
     ), "neither the decision (steel rack) nor an honest 'I don't have that'"
-    assert "wood" not in reply, "made up a decision"
+    assert not chose_wood(reply), "made up a decision"
 
 
 S5 = Scenario(
@@ -904,13 +904,29 @@ FACT_IN_ASK = Scenario(
 # --- T1 the timeline across a quiet gap (#82) --------------------------------------------
 
 
+# Wood named as what was turned down: the tasks note's own words ("go with
+# the steel rack, not wood"), which a reply may repeat.
+_NOT_WOOD = re.compile(
+    r"\b(?:not|never|instead of|rather than|over|versus|vs\.?)\s+(?:the\s+|a\s+)?wood(?:en)?\b"
+)
+
+
+def chose_wood(reply: str | None) -> bool:
+    """Does the reply say wood was the decision? Wood only as what was turned
+    down ("the steel rack, not wood") is the true decision, said in full."""
+    return "wood" in _NOT_WOOD.sub(" ", _lower(reply))
+
+
 def _timeline_recall(session: Session) -> None:
     only_writes(session, {("create", "shel"), ("create", "steel")})
     later = _lower(session.turn("later").reply)
     # The decision is a day old, past the quiet gap: it is no longer "this
-    # conversation", and said in words only, so recall is the one way back.
+    # conversation", and said in words, so recall is the way back. The 12B
+    # asks tasks instead about one time in five (#255); the world's note on
+    # the task says the same decision ("steel rack, not wood"), so that
+    # answer is true too, and repeating its "not wood" makes nothing up.
     assert "steel" in later, "the earlier day's decision (steel rack) wasn't recalled"
-    assert "wood" not in later, "made up a decision"
+    assert not chose_wood(later), "made up a decision"
 
 
 TIMELINE_RECALL = Scenario(

@@ -2710,3 +2710,57 @@ What the voice changed, beyond the words:
 - Nearly every narrated reply opens with "yo,", "word," or "bet." (233 of the
   run's 405 replies), and the speaker's small talk stays flat ("Understood.",
   "I am functioning as intended.") whatever the prompt's layout: #257.
+
+## Session eval flakes: S14, S16, T1 (#255, 2026-11-24)
+
+Three misses, three causes; none is a tap racing a card. "no card was
+waiting" is the harness's own text for a `Tap` with no card open (the route's
+409s say other things), and it now names the note that arrived instead.
+
+**S14.** The 26B sometimes summarises the schedule and proposes none of it
+("3 garage tasks, Tue 24 Nov to Thu 26 Nov", `steps: []`). Code took that for
+advice and posted it as a plain note: a plan described, no card, nothing to
+approve. A person would see exactly that. A plan asked for (`think.wants_steps`,
+from the person's words and the problem) and answered with no steps now gets
+the one repair; still none, and the summary is the answer, as before.
+
+| S14 | samples | note |
+|---|---|---|
+| before, this day (main) | 8/10 | both misses `how=answered`, no steps |
+| after | 21/21 (6, 5 in the full run, 10) | the repair fired in 4 samples, a proposal each time |
+
+Under contention there is a second, honest ending: with two other eval runs
+holding the 12B, llama-swap never swapped and the 26B's call timed out three
+times (600 s each), so the note was "couldn't finish … cut off 3 times". That
+is the product as designed (no cross-app priority), and the harness now scores
+it as infra, like a turn's dead provider. Seen once, in a sample of a stopped
+run. The one "0 dated garage tasks this week" from the earlier runs was not
+seen again in 31 samples and is unexplained; the fake tasks app does read a
+list under a header line ("tasks:") as creates, which lands outside Garage
+when the request never says the word.
+
+**S16.** The claim check paired nested straight quotes left to right: 'I said
+"Added "water the plants" for Wednesday."' read as the titles `Added ` and
+` for Wednesday.`. It now reads the innermost spans when straight quotes
+nest; a made-up inner title stays unbacked. Over the same 20 live replies:
+old check 16/20, new 20/20. No prompt changed. The same reader took a saved
+fact for a download ('I've saved "I sort music on Sundays"', M3 on the new
+voice): "saved … music" no longer reaches through a quote.
+
+**T1.** No order dependence: the planner's request for the second turn is
+byte-identical alone and in a full run (a calendar and the words). The 12B
+answers it with a `recall` or an ask to tasks, same bytes in (1/5, 9/20 and
+0/5 asks in three runs). The fake tasks note says the same decision, "go with
+the steel rack, not wood", and the check failed any reply holding "wood" as
+`made up a decision`. Wood only as what was turned down now passes
+(`chose_wood`); wood as the decision still fails. Over the same 20 replies:
+old check 12/20, new 20/20. The planner prompt is untouched; the split is
+its, and T1 no longer measures recall alone when it asks tasks.
+
+Full runs, final code. Before the rebase on #258 (4741 s beside two other
+eval runs, infra 0/12, claims backed 229/230): every gate scenario 5/5;
+frontier S13 0/5 (the brief, as before), S15 and Q3 4/5, the rest 5/5. On
+#258's voice (2010 s, infra 0/12, claims backed 237/237): every gate scenario
+5/5 but S6 8/10 (the plan said "the Caribou song" and music asked which);
+frontier S13 0/5, S15 4/5 and S15p 3/5 (the album question not asked, as in
+#251), the rest 5/5: S9, S14, S16, M3, T1 and Q1–Q6 among them.

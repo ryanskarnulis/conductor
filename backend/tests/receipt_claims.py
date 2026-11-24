@@ -155,7 +155,9 @@ FAMILIES: tuple[_Family, ...] = (
         "queue",
         _rx(
             r"\b(?:queued|downloaded|downloading|grabbed|fetched|fetching|"
-            r"saved\b[^.]{0,40}\b(?:library|music)|started (?:the |a )?download|"
+            # Not through a quote: 'saved "I sort music on Sundays"' is a
+            # fact kept, its "music" the fact's own word (#255, M3).
+            r"saved\b[^.\"“”‘’]{0,40}\b(?:library|music)|started (?:the |a )?download|"
             r"on (?:its|their) way)\b"
         ),
         frozenset({"queue"}),
@@ -205,9 +207,49 @@ def _hedged(clause: str) -> bool:
 _CURLY = re.compile(r"“([^“”]{2,80})”")
 
 
+def _nested(text: str) -> list[str] | None:
+    """The innermost straight-quoted spans when straight quotes nest: a reply
+    quoting an earlier reply that quotes a title (#255, S16's 'I said "Added
+    "water the plants" for Wednesday."'). Read left to right in pairs, that is
+    'Added ' and ' for Wednesday.', and the title is lost. A mark opens when
+    words follow it and none lead into it, and closes the other way round; a
+    mark that could be either, or no nesting at all, is ``None``: the plain
+    reading. An outer quote left open (a reply cut short) is let go."""
+    open_at: list[int] = []
+    parents: set[int] = set()
+    spans: list[tuple[int, int]] = []
+    deepest = 0
+    for at, char in enumerate(text):
+        if char != '"':
+            continue
+        before = text[at - 1] if at else " "
+        after = text[at + 1] if at + 1 < len(text) else " "
+        opens = not after.isspace() and (before.isspace() or before in "([")
+        closes = not before.isspace() and not after.isalnum()
+        if opens == closes:
+            return None
+        if opens:
+            open_at.append(at)
+            deepest = max(deepest, len(open_at))
+        elif open_at:
+            start = open_at.pop()
+            if start not in parents:
+                spans.append((start, at))
+            if open_at:
+                parents.add(open_at[-1])
+        else:
+            return None
+    if deepest < 2:
+        return None
+    return [text[a + 1 : b] for a, b in spans if 2 <= b - a - 1 <= 80]
+
+
 def _quoted(clause: str) -> list[str]:
     curly = _CURLY.findall(clause)
     rest = _CURLY.sub(" ", clause)
+    nested = _nested(rest)
+    if nested is not None:
+        return [*curly, *nested]
     return [*curly, *(a or b for a, b in _QUOTED.findall(rest))]
 
 

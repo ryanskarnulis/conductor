@@ -86,6 +86,7 @@ from tests.session_scenarios import (
     S6,
     S9,
     S11,
+    S14,
     S15,
     S16,
     SCENARIOS,
@@ -94,6 +95,7 @@ from tests.session_scenarios import (
     TIMELINE_RECALL,
     answer,
     ask,
+    chose_wood,
     plan,
 )
 
@@ -326,6 +328,36 @@ def test_a_t1_answer_without_the_recall_fails(scripted: _ScriptedRun) -> None:
     _fails(scripted.run(TIMELINE_RECALL, script), "wasn't recalled")
 
 
+def test_a_t1_answer_from_the_tasks_note_passes_and_wood_fails(scripted: _ScriptedRun) -> None:
+    # #255: asked of tasks instead of recalled, the note's own "not wood" is
+    # the true decision, not a made-up one; wood as the decision still fails.
+    assert TIMELINE_RECALL.script is not None
+    asks = plan(ask("tasks", "what did we decide about the garage shelves?", read=True))
+    script = TIMELINE_RECALL.script(World())
+    script[2:] = [asks, text_turn("You went with the steel rack, not wood: it holds the paint.")]
+    sample = scripted.run(TIMELINE_RECALL, script)
+    assert sample.taken.outcome is Outcome.PASS, sample.taken.failure
+    script = TIMELINE_RECALL.script(World())
+    script[2:] = [asks, text_turn("You went with wood, not the steel rack.")]
+    _fails(scripted.run(TIMELINE_RECALL, script), "made up a decision")
+
+
+@pytest.mark.parametrize(
+    ("reply", "wood"),
+    [
+        ("Go with the steel rack, not wood — it holds the paint cans.", False),
+        ("You chose the steel rack instead of wood.", False),
+        ("Steel rack rather than the wooden one.", False),
+        ("Steel rack.", False),
+        ("You picked the wooden shelves.", True),
+        ("Wood, not the steel rack.", True),
+        ("Not the steel rack: wood.", True),
+    ],
+)
+def test_chose_wood_reads_what_was_turned_down(reply: str, wood: bool) -> None:
+    assert chose_wood(reply) is wood
+
+
 def test_compiled_t2_keeps_the_incognito_words_out_of_the_next_plan(
     scripted: _ScriptedRun,
 ) -> None:
@@ -519,6 +551,26 @@ def test_a_tap_with_no_card_waiting_never_writes(scripted: _ScriptedRun) -> None
     sample = scripted.run(S9, [answer("chat"), text_turn('{"about_you": false, "reply": "Hm."}')])
     assert sample.session.world.receipts == []
     assert sample.taken.outcome is Outcome.FAIL
+
+
+def test_a_think_the_26b_never_finished_is_infra_not_a_miss(scripted: _ScriptedRun) -> None:
+    # #255: under GPU contention the 26B's call timed out three times; the
+    # honest "couldn't finish" note has no card, and that is not S14's miss.
+    assert S14.script is not None
+    dead = ProviderRequestError("llama-server request failed: timed out")
+    sample = scripted.run(S14, [S14.script(World())[0], dead, dead, dead])
+    assert sample.taken.outcome is Outcome.INFRA, sample.taken
+    assert "couldn't finish thinking over" in (sample.taken.failure or "")
+
+
+def test_a_think_that_answers_with_no_card_names_its_note(scripted: _ScriptedRun) -> None:
+    # A think that ends with no proposal is a miss, and the failure says what
+    # arrived instead of the card.
+    assert S14.script is not None
+    empty = text_turn(json.dumps({"summary": "3 garage tasks, Tue to Thu", "steps": []}))
+    sample = scripted.run(S14, [S14.script(World())[0], empty, empty])
+    _fails(sample, "no card was waiting; the last note: ")
+    assert "3 garage tasks, Tue to Thu" in (sample.taken.failure or "")
 
 
 def test_a_provider_death_is_infra_not_a_miss(scripted: _ScriptedRun) -> None:
