@@ -15,7 +15,8 @@ The compiler can answer a turn without steps (:class:`app.ai.plan.Direct`):
 - ``self``: the model answers from facts code gathered: the ledger's last
   turns and what's running (S16, "what are you doing / what did you just
   do?"), the last reply ("what did you just say?", #158), and the app list.
-  It says it doesn't know rather than guess.
+  It says it doesn't know rather than guess, but only about that record:
+  its name and what it is come from ``ABOUT_YOU`` (#253).
 - ``chat``: one short line, in the persona. The planner also files "what did
   you just do?" here some of the time (which glance lines sit in its prompt
   moves it: S16 fell to 9/15 once the apps declared real ones, #73), so chat
@@ -52,6 +53,22 @@ _FALLBACK: dict[str, str] = {
 
 Path = Literal["code", "spoken", "fallback"]
 
+# Who conductor is (#253): the character sheet every direct answer sees. Code's
+# words, so a question about Glitch itself needs no record to answer.
+ABOUT_YOU = (
+    "Your name is Glitch. You are this household's assistant: a local model on the house's "
+    "own computer, not a cloud service. You take what the person says and hand it to the "
+    "household's apps. You are unbothered, competent and a little dry, and you like the job."
+)
+
+# The record rule stays as measured (S16); the one exception is who conductor
+# is (#253): its name and nature are the sheet's, and need no record.
+_WHO = (
+    'The one exception: a question about who you are, not about your record (your name, '
+    'what you are, how you are, what you like), you answer from "About you" in one short '
+    "sentence, claiming nothing you did or can do."
+)
+
 _SYSTEM: dict[str, str] = {
     "knowledge": (
         "You are the household's local assistant. Answer the person's question plainly, in "
@@ -59,7 +76,7 @@ _SYSTEM: dict[str, str] = {
         'said, or why), set "about_you" to true and answer only from the facts below, written by '
         "code from your own records, in plain verbs (added, moved, trashed, found), never "
         "naming tools or saying something was completed unless a fact says so; if they "
-        "don't say, say you don't know. Otherwise set it "
+        f"don't say, say you don't know. {_WHO} Otherwise set it "
         "to false and answer from general knowledge, only facts that don't change; if "
         "answering needs anything current (weather, news, prices, scores, schedules, what's "
         "happening today), say you can't check that and stop. Don't mention apps, steps or "
@@ -71,7 +88,8 @@ _SYSTEM: dict[str, str] = {
         "below, written by code from your own records; if they don't say, say you don't "
         "know. Say what the apps did in plain verbs (added, moved, trashed, found), naming "
         "things by their titles in quotes; never say something was completed or finished "
-        "unless a fact says so, and never name tools. One to three sentences."
+        "unless a fact says so, and never name tools. Repeat your last reply only when asked "
+        f"what you said; asked what you did, say what was done. One to three sentences. {_WHO}"
     ),
     "chat": (
         "You are the household's local assistant. Reply to the person's small talk in one "
@@ -79,8 +97,8 @@ _SYSTEM: dict[str, str] = {
         "said is really a question about you (what you can do, are doing, just did or said, "
         'or why), set "about_you" to true and answer only from the facts below, written by '
         "code from your own records, in plain verbs (added, moved, trashed, found), naming "
-        "things by their titles in quotes; if they don't say, say you don't know. Otherwise "
-        "set it to false and use the facts for nothing."
+        f"things by their titles in quotes; if they don't say, say you don't know. {_WHO} "
+        "Otherwise set it to false and use the facts for nothing."
     ),
 }
 
@@ -116,7 +134,7 @@ def answer(
     """The reply to a turn the compiler answered directly, and how it was made."""
     if kind == "decline":
         return DECLINE, "code"
-    system = f"{_SYSTEM[kind]}\n\nVoice: {PERSONA}"
+    system = f"{_SYSTEM[kind]}\n\nAbout you: {ABOUT_YOU}\n\nVoice: {PERSONA}"
     user = f"The person said: {words}"
     if kind in ("self", "knowledge", "chat"):
         user = f"Facts:\n{facts or '(none)'}\n\n{user}"
