@@ -2864,3 +2864,11 @@ s, infra 0/12, claims backed 70/70), against #262's full run:
 
 Every R1, R3 and R7 miss is again a turn compiled as `look:tasks` (#264); R4's
 is its answer listing what's due rather than the new task, as before.
+
+### Music's guard (#266, music#123)
+
+Music now drops an `album_id` that equals `other_than`, so "the other album"
+runs its held check. Fleet smoke, n=5, this branch against PCC `d02769b` and
+music#123: S15 4/5, S15p 4/5 (main 5/5, 4/5). No music call passed the album
+to skip as the pick. Both misses are the planner's: a `recall` filled `{s1}`
+with Honey and asked music to "download the album I just mentioned".
