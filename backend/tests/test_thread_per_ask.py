@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.api import routes_agent
+from app.api import routes_agent, routes_threads
 from app.db.models import DelegateThread
 from app.fleet.manifests import Fleet
 from app.fleet.thread_cleanup import SubagentThreadCleanup
@@ -149,3 +149,26 @@ def test_a_quiet_gap_sweeps_the_threads_its_window_kept(
     assert sorted(world.deleted) == sorted([("tasks", asked), ("tasks", read)])
     assert _kept(timeline.db) == []
     assert not world.tasks[3].trashed
+
+
+def test_closing_a_side_thread_deletes_the_threads_it_kept(
+    timeline: Timeline,  # noqa: F811
+    world: World,  # noqa: F811
+) -> None:
+    app.dependency_overrides[routes_threads.get_thread_chat] = lambda: None  # code's note
+    started = timeline.client.post("/api/agent/threads", json={"title": "Dentist"})
+    inside = Timeline.__new__(Timeline)
+    inside.__dict__.update(timeline.__dict__)
+    inside.id = int(started.json()["id"])
+    inside.say(
+        "trash the dentist task",
+        plan_turn(steps(ask("tasks", "trash the dentist appointment task", destructive=True))),
+    )
+    (asked,) = world.threads["tasks"]
+    assert _kept(timeline.db) == [("tasks", asked)]
+
+    closed = timeline.client.post(f"/api/agent/threads/{inside.id}/close", json={})
+
+    assert closed.status_code == 200, closed.text
+    assert world.deleted == [("tasks", asked)]
+    assert _kept(timeline.db) == []
