@@ -94,6 +94,7 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -141,6 +142,7 @@ from app.ai.runtime import (
 )
 from app.ai.stop import STOPPED_ERROR, Stop, current_stop, use_stop
 from app.config import get_settings
+from app.fleet import context as delegation
 from app.fleet.context import current_delegation_context
 from app.fleet.glance import GlanceError, GlanceReader, read_glance
 from app.fleet.jobs import JobCanceller, cancel_job
@@ -155,6 +157,9 @@ STATE_REFS = 5
 MAX_CONTEXT_REFS = 20
 # Where a paused body keeps a v1.2 app's ``needs_input`` candidates (#196).
 APP_CANDIDATES = "app_candidates"
+# ... and the app thread that asked an ``app_question`` (#262): the answer
+# goes back there; every other ask opens a fresh one.
+APP_THREAD = "app_thread"
 
 # How a recall step reads the ledger (#80): its query in, what memory found out.
 MemoryReader = Callable[[str], memory.Recalled]
@@ -226,6 +231,9 @@ class _Run:
     # The candidate the person's answer picked from a v1.2 app's question
     # (#196): the resumed ask carries it, marked ``picked``, as its only ref.
     picked: dict[str, Any] | None = None
+    # The step that answers an app's own question, its app and the thread
+    # that asked (#262): that step's call goes there, and only that one.
+    answering: tuple[str, str, int] | None = None
     # The turn's plan, once compiled: what the ledger journals.
     plan: TurnPlan | None = None
     # Where this plan's records start: a control step split off and run first
@@ -890,15 +898,14 @@ class Interpreter:
                 return self._ask_user(state, step, turn)
             group = _read_group(steps, index, self._reads)
             if len(group) > 1:
-                results = self._dispatch_all(
-                    state,
-                    [
-                        (ask_tool_name(s.app), self._ask_arguments(state, s, s.request, values))
-                        if isinstance(s, plans.Ask)
-                        else _call_for(s)
-                        for s in group
-                    ],
-                )
+                calls = [
+                    (ask_tool_name(s.app), self._ask_arguments(state, s, s.request, values))
+                    if isinstance(s, plans.Ask)
+                    else _call_for(s)
+                    for s in group
+                ]
+                with self._on_asking_thread(state, group):
+                    results = self._dispatch_all(state, calls)
                 for n, read in enumerate(group):
                     if isinstance(read, plans.Look) and not self._went_well(results[n]):
                         results[n] = self._look_fell_back(state, read, results[n], steps)
@@ -948,11 +955,9 @@ class Interpreter:
                     self._carry(turn, position, values)
                     return self._gate(state, step, filled.text, turn)
                 else:
-                    record = self._dispatch(
-                        state,
-                        ask_tool_name(step.app),
-                        self._ask_arguments(state, step, filled.text, values),
-                    )
+                    arguments = self._ask_arguments(state, step, filled.text, values)
+                    with self._on_asking_thread(state, [step]):
+                        record = self._dispatch(state, ask_tool_name(step.app), arguments)
                 if record is not None and record.app_confirm and record.app_confirm.get("question"):
                     return self._app_asked(state, turn, steps[index + 1 :], step, values)
             elif isinstance(step, plans.Look):
@@ -991,6 +996,17 @@ class Interpreter:
                 )
             index += 1
         return self._finish(state, turn, [])
+
+    @staticmethod
+    def _on_asking_thread(state: _Run, steps: Sequence[plans.Step]) -> AbstractContextManager[None]:
+        """Around the dispatch of ``steps``: the one that answers an app's own
+        question goes to the thread that asked it (#262). Code's choice, made
+        when the answer resumed the plan; every other ask opens a fresh one."""
+        pinned = state.answering
+        if pinned is None or not any(step.id == pinned[0] for step in steps):
+            return nullcontext()
+        state.answering = None
+        return delegation.answering(pinned[1], pinned[2])
 
     def _ask_arguments(
         self,
@@ -1236,6 +1252,10 @@ class Interpreter:
             # What the person picks from goes with the plan (#196): their
             # answer is matched to one by code when it resumes.
             turn.body = {**turn.body, APP_CANDIDATES: list(candidates)}
+        asking = state.records[-1].app_thread
+        if asking is not None and turn.body is not None:
+            # The answer goes back to the thread that asked (#262).
+            turn.body = {**turn.body, APP_THREAD: asking}
         _asks(turn, question)
         turn_events.paused("app_question", question=question, app=step.app, step=step.id)
         stopped = self._hold(state, turn, step, rest, values, itself=True)
@@ -1253,12 +1273,16 @@ class Interpreter:
     ) -> AgentRunResult:
         """The person answered an app's question (#168): the step that asked
         goes to the app again with their answer, in their own words (trusted),
-        after its request; the rest of the plan follows."""
+        after its request, on the thread that asked it (#262); the rest of the
+        plan follows."""
         resumed = plans.load(paused.body)
         assert isinstance(resumed, plans.StepPlan)
         steps = list(resumed.steps)
         asked = steps[paused.resume_at]
         assert isinstance(asked, plans.Ask)
+        thread = paused.body.get(APP_THREAD)
+        if isinstance(thread, int) and not isinstance(thread, bool):
+            state.answering = (asked.id, asked.app, thread)
         answer = dataflow.answer(state.words).text
         candidates = [c for c in paused.body.get(APP_CANDIDATES) or [] if isinstance(c, dict)]
         chosen = (
@@ -1688,7 +1712,7 @@ def _read_group(
     reads: Callable[[plans.Ask], bool] = plans.reads_only,
 ) -> list[plans.Ask | plans.Look]:
     """The reads from ``start`` that can run at once: next to each other, each
-    to a different app (one call per app thread at a time). A look is always a
+    to a different app (one call per app at a time). A look is always a
     read (#73); an ask is one when ``reads`` says so (#204)."""
     group: list[plans.Ask | plans.Look] = []
     for step in steps[start:]:

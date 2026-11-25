@@ -1,8 +1,9 @@
-"""Subagent-thread cleanup on master delete, against httpx.MockTransport.
+"""Subagent-thread cleanup (#262), against httpx.MockTransport.
 
 Each app answers the thread ``DELETE`` the way the scenario needs; what matters
-is that every mapped thread gets a ``DELETE`` with conductor's actor, that no app
-fault escapes, and that the master's rows are dropped either way.
+is that every thread to go gets a ``DELETE`` with conductor's actor, that no
+app fault escapes, that its rows are dropped either way, and that a thread a
+question may still need is left alone.
 """
 
 from __future__ import annotations
@@ -71,9 +72,9 @@ def test_every_mapped_thread_is_deleted_and_rows_dropped(
     session_factory: sessionmaker[Session],
 ) -> None:
     store = DbThreadStore(session_factory)
-    store.set("1", "tasks", 41)
-    store.set("1", "chess", 7)
-    store.set("2", "tasks", 99)  # another master's thread is left alone
+    store.add("1", "tasks", 41)
+    store.add("1", "chess", 7)
+    store.add("2", "tasks", 99)  # another master's thread is left alone
     seen: list[httpx.Request] = []
 
     _cleanup(session_factory, lambda _: httpx.Response(204), seen)("1")
@@ -94,10 +95,10 @@ def test_app_faults_are_swallowed_and_rows_still_dropped(
     """404 (already gone), 503, a transport error, and an app no longer in the
     fleet: none escapes, and the dead mapping goes regardless."""
     store = DbThreadStore(session_factory)
-    store.set("1", "tasks", 41)
-    store.set("1", "chess", 7)
-    store.set("1", "odysseus", 3)  # inert now: no agent to tell
-    store.set("1", "retired", 5)  # left the fleet entirely
+    store.add("1", "tasks", 41)
+    store.add("1", "chess", 7)
+    store.add("1", "odysseus", 3)  # inert now: no agent to tell
+    store.add("1", "retired", 5)  # left the fleet entirely
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.port == 8100:
@@ -126,7 +127,7 @@ def test_deleting_a_conversation_cleans_up_its_threads(
         session.add(thread)
         session.commit()
         conversation_id = thread.id
-    DbThreadStore(session_factory).set(str(conversation_id), "tasks", 41)
+    DbThreadStore(session_factory).add(str(conversation_id), "tasks", 41)
     seen: list[httpx.Request] = []
     fastapi_app.dependency_overrides[routes_agent.get_thread_cleanup] = lambda: _cleanup(
         session_factory, lambda _: httpx.Response(503), seen
@@ -140,3 +141,38 @@ def test_deleting_a_conversation_cleans_up_its_threads(
         "http://127.0.0.1:8100/api/agent/conversations/41"
     ]
     assert _rows(session_factory, str(conversation_id)) == []
+
+
+def test_a_conversation_s_threads_go_from_every_window(
+    session_factory: sessionmaker[Session],
+) -> None:
+    store = DbThreadStore(session_factory)
+    store.add("1", "tasks", 41)
+    store.add("1:30", "tasks", 42)  # a later window of the same conversation
+    store.add("11", "tasks", 43)  # another conversation whose id starts the same
+    seen: list[httpx.Request] = []
+
+    _cleanup(session_factory, lambda _: httpx.Response(204), seen)("1")
+
+    assert sorted(str(request.url).rsplit("/", 1)[1] for request in seen) == ["41", "42"]
+    assert _rows(session_factory, "11") == [("tasks", 43)]
+
+
+def test_settle_deletes_what_the_request_is_done_with_and_earlier_windows(
+    session_factory: sessionmaker[Session],
+) -> None:
+    store = DbThreadStore(session_factory)
+    store.add("1", "tasks", 40)  # an earlier window's: its cards lapsed with it
+    store.add("1:30", "tasks", 41)  # this request's, nothing waits on it
+    store.add("1:30", "tasks", 42)  # this window's, a card waits on it
+    store.add("1:30", "chess", 7)  # another request's, still running
+    store.add("2", "tasks", 99)  # another conversation's
+    seen: list[httpx.Request] = []
+
+    _cleanup(session_factory, lambda _: httpx.Response(204), seen).settle(
+        1, "1:30", frozenset({("tasks", 41), ("tasks", 77)})
+    )
+
+    assert sorted(str(request.url).rsplit("/", 1)[1] for request in seen) == ["40", "41"]
+    assert _rows(session_factory, "1:30") == [("tasks", 42), ("chess", 7)]
+    assert _rows(session_factory, "2") == [("tasks", 99)]

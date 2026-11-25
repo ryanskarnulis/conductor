@@ -59,3 +59,7 @@ delegated_asks: ContextVar[dict[str, Any] | None] = ContextVar("delegated_asks",
 # for the person's screen or speaker; never on a model's message. Same
 # lifetime rule.
 delegated_answer: ContextVar[dict[str, Any] | None] = ContextVar("delegated_answer", default=None)
+
+# The app thread the current delegate call went to (#262): where its question,
+# if it asks one, is answered. Same lifetime rule; never on a model's message.
+delegated_thread: ContextVar[int | None] = ContextVar("delegated_thread", default=None)

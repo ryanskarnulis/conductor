@@ -88,6 +88,9 @@ class _Client:
     def cancel(self, conversation_id: int) -> bool:
         return False
 
+    def delete_conversation(self, conversation_id: int) -> None:
+        return None
+
 
 @pytest.fixture
 def bound() -> Generator[None, None, None]:

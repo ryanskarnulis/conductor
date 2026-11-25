@@ -159,8 +159,9 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   that" is how). Older conversations are `legacy`: out of the API, still
   read by recall and matches. "This conversation" for the planner is the
   timeline since its last quiet gap (`QUIET_GAP`, 3 h): stored turns, recent
-  entities, a waiting plan, undo, the self-report, "forget that" and the
-  apps' subagent threads (`thread_key`) all follow that window. Older turns
+  entities, a waiting plan, undo, the self-report and "forget that" all
+  follow that window, and so do the app threads its questions wait on
+  (`thread_key`, next rule). Older turns
   arrive only as cross-day hits labelled with their day. Session evals'
   "new conversation" is the record moved back a day (`tests/eval_db.age`).
   The page opens on that same window (#226, `timeline.windowStart`, from
@@ -168,6 +169,20 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   a batch a press with the place kept (#233). A phone's sheet fits the
   latest turn so the web keeps its room; the window's earlier turns are
   scrolled just above it, and reading back gives the sheet its full height.
+- **A fresh app thread per ask** (#262, `app/fleet/context.py`): code picks
+  the thread, never a model. A confirm goes to the thread its token is bound
+  to, an answer to an app's own question to the thread that asked (the
+  paused body's `app_thread`, `context.answering`); every other ask, reads
+  included, opens a fresh one, so no app answers from an earlier request's
+  history (seen live: a report asked twice came back from history with no
+  look-up, so nothing passed through). Undo and amend name things by kind,
+  id and handle, so they need none. Each thread is a `delegate_threads` row
+  under its window's key until deleted (`app/fleet/thread_cleanup.py`, best
+  effort, after the response): after a turn or tap, the threads it sent to
+  that no open card or waiting question needs, and every thread of the
+  conversation's earlier windows; closing a side thread or deleting a
+  conversation, all of its. The MCP server keeps none: each is deleted after
+  its call.
 - **Incognito** (#82, `app/ai/incognito.py`): a per-request switch. The
   person's words and the reply are stored as "(incognito)", and calls,
   steps and finished plans keep no words; receipts and entities stay. Memory

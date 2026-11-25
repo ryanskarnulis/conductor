@@ -145,6 +145,9 @@ class FakeClient:
     def cancel(self, conversation_id: int) -> bool:
         return False
 
+    def delete_conversation(self, conversation_id: int) -> None:
+        return None
+
 
 def _factory(client: FakeClient) -> Callable[[FleetApp], FakeClient]:
     return lambda app: client

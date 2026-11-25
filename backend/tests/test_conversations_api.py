@@ -14,18 +14,18 @@ import httpx
 import pytest
 import structlog
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.ai.interpreter import Interpreter
 from app.ai.provider import ChatResult, ProviderRequestError
 from app.api import routes_agent, turn_activity
 from app.config import get_settings
-from app.db.models import Conversation
+from app.db.models import Conversation, DelegateThread
 from app.fleet import context as fleet_context
 from app.fleet.context import current_delegation_context
 from app.fleet.delegate import DelegateClient
 from app.fleet.manifests import AgentSpec, Fleet, FleetApp
-from app.fleet.thread_store import DbThreadStore
 from app.fleet.tools import build_delegate_tools
 from app.main import app
 from app.tools import registry
@@ -241,7 +241,7 @@ def test_run_binds_delegation_context_over_db_thread_store(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     """A step running inside the HTTP turn sees the request's delegation
-    context, and threads it remembers land in the delegate_threads table."""
+    context, and threads it opens land in the delegate_threads table."""
     seen: dict[str, Any] = {}
 
     @registry.tool
@@ -249,7 +249,14 @@ def test_run_binds_delegation_context_over_db_thread_store(
         """Scratch tool standing in for an ask_<app> body."""
         context = current_delegation_context()
         seen["master_conversation_id"] = context.master_conversation_id
-        context.remember_thread("chess", 42)
+        context.opened("chess", 42)
+        # Read back through a fresh session while the turn runs (#262: the
+        # turn's cleanup drops it once nothing waits on it).
+        with session_factory() as session:
+            seen["rows"] = [
+                (row.master_conversation_id, row.app_name, row.subagent_conversation_id)
+                for row in session.execute(select(DelegateThread)).scalars()
+            ]
         return "delegated"
 
     _use(ScriptedProvider([_plan("go"), text_turn("done")]))
@@ -260,9 +267,9 @@ def test_run_binds_delegation_context_over_db_thread_store(
     assert response.status_code == 200
 
     assert seen["master_conversation_id"] == str(conversation_id)
-    # The remembered thread went through the DB-backed store, so a fresh
-    # store instance (fresh session) reads it back.
-    assert DbThreadStore(session_factory).get(str(conversation_id), "chess") == 42
+    # The opened thread went through the DB-backed store, so a fresh session
+    # reads it back.
+    assert seen["rows"] == [(str(conversation_id), "chess", 42)]
 
 
 def test_activity_is_reported_while_the_run_is_in_flight(client: TestClient) -> None:

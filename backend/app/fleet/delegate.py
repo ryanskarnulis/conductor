@@ -93,6 +93,8 @@ _DEFAULT_READ_TIMEOUT = 300.0
 _DEFAULT_CONNECT_TIMEOUT = 5.0
 # A cancel never blocks app-side, so it never waits like a message does.
 _CANCEL_TIMEOUT = 5.0
+# Deleting a thread runs no model either (cleanup, #262).
+_DELETE_TIMEOUT = 10.0
 
 
 class DelegateError(Exception):
@@ -520,8 +522,11 @@ class DelegateClient:
         return self._parse(response, ConversationDetail)
 
     def delete_conversation(self, conversation_id: int) -> None:
-        """``DELETE /conversations/{id}`` — soft-delete/reset the thread (204)."""
-        self._send("DELETE", f"/conversations/{conversation_id}")
+        """``DELETE /conversations/{id}`` — soft-delete/reset the thread (204).
+
+        Waits on no model, so it reads with a short timeout of its own rather
+        than the 300 s a delegate turn needs."""
+        self._send("DELETE", f"/conversations/{conversation_id}", timeout=_DELETE_TIMEOUT)
 
     def _send(
         self,

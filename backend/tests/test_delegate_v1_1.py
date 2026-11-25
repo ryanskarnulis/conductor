@@ -305,7 +305,6 @@ def test_every_message_carries_a_fresh_key_per_ask(delegation: DelegationContext
 
 def test_a_recreated_thread_gets_the_same_key(delegation: DelegationContext) -> None:
     app = _fake("tasks")
-    delegation.remember_thread("tasks", 99)
     app.plan = ["gone"]
     record = _ask(app)
     assert record.error is None

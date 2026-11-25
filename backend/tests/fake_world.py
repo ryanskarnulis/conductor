@@ -379,6 +379,8 @@ class World:
         self.receipts: list[Receipt] = []
         self.reads: list[tuple[str, str, int]] = []  # (app, what, turn)
         self.threads: dict[str, list[int]] = {}  # app → conversation id per send
+        # Every thread conductor deleted, as (app, conversation id), in order (#262).
+        self.deleted: list[tuple[str, int]] = []
         # Every message an app received, as sent: (app, message), in order.
         self.sent: list[tuple[str, str]] = []
         # Every message's delegate v1.2 fields (#202): (app, context, mode).
@@ -810,6 +812,8 @@ class TasksApp:
     def __init__(self, world: World) -> None:
         self.world = world
         self._last_created: dict[int, list[int]] = {}  # thread → task ids it created
+        # thread → the reads it answered (request → reply), for its history (#262).
+        self._answered: dict[int, dict[str, str]] = {}
         # thread → token → (question, run, what must still hold)
         self._armed: dict[
             int, dict[str, tuple[str, Callable[[], AppReply], Callable[[], str | None]]]
@@ -838,7 +842,7 @@ class TasksApp:
         if leads_with_create:
             return self._create(thread, message, context)
         if re.search(r"\b(undo|revert|take (?:that|it) back)\b", text):
-            return self._undo(thread)
+            return self._undo(thread, message)
         if re.search(r"\b(delete|trash|remove|wipe|bin|get rid of)\b", text):
             return self._trash(thread, message)
         if re.search(_MOVE_WORDS, text) or text.startswith(_AMENDS_DONE):
@@ -851,9 +855,21 @@ class TasksApp:
             re.search(r"\?\s*$", text) or text.startswith(("what", "which", "how", "is ", "are "))
         ):
             return self._create(thread, message, context)
-        return self._read(message)
+        return self._read_on(thread, message)
 
     # reads
+
+    def _read_on(self, thread: int, message: str) -> AppReply:
+        """A read as PCC's agent answers it on a thread: a request the thread
+        already answered is answered again from its history, with no tool
+        run, so no look-up record and no ``answer`` (seen live, #262)."""
+        answered = self._answered.setdefault(thread, {})
+        key = " ".join(message.lower().split())
+        if key in answered:
+            return AppReply(answered[key])
+        reply = self._read(message)
+        answered[key] = reply.text
+        return reply
 
     _NOT_SEARCH = frozenset(
         """today tomorrow week weekend last overdue late search find show any anything
@@ -1152,8 +1168,16 @@ class TasksApp:
         self.world.record("tasks", "trash", f"task:{task.id}", task.title)
         return f'Moved "{task.title}" (#{task.id}) to the trash.'
 
-    def _undo(self, thread: int) -> AppReply:
-        made = [i for i in self._last_created.get(thread, []) if not self.world.tasks[i].trashed]
+    def _undo(self, thread: int, message: str = "") -> AppReply:
+        # The handles conductor names (#74) are redeemed as PCC redeems them,
+        # whatever thread they arrive on (#262); with none, what this thread
+        # made, as PCC's agent would read its history.
+        handled = [int(i) for i in re.findall(r"undo handle: create_task:(\d+)", message)]
+        made = [
+            i
+            for i in handled or self._last_created.get(thread, [])
+            if i in self.world.tasks and not self.world.tasks[i].trashed
+        ]
         if not made:
             return AppReply("There's nothing I just did in this conversation to undo.")
 
@@ -1597,7 +1621,7 @@ class FakeDelegateClient:
         return True
 
     def delete_conversation(self, conversation_id: int) -> None:
-        return None
+        self._world.deleted.append((self._app_name, conversation_id))
 
 
 def client_factory(world: World) -> Callable[[Any], FakeDelegateClient]:

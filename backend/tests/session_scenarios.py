@@ -208,13 +208,13 @@ S2 = Scenario(
 )
 
 
-# --- S2r thread reuse (#37 part 2) ---------------------------------------------------------
+# --- S2r a fresh thread per ask (#37 part 2, reversed by #262) ---------------------------
 
 
 def _s2r(session: Session) -> None:
     sends = session.world.threads.get("tasks", [])
     assert len(sends) >= 2, f"tasks was asked {len(sends)} time(s); expected one per turn"
-    assert len(set(sends)) == 1, f"tasks threads {sends}: a new thread per turn"
+    assert len(set(sends)) == len(sends), f"tasks threads {sends}: a thread shared by two asks"
     for word in ("lightbulbs", "plumber"):
         made = [r for r in _tasks_created(session) if word in r.title.lower()]
         assert made, f"no {word} task"
@@ -222,10 +222,10 @@ def _s2r(session: Session) -> None:
 
 # Both turns are writes. A read like "what's due today?" is a `look` now (#73:
 # the glance, no agent), so it would never open a delegate thread; two asks to
-# tasks are what exercises thread reuse.
+# tasks are what exercises the thread choice.
 S2R = Scenario(
     "S2r",
-    "a second turn to the same app reuses its delegate thread (#37)",
+    "a second turn to the same app gets a fresh delegate thread (#262)",
     (Say("add a task to buy lightbulbs"), Say("add a task to call the plumber tomorrow")),
     (_s2r,),
     tier="gate",
@@ -680,6 +680,10 @@ def _s15_picked(session: Session) -> None:
     # one is queued, and the work that waited on its name (the weekend task)
     # goes ahead: nothing else is written, and nothing more is queued.
     _s15(session)
+    # #262: the answer went back to the thread that asked; the asks before
+    # it each had their own.
+    *_, first, asked, answered = session.world.threads.get("music", [0, 0, 0])
+    assert answered == asked != first, f"music threads {session.world.threads.get('music')}"
     picked = session.turn("pick")
     queued = [r.title for r in session.writes(picked) if r.kind == "queue"]
     assert queued == ["Suddenly"], f"queued {queued or 'nothing'} for the pick, not Suddenly"
@@ -830,6 +834,32 @@ READ_REPORT = Scenario(
     # Unmeasured: added with #241.
     tier="frontier",
     script=lambda w: [plan(ask("tasks", "give me a report of my tasks", read=True))],
+)
+
+
+def _reported_twice(session: Session) -> None:
+    # #262, seen live: the same report asked again in the window went to the
+    # thread whose history held the first, and the app answered from it with
+    # no look-up, so nothing passed through. Each ask is a fresh thread now.
+    no_writes(session)
+    sends = session.world.threads.get("tasks", [])
+    assert len(sends) == 2 and len(set(sends)) == 2, f"tasks threads {sends}: one shared"
+    for turn in session.turns:
+        assert len(_passed(turn)) == 1, f"turn {turn.index}: the app's answer wasn't passed on"
+        assert "Tasks says" in (turn.reply or ""), f"not the app's words: {turn.reply!r}"
+
+
+READ_REPORT_TWICE = Scenario(
+    "R7",
+    "'a report of my tasks' twice in one window: the app's answer passes through both times",
+    (Say(_REPORT), Say(_REPORT, label="again")),
+    (_reported_twice,),
+    # Unmeasured: added with #262.
+    tier="frontier",
+    script=lambda w: [
+        plan(ask("tasks", "give me a report of my tasks", read=True)),
+        plan(ask("tasks", "give me a report of my tasks", read=True)),
+    ],
 )
 
 
@@ -1678,4 +1708,5 @@ SCENARIOS: tuple[Scenario, ...] = (
     READ_OUTSIDE,
     WRITE_NOT_PASSED,
     WRITE_AND_READ,
+    READ_REPORT_TWICE,
 )

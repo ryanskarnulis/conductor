@@ -165,9 +165,10 @@ def window_since(
 def thread_key(db: Session, conversation_id: int, since: datetime | None) -> str:
     """The key the apps' subagent threads are kept under for this window
     (#82): the conversation's id while no gap has passed (``since`` none),
-    else the id and the window's first message, so after a quiet gap each
-    app starts a fresh thread, as it did for a new conversation. Call it
-    once the turn's own message is stored: an empty window starts with it."""
+    else the id and the window's first message. Every thread kept under an
+    earlier window's key is deleted (#262): no question is left to answer on
+    it. Call it once the turn's own message is stored: an empty window
+    starts with it."""
     if since is None:
         return str(conversation_id)
     first = db.execute(
