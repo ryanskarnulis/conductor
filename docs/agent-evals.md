@@ -2820,3 +2820,47 @@ history used to say what they were (#263):
 
 The session evals' fake apps don't read refs that way, so S15 and S15p hold
 there.
+
+### An ask that fills a `{sN}` carries its refs alone (#263)
+
+#263's first option: an ask whose `{sN}` carries refs sends those alone in
+its v1.2 `context`, without the app's own window entities. Any other ask
+keeps them: one with no `{sN}`, or one filled by an answer, a pick or a
+recall, which carry a title and no ref (giving those a ref would have turned
+them into "that task" pointers for tasks, #204). The new route test fails on
+the code before it with exactly the real fleet's refs: [album "Suddenly",
+task "sort Honey"].
+
+Fleet smoke, n=5, real PCC at `d02769b` (its main, now with #559's look
+again) and real music `43e49eb`:
+
+| scenario | main (`74157fc`) | #262 alone | with #263 |
+|---|---|---|---|
+| S3 | | 3/3 | 5/5 |
+| S15 | 5/5 | 2/5 | 1/5 |
+| S15p | 4/5 | 2/5 | 1/5 |
+| R1 | | 3/3 | 5/5 |
+| R7 | | 3/3 | 5/5 |
+
+PCC's half is gone: no task copied the Honey title (2 of 8 misses before).
+**S15 and S15p still regress, on music's half alone**: all eight misses
+queue Honey again, and 6 of 8 of music's "download the other album by
+Caribou" calls were `album_id=<Honey>, other_than=<Honey>`. That ask fills no
+`{sN}`, so it keeps music's own window entities, as scoped (#266).
+
+Session evals, the scenarios that send v1.2 context (n=5, gemma-4-12b, 292
+s, infra 0/12, claims backed 70/70), against #262's full run:
+
+| scenario | #262 alone | with #263 |
+|---|---|---|
+| T1 (gate) | 5/5 | 5/5 |
+| S3, S15, BI3 | 5/5 | 5/5 |
+| S15p | 5/5 | 4/5 (two asks to music in one plan, the known planner miss) |
+| R1 | 4/5 | 3/5 |
+| R2, R5, R6 | 5/5 | 5/5 |
+| R3 | 2/5 | 4/5 |
+| R4 | 4/5 | 4/5 |
+| R7 | 4/5 | 2/5 |
+
+Every R1, R3 and R7 miss is again a turn compiled as `look:tasks` (#264); R4's
+is its answer listing what's due rather than the new task, as before.
