@@ -8,10 +8,12 @@ route to the house's apps through conductor. FastMCP re-derives each tool's
 schema from the same signatures/docstrings the registry uses.
 
 Unlike the HTTP route, the MCP server has no per-request scope, so it
-registers **one process-global** :class:`DelegationContext`: subagent threads
-persist across tool calls within a session (follow-ups carry context app-side),
-the driver is tagged ``agent:mcp``, and the per-turn call budget is disabled
-(the driving agent is the trusted MCP host, not conductor's own turns). The
+registers **one process-global** :class:`DelegationContext`, tagged
+``agent:mcp``, and the per-turn call budget is disabled
+(the driving agent is the trusted MCP host, not conductor's own turns). Each
+ask opens a fresh app thread, as conductor's own turns do (#262), and with no
+thread store it is deleted once its call is over: nothing here can answer an
+app's question later, so the host says everything in each ask. The
 delegate client still presents ``agent:conductor`` downstream, as the contract
 requires.
 
@@ -28,12 +30,7 @@ import sys
 import structlog
 from mcp.server.fastmcp import FastMCP
 
-from app.fleet.context import (
-    MCP_DRIVER,
-    DelegationContext,
-    InMemoryThreadStore,
-    set_process_delegation_context,
-)
+from app.fleet.context import MCP_DRIVER, DelegationContext, set_process_delegation_context
 from app.fleet.manifests import Fleet, fleet_from_settings
 from app.fleet.tools import build_delegate_tools, default_client_factory
 from app.logging_config import configure_logging
@@ -64,7 +61,7 @@ def setup() -> Fleet:
     set_process_delegation_context(
         DelegationContext(
             master_conversation_id="mcp",
-            thread_store=InMemoryThreadStore(),
+            thread_store=None,
             driver=MCP_DRIVER,
         )
     )

@@ -2764,3 +2764,111 @@ frontier S13 0/5 (the brief, as before), S15 and Q3 4/5, the rest 5/5. On
 5/5 but S6 8/10 (the plan said "the Caribou song" and music asked which);
 frontier S13 0/5, S15 4/5 and S15p 3/5 (the album question not asked, as in
 #251), the rest 5/5: S9, S14, S16, M3, T1 and Q1–Q6 among them.
+
+## A fresh app thread per ask (#262, 2026-11-24)
+
+Seen live 2026-11-25: "give me a report of my tasks" asked three times in one
+window went to one PCC thread, and PCC answered the later asks from the first
+report in its history with no tool call: no `looked_up`, no `answer`, so
+conductor narrated a summary instead of passing the report through (#241).
+Every ask but an answer to the app's own question now opens a fresh thread
+(CLAUDE.md). The planner's prompt, schema, compiler and validator are
+untouched, and the plan-level evals only compile, so they were not run.
+
+The fake tasks app now answers a read its thread already answered from that
+history, with no look-up, as PCC did, and redeems undo handles from the
+message rather than thread memory. S2r checks the reverse of #37 (a fresh
+thread per turn), S15p that the pick went back to the thread that asked, and
+the new R7 asks for the report twice. On main's code R7's golden script fails
+as the live trace did ("turn 2: the app's answer wasn't passed on").
+
+Session evals (gemma-4-12b, full run 2181 s, GPU shared with a PCC eval run
+for part of it, infra 0/12, claims backed 257/257):
+
+| tier | this run | before (#255 on #258) |
+|---|---|---|
+| gate | every scenario 5/5 but S6 4/5 | every scenario 5/5 but S6 8/10 |
+| frontier | S13 0/5; S14, R1, R4, R7 4/5; R3 2/5; the rest 5/5 (S15, S15p, Q1–Q6) | S13 0/5; S15 4/5; S15p 3/5; the rest 5/5 (R1–R6 5/5 in #261's run) |
+
+R1, R3 and R7's misses are one shape: the planner reads the tasks glance
+(`look`) instead of asking, so nothing passes through. Same hour, n=10,
+nothing else on the GPU:
+
+| scenario | main | branch |
+|---|---|---|
+| R1 | 7/10 | 9/10 |
+| R3 | 4/10 | 4/10 |
+| R4 | 9/10 | 10/10 |
+| R7 | new | 3/10 |
+
+Every R7 miss is a turn compiled as `look:tasks`; all 13 turns that asked
+tasks passed its answer. The split is the planner's, on main too (#264).
+
+Fleet smoke (real PCC at `74157fc`, its main with v1.3 answers; real music;
+3 samples each): R1, R3 and R7 3/3 (R7: PCC's passed answer both times), S2,
+S3, S9 and BI3 3/3. **S15 and S15p regress.** Same hour, n=5: main S15 5/5,
+S15p 4/5; this branch S15 2/5, S15p 2/5 (1/3 and 0/3 in the first run). One
+cause: on a fresh thread the app's model reads conductor's v1.2 context refs
+(its own entities from this window) as the target, where the thread's
+history used to say what they were (#263):
+
+- music, "download the other album by Caribou":
+  `download_album(album_id=<Honey>, other_than=<Honey>)`, so Honey is queued
+  again;
+- PCC, "add a task to sort that album this weekend", refs [album "Suddenly",
+  task 'Sort music album "Honey"']: it copies the task's title.
+
+The session evals' fake apps don't read refs that way, so S15 and S15p hold
+there.
+
+### An ask that fills a `{sN}` carries its refs alone (#263)
+
+#263's first option: an ask whose `{sN}` carries refs sends those alone in
+its v1.2 `context`, without the app's own window entities. Any other ask
+keeps them: one with no `{sN}`, or one filled by an answer, a pick or a
+recall, which carry a title and no ref (giving those a ref would have turned
+them into "that task" pointers for tasks, #204). The new route test fails on
+the code before it with exactly the real fleet's refs: [album "Suddenly",
+task "sort Honey"].
+
+Fleet smoke, n=5, real PCC at `d02769b` (its main, now with #559's look
+again) and real music `43e49eb`:
+
+| scenario | main (`74157fc`) | #262 alone | with #263 |
+|---|---|---|---|
+| S3 | | 3/3 | 5/5 |
+| S15 | 5/5 | 2/5 | 1/5 |
+| S15p | 4/5 | 2/5 | 1/5 |
+| R1 | | 3/3 | 5/5 |
+| R7 | | 3/3 | 5/5 |
+
+PCC's half is gone: no task copied the Honey title (2 of 8 misses before).
+**S15 and S15p still regress, on music's half alone**: all eight misses
+queue Honey again, and 6 of 8 of music's "download the other album by
+Caribou" calls were `album_id=<Honey>, other_than=<Honey>`. That ask fills no
+`{sN}`, so it keeps music's own window entities, as scoped (#266).
+
+Session evals, the scenarios that send v1.2 context (n=5, gemma-4-12b, 292
+s, infra 0/12, claims backed 70/70), against #262's full run:
+
+| scenario | #262 alone | with #263 |
+|---|---|---|
+| T1 (gate) | 5/5 | 5/5 |
+| S3, S15, BI3 | 5/5 | 5/5 |
+| S15p | 5/5 | 4/5 (two asks to music in one plan, the known planner miss) |
+| R1 | 4/5 | 3/5 |
+| R2, R5, R6 | 5/5 | 5/5 |
+| R3 | 2/5 | 4/5 |
+| R4 | 4/5 | 4/5 |
+| R7 | 4/5 | 2/5 |
+
+Every R1, R3 and R7 miss is again a turn compiled as `look:tasks` (#264); R4's
+is its answer listing what's due rather than the new task, as before.
+
+### Music's guard (#266, music#123)
+
+Music now drops an `album_id` that equals `other_than`, so "the other album"
+runs its held check. Fleet smoke, n=5, this branch against PCC `d02769b` and
+music#123: S15 4/5, S15p 4/5 (main 5/5, 4/5). No music call passed the album
+to skip as the pick. Both misses are the planner's: a `recall` filled `{s1}`
+with Honey and asked music to "download the album I just mentioned".

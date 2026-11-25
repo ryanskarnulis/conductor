@@ -260,6 +260,9 @@ class _CancellableClient:
         self.cancelled.append(conversation_id)
         return True
 
+    def delete_conversation(self, conversation_id: int) -> None:
+        return None
+
 
 def test_the_ask_tool_passes_the_stop_on_and_says_what_the_app_did(
     delegation: DelegationContext,

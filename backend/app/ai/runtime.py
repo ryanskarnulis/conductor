@@ -153,6 +153,9 @@ class ToolCallRecord(BaseModel):
     # For a call that carries an undo (#74, ``app.ai.control``): the ledger
     # receipts it undoes, marked undone once the app says it did.
     undoes: list[int] | None = None
+    # For a delegate call, the app thread it went to (#262): where an
+    # ``app_question`` it asked is answered. Persisted, never sent to a model.
+    app_thread: int | None = None
 
 
 class AgentRunResult(BaseModel):
@@ -267,6 +270,7 @@ class Runtime:
         delegated_confirms = runtime.delegated_confirms.set(None)
         delegated_asks = runtime.delegated_asks.set(None)
         delegated_answer = runtime.delegated_answer.set(None)
+        delegated_thread = runtime.delegated_thread.set(None)
         try:
             outcome = registry.call_tool(call.name, call.arguments, actor=actor)
         except UnknownToolError as exc:
@@ -286,6 +290,7 @@ class Runtime:
             runtime.delegated_confirms.reset(delegated_confirms)
             runtime.delegated_asks.reset(delegated_asks)
             runtime.delegated_answer.reset(delegated_answer)
+            runtime.delegated_thread.reset(delegated_thread)
         logger.info("agent_tool_call", tool=call.name, ok=record.error is None, error=record.error)
         return record
 
@@ -465,6 +470,7 @@ def _take_app_report(record: ToolCallRecord) -> None:
     record.app_asks = runtime.delegated_asks.get()
     answer = runtime.delegated_answer.get()
     record.app_answer = dict(answer) if answer else None
+    record.app_thread = runtime.delegated_thread.get()
 
 
 def _validation_summary(exc: ValidationError) -> str:

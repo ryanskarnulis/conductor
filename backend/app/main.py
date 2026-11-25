@@ -48,8 +48,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     for the app's life (one thread; a restart resumes from the ledger)."""
     configure_logging()
     fleet = fleet_from_settings()
-    build_delegate_tools(fleet, default_client_factory())
+    client_factory = default_client_factory()
+    build_delegate_tools(fleet, client_factory)
     app.state.fleet = fleet
+    # Thread cleanup (#262) reaches the apps the way the ask tools do.
+    app.state.client_factory = client_factory
     turn_events.set_job_sink(turn_activity.publish_job)
     watcher: JobWatcher | None = None
     if get_settings().conductor_job_watcher:

@@ -5,11 +5,11 @@
 registry (``app/tools/registry.py``), from its manifest blocks:
 
 - an **``agent:``** block yields ``ask_<app>`` (``ask_tasks``, …), whose
-  docstring is the manifest's ``agent.description``. Calling it resolves (or
-  creates) the app's subagent thread for the current master conversation, sends
-  the message with ``X-Agent-Actor: agent:conductor``, and relays the
-  assistant's reply plus a compact note of what the app actually did — never the
-  raw transcript.
+  docstring is the manifest's ``agent.description``. Calling it opens a fresh
+  subagent thread (or, answering the app's own question, uses the thread that
+  asked: #262), sends the message with ``X-Agent-Actor: agent:conductor``, and
+  relays the assistant's reply plus a compact note of what the app actually
+  did — never the raw transcript.
 - an **``open:``** block yields ``open_<app>`` (``open_chess``, …) — a handoff,
   not a delegation. Some apps are places the user goes rather than services
   conductor calls: chess is a board you play *in*, and proxying moves through
@@ -23,9 +23,13 @@ The blocks are independent — an app may declare either, both, or neither.
 
 Contract behaviors live here, not in the client:
 
-- **Thread reuse + 404 recreate-once.** The subagent thread is looked up in the
-  :class:`DelegationContext`; a :class:`DelegateThreadGone` triggers exactly one
-  recreate-and-retry (a second 404 fails the call).
+- **A fresh thread per ask + 404 recreate-once** (#262). Code picks the
+  thread, never a model: a confirm goes to the thread its token is bound to,
+  an answer to an app's question to the thread that asked
+  (:func:`app.fleet.context.answering`), and every other ask to a fresh one,
+  so no app answers from an earlier request's history. The
+  :class:`DelegationContext` records each; a :class:`DelegateThreadGone`
+  triggers exactly one recreate-and-retry (a second 404 fails the call).
 - **Typed delegate faults → domain errors.** Rate-limit, unavailable, outcome-unknown, protocol,
   and double-404 all become informative :class:`ToolError` s (the model reads
   them and adapts); a 429 surfaces its ``Retry-After`` and is never auto-retried.
@@ -64,7 +68,7 @@ from app.ai import trace as run_trace
 from app.ai.confirmation import CONFIRM_TOOL, AppConfirm, PendingConfirm
 from app.ai.facts import attach
 from app.ai.stop import STOPPED_ERROR, current_stop
-from app.fleet.context import DelegationContext, current_delegation_context
+from app.fleet.context import DelegationContext, answering_thread, current_delegation_context
 from app.fleet.delegate import (
     CONDUCTOR_ACTOR,
     DelegateClient,
@@ -122,6 +126,8 @@ class DelegateClientLike(Protocol):
     ) -> MessageExchange: ...
 
     def cancel(self, conversation_id: int) -> bool: ...
+
+    def delete_conversation(self, conversation_id: int) -> None: ...
 
 
 # Delegate v1.2's cap on refs per message (agent-standard delegate-api.md).
@@ -314,7 +320,9 @@ def _delegate(
 
     With ``confirm``, the message is the person's yes: it goes to the thread
     that asked, with that question's token, and is never recreated on a 404
-    (a fresh thread never asked it).
+    (a fresh thread never asked it). An answer to an app's question goes to
+    the thread that asked it (:func:`answering_thread`); every other ask
+    opens a fresh thread (#262).
     """
     message = message.strip()
     if not message:
@@ -340,9 +348,14 @@ def _delegate(
         started = time.monotonic()
         subagent_id: int | None = None
         try:
-            with client_factory(app) as client, _passing_stop_on(client, lambda: subagent_id):
+            with (
+                client_factory(app) as client,
+                _released_unless_kept(client, app, context, lambda: subagent_id),
+                _passing_stop_on(client, lambda: subagent_id),
+            ):
                 if confirm is not None:
                     subagent_id = confirm.thread_id
+                    context.sent_to(app.name, subagent_id)
                     try:
                         exchange = _send_once_more_if_dropped(
                             client, subagent_id, message, confirm_token=confirm.token
@@ -350,10 +363,12 @@ def _delegate(
                     except DelegateThreadGone as gone:
                         raise DelegateConfirmRefused(str(gone), kind="unknown") from gone
                     return _finish(app, context, hop, subagent_id, started, exchange)
-                subagent_id = context.thread_for(app.name)
-                if subagent_id is None:
+                subagent_id = answering_thread(app.name)
+                if subagent_id is not None:
+                    context.sent_to(app.name, subagent_id)
+                else:
                     subagent_id = client.create_conversation()
-                    context.remember_thread(app.name, subagent_id)
+                    context.opened(app.name, subagent_id)
                 try:
                     exchange = _send_once_more_if_dropped(
                         client, subagent_id, message, context=app_context, mode=mode
@@ -361,9 +376,9 @@ def _delegate(
                 except DelegateThreadGone:
                     # Contract rule: a pruned thread → recreate once and retry
                     # exactly once. A second 404 propagates and fails the call.
-                    context.forget_thread(app.name)
+                    # An answer goes too: its request carries what was asked.
                     subagent_id = client.create_conversation()
-                    context.remember_thread(app.name, subagent_id)
+                    context.opened(app.name, subagent_id)
                     exchange = _send_once_more_if_dropped(
                         client, subagent_id, message, context=app_context, mode=mode
                     )
@@ -378,12 +393,39 @@ def _delegate(
                 app_request_id=hop.app_request_id,
             )
             hop.thread_id, hop.ms, hop.error = subagent_id, latency_ms, type(exc).__name__
+            runtime.delegated_thread.set(subagent_id)
             if isinstance(exc, DelegateRunFailed):
                 # The app said what it did before failing: keep it on the turn.
                 hop.app_stop_reason = exc.stop_reason
                 _report(hop, exc.record, [entry.tool for entry in exc.record])
             raise _to_tool_error(app, exc) from exc
         return _finish(app, context, hop, subagent_id, started, exchange)
+
+
+@contextmanager
+def _released_unless_kept(
+    client: DelegateClientLike,
+    app: FleetApp,
+    context: DelegationContext,
+    thread: Callable[[], int | None],
+) -> Iterator[None]:
+    """A run with no thread store (the MCP server) deletes the thread once
+    its call is over, however it ended: nothing there can answer it later
+    (#262). Best-effort, like the route's cleanup."""
+    try:
+        yield
+    finally:
+        thread_id = thread()
+        if not context.keeps_threads and thread_id is not None:
+            try:
+                client.delete_conversation(thread_id)
+            except DelegateError as exc:
+                logger.warning(
+                    "subagent_thread_release_failed",
+                    app=app.name,
+                    thread_id=thread_id,
+                    error=str(exc),
+                )
 
 
 @contextmanager
@@ -428,6 +470,7 @@ def _finish(
         app_request_id=hop.app_request_id,
     )
     hop.thread_id, hop.ms, hop.app_stop_reason = subagent_id, latency_ms, assistant.stop_reason
+    runtime.delegated_thread.set(subagent_id)
     # Which of the app's own tools ran, recorded structurally as well as in the
     # `[app did: …]` note. The note is prose for the model; this is for the UI,
     # which has to know what a turn actually did rather than infer it from a

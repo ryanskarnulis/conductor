@@ -126,13 +126,68 @@ def get_thread_store() -> ThreadStore:
     return DbThreadStore(SessionLocal)
 
 
-def get_thread_cleanup(request: Request) -> SubagentThreadCleanup | None:
+def get_thread_cleanup(
+    request: Request, store: ThreadStore = Depends(get_thread_store)
+) -> SubagentThreadCleanup | None:
     """Best-effort subagent-thread cleanup over the discovered fleet (``None``
-    before discovery); tests override this dependency."""
+    before discovery): through the ask tools' own client factory and over
+    the database the request's thread store records into, so a harness that
+    fakes the fleet or the database fakes this too; tests override it."""
     fleet = getattr(request.app.state, "fleet", None)
-    if fleet is None:
+    factory = getattr(request.app.state, "client_factory", None)
+    if fleet is None or factory is None or not isinstance(store, DbThreadStore):
         return None
-    return SubagentThreadCleanup(fleet, SessionLocal)
+    return SubagentThreadCleanup(fleet, store.session_factory, client_factory=factory)
+
+
+def _asking_thread(paused: PausedPlan | None) -> tuple[str, int] | None:
+    """The app thread a waiting plan's app question was asked on (#262)."""
+    if paused is None or paused.app is None:
+        return None
+    thread = paused.body.get(interpreting.APP_THREAD)
+    if isinstance(thread, int) and not isinstance(thread, bool):
+        return paused.app, thread
+    return None
+
+
+def _threads_waiting(db: Session, conversation: Conversation, since: Any) -> set[tuple[str, int]]:
+    """The app threads a question still waits on (#262): each open app card's
+    (its token is bound there) and each waiting plan's app question (its
+    answer goes back there). Read strictly: a failed read raises."""
+    waiting = {
+        (card.pending.app, card.pending.thread_id)
+        for card in cards_service.open_cards(db, conversation, since=since, now=utcnow())
+        if card.pending is not None
+    }
+    for plan in ledger.waiting_plans(db, conversation.id, since=since):
+        asked = _asking_thread(plan.paused)
+        if asked is not None:
+            waiting.add(asked)
+    return waiting
+
+
+def _settle_threads(
+    db: Session,
+    conversation: Conversation,
+    since: Any,
+    touched: set[tuple[str, int]],
+    tasks: BackgroundTasks,
+    cleanup: SubagentThreadCleanup | None,
+) -> None:
+    """Once a request's records are stored (#262): the app threads it sent
+    to, or whose question it closed, that no question waits on any more are
+    deleted, and so is every thread of the conversation's earlier windows.
+    After the response, so the person never waits on the fleet; a failed
+    read deletes nothing (the window's end sweeps them)."""
+    if cleanup is None:
+        return
+    try:
+        window = conversations_service.thread_key(db, conversation.id, since)
+        done_with = touched - _threads_waiting(db, conversation, since)
+    except Exception as exc:
+        logger.warning("threads_waiting_failed", error=str(exc), error_type=type(exc).__name__)
+        return
+    tasks.add_task(cleanup.settle, conversation.id, window, frozenset(done_with))
 
 
 def get_session_factory() -> sessionmaker[Session]:
@@ -633,9 +688,11 @@ def list_cards(conversation_id: int, db: Session = Depends(get_db)) -> list[Card
 def answer_cards(
     conversation_id: int,
     data: CardAnswerCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     conductor: Interpreter = Depends(get_conductor),
     thread_store: ThreadStore = Depends(get_thread_store),
+    thread_cleanup: SubagentThreadCleanup | None = Depends(get_thread_cleanup),
 ) -> CardAnswerRead:
     """Answer open questions from their cards (#251): one, or a group's
     "Approve all". The only way anything is approved; no words are.
@@ -655,7 +712,8 @@ def answer_cards(
     from the receipts. It streams on the live channel like any turn.
 
     **409** for a card no longer open (answered, replaced, lapsed with the
-    conversation's window) and while a turn is running.
+    conversation's window) and while a turn is running. Afterwards the app
+    threads no question waits on any more are deleted (#262).
     """
     conversation = _get_or_404(db, conversation_id)
     _writable_or_409(conversation)
@@ -682,9 +740,12 @@ def answer_cards(
         outcomes: list[CardOutcome] = []
         resumes: list[tuple[Resume, str, bool]] = []
         asked_in: dict[int, list[cards_service.Card]] = {}
+        # The app threads this tap sent to or closed a question of (#262).
+        touched: set[tuple[str, int]] = set()
         for card in chosen:
             if card.pending is None or card.group is None:
                 continue
+            touched.add((card.pending.app, card.pending.thread_id))
             outcomes.append(
                 _answer_app_card(
                     db, conversation, since, card, data.answer, conductor, thread_store
@@ -702,6 +763,9 @@ def answer_cards(
             if card.plan is None:
                 continue
             paused = card.plan.paused
+            asked = _asking_thread(paused)
+            if asked is not None:
+                touched.add(asked)
             if data.answer == "no":
                 ended = "set_aside" if paused.reason == "proposal" else "cancelled"
                 ledger.end_plan(db, paused.plan_id, ended, "declined from its card")
@@ -737,9 +801,11 @@ def answer_cards(
                 note=note,
                 surface=data.surface,
                 hidden=hidden,
+                touched=touched,
             )
             for resume, note, hidden in resumes
         ]
+        _settle_threads(db, conversation, since, touched, background_tasks, thread_cleanup)
     return CardAnswerRead(
         answers=outcomes,
         exchanges=exchanges,
@@ -855,6 +921,7 @@ def _card_turn(
     note: str,
     surface: str | None,
     hidden: bool,
+    touched: set[tuple[str, int]],
 ) -> MessageExchange:
     """A waiting plan picked up from its card (#251): a turn with no words.
     The tap is the person's own act, so it is their note; the reply is
@@ -877,6 +944,7 @@ def _card_turn(
             pending=[],
             asking=None,
             go=lambda common: conductor.resume(resume, **common),
+            touched=touched,
         )
     if hidden:
         return MessageExchange(
@@ -912,9 +980,11 @@ def _card_outcome(answer: str, record: ToolCallRecord) -> tuple[Any, str | None]
 def post_message(
     conversation_id: int,
     data: MessageCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     conductor: Interpreter = Depends(get_conductor),
     thread_store: ThreadStore = Depends(get_thread_store),
+    thread_cleanup: SubagentThreadCleanup | None = Depends(get_thread_cleanup),
 ) -> MessageExchange:
     """Store the user turn, run it, store and return the assistant turn.
 
@@ -928,7 +998,9 @@ def post_message(
     state block and recall (:mod:`app.ai.turn_context`), built before the user
     turn is stored, so it is "before this turn". The
     delegation context is bound for exactly the run: the DB-backed thread
-    store keyed by this conversation and the ``agent:loop`` audit driver. The ledger (#69) opens the turn with the
+    store keyed by this conversation's window and the ``agent:loop`` audit
+    driver; afterwards the app threads no question waits on are deleted
+    (#262). The ledger (#69) opens the turn with the
     user message and closes it with the assistant turn, in the same commits.
 
     An ``incognito`` turn (#82) runs the same, but its words and reply are
@@ -936,7 +1008,9 @@ def post_message(
     capture records it; this response carries the reply the person reads now.
     """
     with incognito.turn(data.incognito):
-        return _post_message(conversation_id, data, db, conductor, thread_store)
+        return _post_message(
+            conversation_id, data, db, conductor, thread_store, background_tasks, thread_cleanup
+        )
 
 
 def _post_message(
@@ -945,6 +1019,8 @@ def _post_message(
     db: Session,
     conductor: Interpreter,
     thread_store: ThreadStore,
+    background_tasks: BackgroundTasks,
+    thread_cleanup: SubagentThreadCleanup | None,
 ) -> MessageExchange:
     conversation = _get_or_404(db, conversation_id)
     _writable_or_409(conversation)
@@ -1009,6 +1085,10 @@ def _post_message(
             **common,
         )
 
+    # The app threads this turn sent to or closed a question of (#262),
+    # starting with the one the turn right before left waiting on words.
+    asked = _asking_thread(paused)
+    touched: set[tuple[str, int]] = {asked} if asked is not None else set()
     run, assistant_message = _run_turn(
         db,
         conversation,
@@ -1022,7 +1102,9 @@ def _post_message(
         pending=confirmation.open_confirms(turns),
         asking=asking,
         go=go,
+        touched=touched,
     )
+    _settle_threads(db, conversation, since, touched, background_tasks, thread_cleanup)
     if hidden:
         # The person reads the reply now; it was never written (#82).
         return MessageExchange(
@@ -1053,6 +1135,7 @@ def _run_turn(
     pending: list[PendingConfirm],
     asking: ConversationMessage | None,
     go: Any,
+    touched: set[tuple[str, int]],
 ) -> tuple[AgentRunResult, ConversationMessage]:
     """Run one turn (the person's words, or a card's tap) with everything a
     turn is bound to, then store its assistant message and close its ledger
@@ -1060,11 +1143,12 @@ def _run_turn(
     run is stored as a truthful partial turn before the error goes out.
     ``pending`` are the app questions in reach of this turn's words;
     ``asking`` the turn that asked them, where one this turn closes without
-    sending its token is put on the record."""
+    sending its token is put on the record. ``touched`` gets the app threads
+    the run sent to and those of the questions it closed (#262)."""
     conversation_id = conversation.id
     context = DelegationContext(
-        # The apps' own threads follow the window: after a quiet gap each app
-        # starts a fresh one, as it did for a new conversation (#82).
+        # The threads a run opens are kept under the window's key: a window
+        # that is over has no question left to answer on them (#82, #262).
         master_conversation_id=conversations_service.thread_key(db, conversation.id, since),
         thread_store=thread_store,
         pending_confirms=list(pending),
@@ -1166,4 +1250,6 @@ def _run_turn(
     finally:
         foreground.left()
         turn_activity.end(conversation_id, stop, **ended)
+        touched |= context.used
+        touched |= {(lapsed.app, lapsed.thread_id) for lapsed, _ in context.lapsed}
     return run, assistant_message

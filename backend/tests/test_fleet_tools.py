@@ -1,9 +1,10 @@
 """Delegate tools, list_agents, and the path through a compiled turn.
 
 All fakes — no live delegate calls. The ask_<app> tools are exercised against a
-scriptable fake client so the contract behaviors (thread reuse, 404
+scriptable fake client so the contract behaviors (the thread choice, 404
 recreate-once, typed faults → ToolError, the per-turn budget, and the audit
-event) can be asserted deterministically.
+event) can be asserted deterministically. Since #262 every ask but an answer
+opens a fresh thread.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from app.ai.interpreter import Interpreter
 from app.fleet.context import (
     DelegationContext,
     InMemoryThreadStore,
+    answering,
     use_delegation_context,
 )
 from app.fleet.delegate import (
@@ -159,6 +161,9 @@ class FakeClient:
     def cancel(self, conversation_id: int) -> bool:
         return False
 
+    def delete_conversation(self, conversation_id: int) -> None:
+        self._log.append(("delete", conversation_id))
+
 
 def _factory(client: FakeClient) -> Callable[[FleetApp], FakeClient]:
     """A client_factory that always hands back the same shared fake client."""
@@ -177,6 +182,12 @@ def bound_context() -> Generator[DelegationContext, None, None]:
     )
     with use_delegation_context(context):
         yield context
+
+
+def _opened(context: DelegationContext) -> list[tuple[str, int]]:
+    store = context.thread_store
+    assert isinstance(store, InMemoryThreadStore)
+    return [(app_name, thread) for _, app_name, thread in store.threads]
 
 
 def _ask(name: str, message: str) -> str:
@@ -265,33 +276,81 @@ def test_open_tool_makes_no_delegate_call(
         _open("open_arcade", intent="fire up the arcade")
 
     assert log == []
-    assert bound_context.thread_for("arcade") is None
+    assert _opened(bound_context) == []
 
 
-# --- thread creation + reuse ---------------------------------------------------
+# --- the thread choice (#262) ----------------------------------------------------
 
 
-def test_first_call_creates_thread_then_reuses_it(bound_context: DelegationContext) -> None:
+def test_every_ask_opens_a_fresh_thread(bound_context: DelegationContext) -> None:
     log: list[tuple[object, ...]] = []
     build_delegate_tools(_fleet(), _factory(FakeClient(log)))
 
-    _ask("ask_chess", "play e4")
-    _ask("ask_chess", "now develop")
+    _ask("ask_tasks", "give me a report of my tasks")
+    _ask("ask_tasks", "give me a report of my tasks")
 
-    # One create (first call), then the second call reuses the same thread id.
-    assert log == [("create", 1), ("send", 1, "play e4"), ("send", 1, "now develop")]
-    assert bound_context.thread_for("chess") == 1
+    # The same read twice: two threads, so no answer comes from history.
+    assert log == [
+        ("create", 1),
+        ("send", 1, "give me a report of my tasks"),
+        ("create", 2),
+        ("send", 2, "give me a report of my tasks"),
+    ]
+    assert _opened(bound_context) == [("tasks", 1), ("tasks", 2)]
+    assert bound_context.used == {("tasks", 1), ("tasks", 2)}
 
 
-def test_each_app_gets_its_own_thread(bound_context: DelegationContext) -> None:
+def test_an_answer_goes_to_the_thread_that_asked(bound_context: DelegationContext) -> None:
     log: list[tuple[object, ...]] = []
     build_delegate_tools(_fleet(), _factory(FakeClient(log)))
 
-    _ask("ask_chess", "play e4")
+    with answering("tasks", 7):
+        _ask("ask_tasks", "add it (the person's answer to your question: Friday)")
+        _ask("ask_chess", "play e4")  # another app inside the block opens its own
     _ask("ask_tasks", "what's due")
 
-    assert bound_context.thread_for("chess") == 1
-    assert bound_context.thread_for("tasks") == 2
+    assert log == [
+        ("send", 7, "add it (the person's answer to your question: Friday)"),
+        ("create", 1),
+        ("send", 1, "play e4"),
+        ("create", 2),
+        ("send", 2, "what's due"),
+    ]
+    assert _opened(bound_context) == [("chess", 1), ("tasks", 2)]
+    assert bound_context.used == {("tasks", 7), ("chess", 1), ("tasks", 2)}
+
+
+def test_without_a_store_each_thread_is_deleted_after_its_call() -> None:
+    log: list[tuple[object, ...]] = []
+    effects = [_exchange(), DelegateUnavailable("down")]
+    build_delegate_tools(_fleet(), _factory(FakeClient(log, send_effects=effects)))
+    context = DelegationContext(master_conversation_id="mcp", thread_store=None)
+
+    with use_delegation_context(context):
+        _ask("ask_tasks", "what's due")
+        with pytest.raises(ToolError):
+            _ask("ask_tasks", "what's due")
+
+    # The MCP server's case: nothing can answer a thread later.
+    assert log == [
+        ("create", 1),
+        ("send", 1, "what's due"),
+        ("delete", 1),
+        ("create", 2),
+        ("send", 2, "what's due"),
+        ("delete", 2),
+    ]
+
+
+def test_the_thread_a_call_went_to_is_on_its_record(bound_context: DelegationContext) -> None:
+    fleet = _fleet()
+    build_delegate_tools(fleet, _factory(FakeClient([])))
+    provider = ScriptedProvider([_plan("tasks", "what's due"), _text("Nothing.")])
+
+    run = Interpreter(provider, fleet).run("what's due")
+
+    (record,) = run.tool_calls
+    assert record.app_thread == 1
 
 
 # --- reply + activity note formatting -----------------------------------------
@@ -385,7 +444,7 @@ def test_404_recreates_thread_and_retries_once(bound_context: DelegationContext)
         ("create", 2),
         ("send", 2, "play e4"),
     ]
-    assert bound_context.thread_for("chess") == 2  # mapping updated to the fresh thread
+    assert _opened(bound_context) == [("chess", 1), ("chess", 2)]
 
 
 def test_double_404_becomes_a_tool_error(bound_context: DelegationContext) -> None:
@@ -624,4 +683,4 @@ def test_a_plan_delegates_via_context_and_keeps_the_reply() -> None:
     assert "- chess (ask): Plays chess." in system_prompt
     assert "move my knight to f3" in system_prompt
     assert provider.requests[0]["tools"] == []
-    assert context.thread_for("chess") == 1
+    assert context.used == {("chess", 1)}

@@ -1,4 +1,4 @@
-"""Fleet smoke (#143): S2, S3, S9, S15, S15p, BI3, R1 and R3 through conductor against real PCC and music.
+"""Fleet smoke (#143): S2, S3, S9, S15, S15p, BI3, R1, R3 and R7 through conductor against real PCC and music.
 
 Session evals hold conductor's choices to account over a fake world. This is
 the other half: the same person's side of four scenarios, through the same
@@ -84,6 +84,7 @@ from tests.session_harness import (
 from tests.session_scenarios import (
     FINISHED_CORRECTED,
     READ_REPORT,
+    READ_REPORT_TWICE,
     READ_VOICE,
     S2,
     S3,
@@ -550,18 +551,30 @@ def _reply_is_pccs_answer(fleet: ScratchFleet, turn: TurnRecord) -> dict[str, An
     return dict(passed[0])
 
 
+def _pccs_report(fleet: ScratchFleet, turn: TurnRecord) -> None:
+    answer = _reply_is_pccs_answer(fleet, turn)
+    reply = (turn.reply or "").lower()
+    assert "tasks says" in reply, f"not shown as the app's words: {turn.reply!r}"
+    assert str(len(SEED_TASKS)) in answer["text"], f"no open count: {answer['text']!r}"
+    named = [title for title, _, _ in SEED_TASKS if title in reply]
+    assert len(named) >= len(SEED_TASKS) - 2, f"the report names only {named}"
+    for project in ("Household", "Kitchen", "Garage"):
+        assert project.lower() in reply, f"not grouped by project ({project})"
+    assert "for the record" not in reply, f"counts retold: {turn.reply!r}"
+
+
 def r1_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
     def end_state(session: Session) -> None:
-        turn = session.last
-        answer = _reply_is_pccs_answer(fleet, turn)
-        reply = (turn.reply or "").lower()
-        assert "tasks says" in reply, f"not shown as the app's words: {turn.reply!r}"
-        assert str(len(SEED_TASKS)) in answer["text"], f"no open count: {answer['text']!r}"
-        named = [title for title, _, _ in SEED_TASKS if title in reply]
-        assert len(named) >= len(SEED_TASKS) - 2, f"the report names only {named}"
-        for project in ("Household", "Kitchen", "Garage"):
-            assert project.lower() in reply, f"not grouped by project ({project})"
-        assert "for the record" not in reply, f"counts retold: {turn.reply!r}"
+        _pccs_report(fleet, session.last)
+
+    return (end_state,)
+
+
+def r7_checks(fleet: ScratchFleet) -> tuple[Callable[[Session], None], ...]:
+    # #262: asked again in the window, the report is PCC's passed answer again.
+    def end_state(session: Session) -> None:
+        for turn in session.turns:
+            _pccs_report(fleet, turn)
 
     return (end_state,)
 
@@ -591,6 +604,7 @@ _SMOKE: dict[str, tuple[Scenario, Callable[[ScratchFleet], tuple[Any, ...]]]] = 
     "BI3": (FINISHED_CORRECTED, bi3_checks),
     "R1": (READ_REPORT, r1_checks),
     "R3": (READ_VOICE, r3_checks),
+    "R7": (READ_REPORT_TWICE, r7_checks),
 }
 
 

@@ -17,16 +17,18 @@ from collections.abc import Generator, Sequence
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.ai import foreground, narrator, thread_note
 from app.ai.provider import ChatResult
 from app.ai.providers.llamacpp import provider_from_settings
 from app.api import turn_activity
+from app.api.routes_agent import get_thread_cleanup
 from app.api.rate_limit import rate_limit
 from app.db.models import Conversation, utcnow
 from app.db.session import get_db
+from app.fleet.thread_cleanup import SubagentThreadCleanup
 from app.schemas.conversations import (
     CarryRead,
     MessageRead,
@@ -125,14 +127,17 @@ def get_thread(thread_id: int, db: Session = Depends(get_db)) -> ThreadRead:
 def close_thread(
     thread_id: int,
     data: ThreadClose,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     chat: narrator.Chat | None = Depends(get_thread_chat),
+    thread_cleanup: SubagentThreadCleanup | None = Depends(get_thread_cleanup),
 ) -> ThreadClosed:
     """Close a side thread: its result, narrated from its receipts with code's
     checks, is posted into the timeline as a note (it lapses no waiting
     question there). A thread where nothing was changed or found posts no
     note (#226, ``message`` is null). Posted once: a second close is **409**,
-    as is a close while a turn still runs in the thread."""
+    as is a close while a turn still runs in the thread. A closed thread
+    takes no turns, so its app threads are deleted after the response (#262)."""
     thread = _get_or_404(db, thread_id)
     if threads_service.is_closed(thread):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="already closed")
@@ -164,6 +169,8 @@ def close_thread(
     db.commit()
     db.refresh(thread)
     logger.info("agent_thread_closed", thread_id=thread.id, path=note.path)
+    if thread_cleanup is not None:
+        background_tasks.add_task(thread_cleanup, str(thread.id))
     read: MessageRead | None = None
     if closed.message is not None:
         db.refresh(closed.message)

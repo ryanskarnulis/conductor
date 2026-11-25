@@ -115,22 +115,21 @@ class ConversationMessage(Base, TimestampMixin):
 
 
 class DelegateThread(Base, TimestampMixin):
-    """One master-conversation ↔ app subagent-thread mapping (the ThreadStore rows).
+    """One app subagent thread conductor opened and hasn't deleted yet (#262).
 
-    Keyed by ``(master_conversation_id, app_name)`` — the same key the
-    ``ThreadStore`` protocol (``app/fleet/context.py``) uses. The master id is
-    a string on purpose: HTTP runs use the master :class:`Conversation` id
-    stringified, but the protocol allows any driver-scoped key, so the column
-    carries the key verbatim and takes no FK. Deleting a master conversation
-    asks each app to delete its thread and then drops the rows, best-effort
+    Every ask but an answer to the app's own question opens a fresh thread,
+    so a window holds many rows per app. ``master_conversation_id`` is the
+    window's key (``conversations.thread_key``: the conversation's id, or the
+    id and the window's first message); a string on purpose, so the column
+    carries the key verbatim and takes no FK. A thread is deleted (``DELETE``
+    to the app, then the row) once no question waits on it, when its window
+    is over, or when its conversation is deleted or closed, best-effort
     (``app/fleet/thread_cleanup.py``); a row that survives is inert, not
-    dangerous — a pruned subagent thread 404s and the delegate tool recreates
-    it. No ``deleted_at`` is needed: rows are hard-deleted cache entries, not
-    user content.
+    dangerous. No ``deleted_at`` is needed: rows are hard-deleted
+    bookkeeping, not user content.
     """
 
     __tablename__ = "delegate_threads"
-    __table_args__ = (UniqueConstraint("master_conversation_id", "app_name"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     master_conversation_id: Mapped[str] = mapped_column(index=True)
