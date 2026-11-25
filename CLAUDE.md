@@ -254,9 +254,10 @@ regenerate. Components live in `src/design/` (`cd-` classes in
   refs with their ids (beside the spliced titles, which stay until that
   app's evals pass without them; for an app in `dataflow.TITLES_OUT`, today
   tasks, `{sN}` is a pointer, "that album", and the title rides the ref
-  alone, #204), its own entities this window touched
-  (newest `STATE_REFS`), and the saved facts `facts.related` chose (they no
-  longer ride the words). An ask the planner marks `read` (#204,
+  alone, #204) or, for an ask whose `{sN}` carries no ref, its own entities
+  this window touched (newest `STATE_REFS`; beside a `{sN}`'s ref they read
+  as the target on a fresh thread, #263), and the saved facts
+  `facts.related` chose (they no longer ride the words). An ask the planner marks `read` (#204,
   `plans.marked_read`) goes `mode: "read"` and may run beside other reads,
   so a wrong mark costs a refused write; a v1.1 app's reads stay
   `plan.reads_only`'s guess. The step's `refs`/`read` arguments stay out of

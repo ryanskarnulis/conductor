@@ -27,6 +27,7 @@ from tests.test_memory import ask, fleet, plan_turn, steps, world  # noqa: F401 
 from tests.test_timeline import Timeline, timeline  # noqa: F401  (fixtures)
 
 REPORT = "give me a report of my tasks"
+_S3_TEXT = "download the new Caribou album and add a task to sort it this weekend"
 
 
 @pytest.fixture(autouse=True)
@@ -172,3 +173,40 @@ def test_closing_a_side_thread_deletes_the_threads_it_kept(
     assert closed.status_code == 200, closed.text
     assert world.deleted == [("tasks", asked)]
     assert _kept(timeline.db) == []
+
+
+def _refs_sent(world: World, app_name: str) -> list[list[tuple[str, str]]]:  # noqa: F811
+    return [
+        [(str(ref["kind"]), str(ref["title"])) for ref in (context or {}).get("refs", [])]
+        for app_, context, _ in world.sent_v12
+        if app_ == app_name
+    ]
+
+
+def test_an_ask_that_fills_a_ref_carries_that_ref_alone(
+    timeline: Timeline,  # noqa: F811
+    world: World,  # noqa: F811
+) -> None:
+    """#263, S15p on the real fleet: on a fresh thread PCC copied its own
+    recent task's title when it rode beside the album "that album" meant."""
+    s3 = steps(
+        ask("music", "download the new Caribou album"),
+        ask("tasks", "add a task to sort {s1} this weekend"),
+    )
+    timeline.say(_S3_TEXT, plan_turn(s3), text_turn("Queued “Honey”; added the task."))
+    other = steps(
+        ask("music", "download the other album by Caribou"),
+        ask("tasks", "add a task to sort {s1} this weekend"),
+    )
+    timeline.say("do the same for their other album", plan_turn(other))
+    timeline.say("Suddenly", text_turn("Queued “Suddenly”; added the task."))
+    # An ask with no {sN} still carries the app's own recent entities.
+    timeline.say("what's due today?", plan_turn(steps(_read("what's due today?"))))
+
+    first, resumed, read = _refs_sent(world, "tasks")
+    assert first == [("album", "Honey")]
+    assert resumed == [("album", "Suddenly")]
+    assert ("task", "sort Suddenly") in read and ("task", "sort Honey") in read
+    # Music's ask with no {sN} carried its own album, for "their other album".
+    _, other_album, _ = _refs_sent(world, "music")
+    assert ("album", "Honey") in other_album

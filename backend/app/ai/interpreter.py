@@ -1051,23 +1051,34 @@ class Interpreter:
     def _context_refs(
         self, state: _Run, step: plans.Ask, values: Mapping[str, dataflow.Value]
     ) -> list[dict[str, Any]]:
-        """The refs a v1.2 app's ask carries: each ``{sN}``'s, then the app's
-        own entities this window touched, newest first (:data:`STATE_REFS`), so
-        "their other album" reaches music with the album's id. Deduplicated,
-        at most :data:`MAX_CONTEXT_REFS`."""
+        """The refs a v1.2 app's ask carries. An ask that fills a ``{sN}``
+        with refs carries those alone: on a fresh thread (#262) the app's own
+        recent entities beside them read as the target (#263). Any other ask
+        (one whose ``{sN}`` is an answer, a pick or a recall: a title, no ref)
+        carries the app's own entities this window touched, newest first
+        (:data:`STATE_REFS`), so "their other album" reaches music with the
+        album's id. Deduplicated, at most :data:`MAX_CONTEXT_REFS`."""
         if state.picked is not None and state.picked.get("app") == step.app:
             picked, state.picked = state.picked, None
             return [picked]
-        refs: list[dict[str, Any]] = []
-        for match in plans.REF.finditer(step.request):
-            value = values.get(match.group(1))
-            if value is not None:
-                refs += [dict(ref) for ref in value.refs]
-        own = [e for e in self._touched(state) if e.app == step.app][:STATE_REFS]
-        refs += [
-            {"app": e.app, "kind": e.kind, "id": e.id, "title": e.title, "untrusted": e.untrusted}
-            for e in own
+        refs: list[dict[str, Any]] = [
+            dict(ref)
+            for match in plans.REF.finditer(step.request)
+            if (value := values.get(match.group(1))) is not None
+            for ref in value.refs
         ]
+        if not refs:
+            own = [e for e in self._touched(state) if e.app == step.app][:STATE_REFS]
+            refs = [
+                {
+                    "app": e.app,
+                    "kind": e.kind,
+                    "id": e.id,
+                    "title": e.title,
+                    "untrusted": e.untrusted,
+                }
+                for e in own
+            ]
         seen: set[tuple[str, str, str]] = set()
         kept: list[dict[str, Any]] = []
         for ref in refs:
