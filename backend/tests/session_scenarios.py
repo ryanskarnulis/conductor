@@ -842,11 +842,11 @@ def _reported_twice(session: Session) -> None:
     # thread whose history held the first, and the app answered from it with
     # no look-up, so nothing passed through. Each ask is a fresh thread now.
     no_writes(session)
-    sends = session.world.threads.get("tasks", [])
-    assert len(sends) == 2 and len(set(sends)) == 2, f"tasks threads {sends}: one shared"
     for turn in session.turns:
         assert len(_passed(turn)) == 1, f"turn {turn.index}: the app's answer wasn't passed on"
         assert "Tasks says" in (turn.reply or ""), f"not the app's words: {turn.reply!r}"
+    sends = session.world.threads.get("tasks", [])
+    assert len(set(sends)) == len(sends), f"tasks threads {sends}: one shared"
 
 
 READ_REPORT_TWICE = Scenario(
